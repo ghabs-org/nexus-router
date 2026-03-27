@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+*.pyc
+data/routing-history.sqlite
+state/runtime-health.json
+catalog/raw/
+catalog/normalized/models.json
+*.egg-info/
+dist/
+build/
+.env

@@ -1,0 +1,12 @@
+# overrides.yaml
+# Per-model manual score overrides. Use sparingly.
+# These override family defaults from families.yaml for specific edge cases
+# or known deviations from the family pattern.
+
+overrides: {}
+
+# Example:
+# overrides:
+#   github-copilot/grok-code-fast-1:
+#     vision: 0.00   # text-only, override family default
+#     fast: 0.92

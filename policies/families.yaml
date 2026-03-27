@@ -1,0 +1,253 @@
+# families.yaml
+# Provider/model family scoring priors.
+# These are heuristic baselines. Override per-model in overrides.yaml.
+# All scores: 0.0–1.0 (higher = better for that dimension)
+#
+# Dimensions:
+#   coding      — code generation, implementation, bug fixing
+#   review      — code review, quality analysis, audit
+#   reasoning   — planning, comparison, strategy, decision-making
+#   summarize   — extraction, synthesis, TL;DR
+#   fast        — speed / latency
+#   cost        — cost efficiency (1.0 = cheapest)
+#   context     — ability to handle large contexts (1.0 = largest window)
+#   vision      — image/screenshot/diagram understanding
+#   tools       — reliable tool/function calling
+#   multilingual — non-English quality
+
+families:
+
+  # ── OpenAI Codex (subscription-auth Codex routing) ─────────────────────────
+  openai-codex:
+    default:
+      coding: 0.92
+      review: 0.78
+      reasoning: 0.82
+      summarize: 0.74
+      fast: 0.68
+      cost: 0.55
+      context: 0.78
+      vision: 0.74
+      tools: 0.90
+      multilingual: 0.78
+    patterns:
+      - match: "gpt-5.4$"
+        overrides:
+          coding: 0.96
+          reasoning: 0.85
+          review: 0.82
+          tools: 0.92
+      - match: "gpt-5.4-mini$"
+        overrides:
+          coding: 0.84
+          fast: 0.88
+          cost: 0.82
+          tools: 0.86
+      - match: "gpt-5.3-codex$"
+        overrides:
+          coding: 0.93
+          tools: 0.91
+      - match: "gpt-5.3-codex-spark$"
+        overrides:
+          coding: 0.88
+          fast: 0.84
+          cost: 0.76
+      - match: "gpt-5.2(-codex)?$"
+        overrides:
+          coding: 0.89
+          tools: 0.87
+      - match: "gpt-5.1.*"
+        overrides:
+          coding: 0.85
+          tools: 0.84
+      - match: "gpt-5.1-codex-max$"
+        overrides:
+          coding: 0.90
+          context: 0.82
+
+  # ── GitHub Copilot ─────────────────────────────────────────────────────────
+  github-copilot:
+    default:
+      coding: 0.82
+      review: 0.82
+      reasoning: 0.80
+      summarize: 0.78
+      fast: 0.72
+      cost: 0.60
+      context: 0.74
+      vision: 0.72
+      tools: 0.82
+      multilingual: 0.80
+    patterns:
+      # Claude family via Copilot
+      - match: "claude-opus-4\\.6$"
+        overrides:
+          review: 0.96
+          reasoning: 0.94
+          summarize: 0.92
+          context: 0.92
+          coding: 0.88
+          multilingual: 0.90
+          fast: 0.52
+          cost: 0.35
+      - match: "claude-opus-4\\.5$"
+        overrides:
+          review: 0.94
+          reasoning: 0.93
+          summarize: 0.91
+          coding: 0.86
+          multilingual: 0.90
+          fast: 0.52
+          cost: 0.38
+      - match: "claude-sonnet-4\\.6$"
+        overrides:
+          review: 0.92
+          reasoning: 0.90
+          coding: 0.86
+          summarize: 0.89
+          context: 0.90
+          multilingual: 0.88
+          fast: 0.68
+          cost: 0.55
+      - match: "claude-sonnet-4(\\.5|)$"
+        overrides:
+          review: 0.90
+          reasoning: 0.88
+          coding: 0.84
+          fast: 0.68
+          cost: 0.58
+      - match: "claude-haiku-4\\.5$"
+        overrides:
+          fast: 0.88
+          cost: 0.82
+          review: 0.78
+          reasoning: 0.76
+          coding: 0.72
+      # GPT family via Copilot
+      - match: "gpt-5\\.4$"
+        overrides:
+          coding: 0.92
+          tools: 0.90
+          reasoning: 0.84
+      - match: "gpt-5\\.3-codex$"
+        overrides:
+          coding: 0.91
+          tools: 0.89
+      - match: "gpt-5\\.2(-codex)?$"
+        overrides:
+          coding: 0.87
+          tools: 0.86
+      - match: "gpt-5(-mini)?$"
+        overrides:
+          coding: 0.82
+          fast: 0.84
+          cost: 0.80
+      - match: "gpt-5\\.4-mini$"
+        overrides:
+          coding: 0.82
+          fast: 0.88
+          cost: 0.83
+      - match: "gpt-5\\.1.*"
+        overrides:
+          coding: 0.84
+          tools: 0.84
+      - match: "gpt-5\\.1-codex-max$"
+        overrides:
+          coding: 0.88
+      - match: "gpt-5\\.1-codex-mini$"
+        overrides:
+          coding: 0.82
+          fast: 0.86
+          cost: 0.82
+      - match: "gpt-4\\.1$"
+        overrides:
+          coding: 0.80
+          cost: 0.70
+      - match: "gpt-4o$"
+        overrides:
+          vision: 0.88
+          coding: 0.80
+          cost: 0.68
+      # Gemini via Copilot
+      - match: "gemini-3\\.1-pro-preview$"
+        overrides:
+          context: 0.92
+          summarize: 0.90
+          reasoning: 0.87
+          multilingual: 0.88
+      - match: "gemini-3-pro-preview$"
+        overrides:
+          context: 0.90
+          summarize: 0.88
+          reasoning: 0.85
+      - match: "gemini-3-flash-preview$"
+        overrides:
+          fast: 0.88
+          cost: 0.82
+          context: 0.88
+          summarize: 0.84
+      - match: "gemini-2\\.5-pro$"
+        overrides:
+          context: 0.90
+          summarize: 0.86
+          reasoning: 0.84
+      # grok
+      - match: "grok-code-fast-1$"
+        overrides:
+          coding: 0.84
+          fast: 0.90
+          cost: 0.78
+          vision: 0.00
+
+  # ── Google Gemini CLI (OAuth) ───────────────────────────────────────────────
+  google-gemini-cli:
+    default:
+      coding: 0.76
+      review: 0.78
+      reasoning: 0.84
+      summarize: 0.90
+      fast: 0.82
+      cost: 0.78
+      context: 0.94
+      vision: 0.86
+      tools: 0.80
+      multilingual: 0.88
+    patterns:
+      - match: "gemini-3\\.1-pro-preview$"
+        overrides:
+          reasoning: 0.90
+          summarize: 0.94
+          context: 0.96
+          vision: 0.90
+          multilingual: 0.92
+          coding: 0.80
+      - match: "gemini-3-pro-preview$"
+        overrides:
+          reasoning: 0.88
+          summarize: 0.92
+          context: 0.94
+          vision: 0.88
+      - match: "gemini-3-flash-preview$"
+        overrides:
+          fast: 0.90
+          cost: 0.85
+          context: 0.92
+          summarize: 0.88
+          reasoning: 0.80
+      - match: "gemini-2\\.5-pro$"
+        overrides:
+          reasoning: 0.86
+          context: 0.94
+          summarize: 0.90
+      - match: "gemini-2\\.5-flash$"
+        overrides:
+          fast: 0.90
+          cost: 0.86
+          context: 0.92
+          summarize: 0.86
+      - match: "gemini-2\\.0-flash$"
+        overrides:
+          fast: 0.88
+          cost: 0.88
+          context: 0.90
+          summarize: 0.82

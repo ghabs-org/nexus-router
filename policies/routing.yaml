@@ -1,0 +1,128 @@
+# routing.yaml
+# Default routing policy: task type → provider/model preferences
+# Models are tried in order; first authed+healthy model wins.
+# auth_required: true means skip if not authed
+# min_context: minimum context window needed
+
+routing:
+
+  coding:
+    description: "Code generation, implementation, bug fixing, refactoring"
+    candidates:
+      - model: openai-codex/gpt-5.4
+        priority: 1
+      - model: openai-codex/gpt-5.3-codex
+        priority: 2
+      - model: github-copilot/gpt-5.3-codex
+        priority: 3
+      - model: github-copilot/gpt-5.4
+        priority: 4
+      - model: github-copilot/claude-sonnet-4.6
+        priority: 5
+      - model: openai-codex/gpt-5.4-mini
+        priority: 6
+
+  code_review:
+    description: "Code review, diff analysis, PR audit, quality feedback"
+    candidates:
+      - model: github-copilot/claude-sonnet-4.6
+        priority: 1
+      - model: github-copilot/claude-opus-4.6
+        priority: 2
+      - model: openai-codex/gpt-5.4
+        priority: 3
+      - model: github-copilot/gpt-5.4
+        priority: 4
+      - model: google-gemini-cli/gemini-3.1-pro-preview
+        priority: 5
+
+  reasoning:
+    description: "Planning, strategy, comparison, decision-making, architecture"
+    candidates:
+      - model: github-copilot/claude-sonnet-4.6
+        priority: 1
+      - model: github-copilot/claude-opus-4.6
+        priority: 2
+      - model: google-gemini-cli/gemini-3.1-pro-preview
+        priority: 3
+      - model: openai-codex/gpt-5.4
+        priority: 4
+      - model: github-copilot/gpt-5.4
+        priority: 5
+
+  summarization:
+    description: "Summarize, extract, distill, TL;DR, synthesis of large content"
+    candidates:
+      - model: google-gemini-cli/gemini-3.1-pro-preview
+        priority: 1
+      - model: github-copilot/gemini-3.1-pro-preview
+        priority: 2
+      - model: github-copilot/claude-sonnet-4.6
+        priority: 3
+      - model: openai-codex/gpt-5.4-mini
+        priority: 4
+      - model: google-gemini-cli/gemini-2.5-flash
+        priority: 5
+
+  fast_utility:
+    description: "Quick lookups, simple rewrites, short answers, minor edits"
+    candidates:
+      - model: openai-codex/gpt-5.4-mini
+        priority: 1
+      - model: google-gemini-cli/gemini-2.5-flash
+        priority: 2
+      - model: github-copilot/gpt-5.4-mini
+        priority: 3
+      - model: github-copilot/gpt-5-mini
+        priority: 4
+      - model: google-gemini-cli/gemini-3-flash-preview
+        priority: 5
+
+  long_context:
+    description: "Large documents, many files, long transcripts, multi-section analysis"
+    min_context: 200000
+    candidates:
+      - model: google-gemini-cli/gemini-3.1-pro-preview
+        priority: 1
+      - model: github-copilot/gemini-3.1-pro-preview
+        priority: 2
+      - model: github-copilot/claude-sonnet-4.6
+        priority: 3
+      - model: github-copilot/claude-opus-4.6
+        priority: 4
+
+  vision:
+    description: "Image understanding, screenshots, diagrams, photos"
+    requires_vision: true
+    candidates:
+      - model: google-gemini-cli/gemini-3.1-pro-preview
+        priority: 1
+      - model: github-copilot/claude-sonnet-4.6
+        priority: 2
+      - model: github-copilot/gemini-3.1-pro-preview
+        priority: 3
+      - model: openai-codex/gpt-5.4
+        priority: 4
+
+  general_chat:
+    description: "Conversational, general questions, advice, non-specialized tasks"
+    candidates:
+      - model: openai-codex/gpt-5.4
+        priority: 1
+      - model: github-copilot/claude-sonnet-4.6
+        priority: 2
+      - model: google-gemini-cli/gemini-3.1-pro-preview
+        priority: 3
+      - model: openai-codex/gpt-5.4-mini
+        priority: 4
+
+# Scoring formula weights
+scoring:
+  weights:
+    task_fit: 0.50       # how well model fits task type
+    health: 0.20         # current provider health / auth / quota
+    preference: 0.10     # explicit user/policy preference
+    learned: 0.10        # historical performance for this task
+    cost: 0.05           # cost efficiency
+    speed: 0.05          # latency preference
+  health_hard_cutoff: 0.30  # models below this health score are excluded
