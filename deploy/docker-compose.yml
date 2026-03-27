@@ -21,3 +21,9 @@ services:
       timeout: 5s
       start_period: 10s
       retries: 3
+    networks:
+      - nexus_default
+
+networks:
+  nexus_default:
+    external: true
