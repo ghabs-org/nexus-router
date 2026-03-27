@@ -1,0 +1,17 @@
+{
+  "name": "@ghabs/openclaw-nexus-router",
+  "version": "0.1.0",
+  "description": "OpenClaw plugin — routes each turn to the best model via Nexus Router",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.0"
+  },
+  "peerDependencies": {
+    "openclaw": "*"
+  }
+}

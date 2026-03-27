@@ -1,0 +1,17 @@
+[Unit]
+Description=Nexus Router HTTP server
+After=network.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/git/ghabs/nexus-router
+ExecStart=/home/ubuntu/git/ghabs/nexus-router/venv/bin/python -m src.server --port 7771
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=nexus-router
+
+[Install]
+WantedBy=multi-user.target

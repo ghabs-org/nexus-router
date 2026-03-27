@@ -70,7 +70,7 @@ def route_turn(
     # Step 1: extract pre-signals (fast, no model call)
     pre_signals = extract_pre_signals(message, has_image_attachment=has_image)
 
-    # Step 2: try fast heuristic classifier first
+    # Step 2: try fast heuristic classifier first (only if no hint provided)
     classifier_output = heuristic_classify(message, pre_signals)
 
     # Step 3: if heuristic wasn't confident enough and LLM classifier is enabled
