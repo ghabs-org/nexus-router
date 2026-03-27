@@ -13,7 +13,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.types import ClassifierOutput, PreSignals, ProviderHealth
 from src.scorer import score_models, _preference_score, _learned_score
-from src.router import Router
+from src.router import Router, _adapt_classifier_for_light_chat
 from src.classifier import extract_pre_signals, heuristic_classify, parse_classifier_response
 
 
@@ -213,6 +213,26 @@ class TestRouter:
         classifier = ClassifierOutput(task_type="general_chat", confidence=0.75)
         decision = router.route(classifier)
         assert 0.0 <= decision.score <= 1.0
+
+    def test_adapt_low_complexity_general_chat_to_fast_utility(self):
+        classifier = ClassifierOutput(task_type="general_chat", complexity="low", confidence=0.80)
+        pre = PreSignals(message_length=80, estimated_tokens=20)
+        adapted = _adapt_classifier_for_light_chat(classifier, pre)
+        assert adapted.task_type == "fast_utility"
+        assert adapted.cost_profile == "cheap"
+
+    def test_adapt_low_confidence_short_general_chat_to_fast_utility(self):
+        classifier = ClassifierOutput(task_type="general_chat", complexity="medium", confidence=0.60)
+        pre = PreSignals(message_length=300, estimated_tokens=90)
+        adapted = _adapt_classifier_for_light_chat(classifier, pre)
+        assert adapted.task_type == "fast_utility"
+        assert adapted.complexity == "low"
+
+    def test_keep_rich_general_chat_as_general_chat(self):
+        classifier = ClassifierOutput(task_type="general_chat", complexity="medium", confidence=0.60)
+        pre = PreSignals(message_length=300, estimated_tokens=90, has_code=True)
+        adapted = _adapt_classifier_for_light_chat(classifier, pre)
+        assert adapted.task_type == "general_chat"
 
     def test_explain_output(self, router):
         classifier = ClassifierOutput(task_type="coding", confidence=0.88)

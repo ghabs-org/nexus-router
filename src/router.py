@@ -10,6 +10,7 @@ Usage:
 """
 
 import json
+from dataclasses import replace
 from pathlib import Path
 from typing import Optional
 
@@ -85,6 +86,8 @@ class Router:
         pre_signals  = pre_signals or PreSignals()
         nexus_context = nexus_context or {}
 
+        effective_classifier = _adapt_classifier_for_light_chat(classifier, pre_signals)
+
         # Load fresh health and learned stats on each call
         # (cheap reads; health file is small, DB lookup is indexed)
         provider_health = load_provider_health()
@@ -93,7 +96,7 @@ class Router:
         # Score all models
         policy_weights = self._routing.get("scoring", {}).get("weights")
         scored = score_models(
-            classifier=classifier,
+            classifier=effective_classifier,
             models=self._registry,
             provider_health=provider_health,
             learned_stats=learned_stats,
@@ -113,10 +116,10 @@ class Router:
         primary  = eligible[0]
         fallbacks = [s.model_id for s in eligible[1:4]]  # top 3 fallbacks
 
-        reason = _build_reason(primary, classifier, pre_signals)
+        reason = _build_reason(primary, classifier, effective_classifier, pre_signals)
 
         decision = RoutingDecision(
-            task_type=classifier.task_type,
+            task_type=effective_classifier.task_type,
             confidence=classifier.confidence,
             selected_model=primary.model_id,
             selected_provider=primary.provider,
@@ -187,15 +190,59 @@ class Router:
 
 # ── Reason builder ────────────────────────────────────────────────────────────
 
+def _adapt_classifier_for_light_chat(
+    classifier: ClassifierOutput,
+    pre_signals: PreSignals,
+) -> ClassifierOutput:
+    """
+    Remap lightweight general chat to fast_utility so greetings / tiny asks do not
+    burn a premium model by default.
+
+    Rules:
+    - explicit low-complexity general_chat -> fast_utility
+    - low-confidence generic general_chat with no rich signals and short-ish text
+      also downgrades to fast_utility
+    """
+    if classifier.task_type != "general_chat":
+        return classifier
+
+    has_rich_signals = any([
+        pre_signals.has_code,
+        pre_signals.has_diff,
+        pre_signals.has_logs,
+        pre_signals.has_image,
+    ])
+
+    if classifier.complexity == "low" and not has_rich_signals:
+        return replace(classifier, task_type="fast_utility", cost_profile="cheap")
+
+    if (
+        classifier.complexity in (None, "medium")
+        and classifier.confidence <= 0.65
+        and not has_rich_signals
+        and pre_signals.estimated_tokens <= 120
+        and pre_signals.message_length <= 500
+    ):
+        return replace(classifier, task_type="fast_utility", complexity="low", cost_profile="cheap")
+
+    return classifier
+
+
 def _build_reason(
     primary,
     classifier: ClassifierOutput,
+    effective_classifier: ClassifierOutput,
     pre_signals: PreSignals,
 ) -> list[str]:
     reasons = []
 
     # Task classification
     reasons.append(f"task classified as '{classifier.task_type}' (confidence={classifier.confidence:.0%})")
+
+    if effective_classifier.task_type != classifier.task_type:
+        reasons.append(
+            f"adapted to '{effective_classifier.task_type}' for lightweight chat"
+        )
 
     if classifier.subtype:
         reasons.append(f"subtype: {classifier.subtype}")
