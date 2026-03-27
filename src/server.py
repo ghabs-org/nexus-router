@@ -226,7 +226,10 @@ class RouterHandler(BaseHTTPRequestHandler):
 
 def run(port: int = DEFAULT_PORT):
     ensure_schema()
-    server = HTTPServer(("127.0.0.1", port), RouterHandler)
+    # Bind to all interfaces inside Docker — external access is restricted
+    # by the port mapping in docker-compose.yml (127.0.0.1:7771->7771)
+    bind_addr = "0.0.0.0"
+    server = HTTPServer((bind_addr, port), RouterHandler)
     print(f"Nexus Router server listening on http://127.0.0.1:{port}")
     print("Endpoints: POST /route  POST /outcome  POST /probe  GET /health  GET /stats")
     try:

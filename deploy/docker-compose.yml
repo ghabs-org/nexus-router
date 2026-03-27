@@ -1,0 +1,23 @@
+services:
+  nexus-router:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    image: nexus-router:latest
+    container_name: nexus-router-1
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:7771:7771"
+    volumes:
+      - ../catalog:/app/catalog
+      - ../policies:/app/policies
+      - ../state:/app/state
+      - ../data:/app/data
+    environment:
+      - PYTHONUNBUFFERED=1
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:7771/health', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
