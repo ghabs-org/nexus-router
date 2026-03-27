@@ -1,0 +1,284 @@
+"""
+db.py — SQLite interaction layer for Nexus Router.
+
+Handles:
+- Initialising the database (from schema.sql)
+- Writing routing decisions
+- Updating decision outcomes
+- Reading learned model stats
+"""
+
+import json
+import sqlite3
+import uuid
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Optional
+
+from .types import ClassifierOutput, PreSignals, ProviderHealth, RoutingDecision
+
+DB_PATH     = Path(__file__).parent.parent / "data" / "routing-history.sqlite"
+SCHEMA_PATH = Path(__file__).parent / "schema.sql"
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _connect() -> sqlite3.Connection:
+    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def ensure_schema():
+    """Create tables if they don't exist yet."""
+    with open(SCHEMA_PATH) as f:
+        sql = f.read()
+    conn = _connect()
+    conn.executescript(sql)
+    conn.close()
+
+
+def write_decision(
+    decision: RoutingDecision,
+    classifier: ClassifierOutput,
+    pre_signals: PreSignals,
+    provider_health: ProviderHealth,
+    nexus_workflow_id: Optional[str] = None,
+    nexus_step_id: Optional[str] = None,
+    nexus_issue_id: Optional[str] = None,
+    nexus_project: Optional[str] = None,
+) -> str:
+    """
+    Write a new routing decision to the DB.
+    Returns the generated decision ID (UUID).
+    """
+    decision_id = str(uuid.uuid4())
+    conn = _connect()
+    try:
+        conn.execute(
+            """
+            INSERT INTO routing_decisions (
+              id, created_at,
+              task_type, subtype, complexity,
+              needs_tools, needs_vision, needs_long_context,
+              cost_profile, classifier_confidence, detected_language,
+              has_image, has_code, has_diff, has_logs, estimated_tokens,
+              selected_model, selected_provider,
+              fallbacks, routing_score, reason, excluded_models,
+              provider_health_score, quota_state, provider_auth_ok,
+              nexus_workflow_id, nexus_step_id, nexus_issue_id, nexus_project
+            ) VALUES (
+              ?,?,  ?,?,?,  ?,?,?,  ?,?,?,
+              ?,?,?,?,?,  ?,?,  ?,?,?,?,  ?,?,?,  ?,?,?,?
+            )
+            """,
+            (
+                decision_id, _now_iso(),
+                classifier.task_type, classifier.subtype, classifier.complexity,
+                int(classifier.needs_tools), int(classifier.needs_vision), int(classifier.needs_long_context),
+                classifier.cost_profile, classifier.confidence, classifier.detected_language,
+                int(pre_signals.has_image), int(pre_signals.has_code),
+                int(pre_signals.has_diff), int(pre_signals.has_logs),
+                pre_signals.estimated_tokens,
+                decision.selected_model, decision.selected_provider,
+                json.dumps(decision.fallbacks), decision.score,
+                json.dumps(decision.reason),
+                json.dumps(decision.excluded_models),
+                provider_health.health_score, provider_health.quota,
+                int(provider_health.auth == "ok"),
+                nexus_workflow_id, nexus_step_id, nexus_issue_id, nexus_project,
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    return decision_id
+
+
+def update_outcome(
+    decision_id: str,
+    success: bool,
+    latency_ms: Optional[int] = None,
+    fallback_used: bool = False,
+    fallback_model: Optional[str] = None,
+    user_override: bool = False,
+    user_override_model: Optional[str] = None,
+):
+    """
+    Record the outcome of a routing decision after the turn completes.
+    Also updates model_stats for the selected model.
+    """
+    conn = _connect()
+    try:
+        conn.execute(
+            """
+            UPDATE routing_decisions
+            SET outcome_success=?, latency_ms=?,
+                fallback_used=?, fallback_model=?,
+                user_override=?, user_override_model=?
+            WHERE id=?
+            """,
+            (
+                int(success), latency_ms,
+                int(fallback_used), fallback_model,
+                int(user_override), user_override_model,
+                decision_id,
+            ),
+        )
+
+        # fetch decision for stats update
+        row = conn.execute(
+            "SELECT selected_model, selected_provider, task_type, routing_score FROM routing_decisions WHERE id=?",
+            (decision_id,),
+        ).fetchone()
+
+        if row:
+            _update_model_stats(
+                conn,
+                model=row["selected_model"],
+                provider=row["selected_provider"],
+                task_type=row["task_type"],
+                routing_score=row["routing_score"],
+                success=success,
+                latency_ms=latency_ms,
+                fallback_used=fallback_used,
+                user_override=user_override,
+            )
+
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _update_model_stats(
+    conn: sqlite3.Connection,
+    model: str,
+    provider: str,
+    task_type: Optional[str],
+    routing_score: Optional[float],
+    success: bool,
+    latency_ms: Optional[int],
+    fallback_used: bool,
+    user_override: bool,
+):
+    row = conn.execute(
+        "SELECT * FROM model_stats WHERE model=?", (model,)
+    ).fetchone()
+
+    task_col = {
+        "coding": "coding_selected",
+        "code_review": "review_selected",
+        "reasoning": "reasoning_selected",
+        "summarization": "summarize_selected",
+        "fast_utility": "fast_selected",
+        "long_context": "longctx_selected",
+        "vision": "vision_selected",
+    }.get(task_type, None)
+
+    now = _now_iso()
+
+    if row is None:
+        # First time we've seen this model
+        task_val = {task_col: 1} if task_col else {}
+        conn.execute(
+            f"""
+            INSERT INTO model_stats
+              (model, provider,
+               total_selected, total_success, total_fallback, total_override,
+               {', '.join(task_val.keys()) + ',' if task_val else ''}
+               avg_latency_ms, avg_routing_score, success_rate,
+               first_used_at, last_used_at)
+            VALUES
+              (?,?,  1,?,?,?,  {'1,' if task_val else ''}  ?,?,?,  ?,?)
+            """,
+            (
+                model, provider,
+                int(success), int(fallback_used), int(user_override),
+                latency_ms, routing_score, float(success),
+                now, now,
+            ),
+        )
+    else:
+        total   = row["total_selected"] + 1
+        success_count = row["total_success"] + int(success)
+
+        # EWMA for latency and score
+        prev_lat = row["avg_latency_ms"]
+        new_lat  = (0.3 * latency_ms + 0.7 * prev_lat) if (latency_ms and prev_lat) else (latency_ms or prev_lat)
+        prev_sc  = row["avg_routing_score"] or 0.0
+        new_sc   = (0.3 * (routing_score or 0.0) + 0.7 * prev_sc) if routing_score else prev_sc
+
+        task_clause = f", {task_col}={task_col}+1" if task_col else ""
+
+        conn.execute(
+            f"""
+            UPDATE model_stats
+            SET total_selected=?,
+                total_success=?,
+                total_fallback=total_fallback+?,
+                total_override=total_override+?,
+                avg_latency_ms=?,
+                avg_routing_score=?,
+                success_rate=?,
+                last_used_at=?
+                {task_clause}
+            WHERE model=?
+            """,
+            (
+                total, success_count,
+                int(fallback_used), int(user_override),
+                new_lat, new_sc,
+                success_count / total,
+                now,
+                model,
+            ),
+        )
+
+
+def load_model_stats() -> dict[str, dict]:
+    """
+    Load learned model stats from DB.
+    Returns dict of model_id → stats dict.
+    Used by scorer to apply learned adjustments.
+    """
+    if not DB_PATH.exists():
+        return {}
+    conn = _connect()
+    try:
+        rows = conn.execute("SELECT * FROM model_stats").fetchall()
+        return {row["model"]: dict(row) for row in rows}
+    finally:
+        conn.close()
+
+
+def log_provider_observation(
+    provider: str,
+    auth_status: str,
+    quota_state: str = "unknown",
+    http_status: Optional[int] = None,
+    error_type: Optional[str] = None,
+    latency_ms: Optional[int] = None,
+    note: Optional[str] = None,
+):
+    """Append one health observation to provider_health_log."""
+    conn = _connect()
+    try:
+        conn.execute(
+            """
+            INSERT INTO provider_health_log
+              (id, observed_at, provider, auth_status, quota_state,
+               http_status, error_type, latency_ms, note)
+            VALUES (?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                str(uuid.uuid4()), _now_iso(),
+                provider, auth_status, quota_state,
+                http_status, error_type, latency_ms, note,
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
