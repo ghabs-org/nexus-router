@@ -107,17 +107,108 @@ def fetch_artificialanalysis() -> dict[str, dict]:
 
 def fetch_livebench() -> dict[str, dict]:
     """
-    Fetch reasoning and coding scores from livebench.ai.
+    Fetch reasoning and coding scores from LiveBench via HuggingFace datasets API.
 
-    Returns dict of model_id → {reasoning, coding, _source, _updated_at}
+    Data: https://huggingface.co/datasets/livebench/model_judgment
+    60k+ question-level rows (score=0/1 per question). We fetch all and aggregate.
 
-    Implementation note:
-    - https://livebench.ai provides downloadable results
-    - Check https://github.com/LiveBench/LiveBench for data files
-    - Results CSV at: https://livebench.ai/livebench.csv (if available)
+    Categories:
+      reasoning  → task category "reasoning"
+      coding     → task category "coding"
+      language   → proxy for review / instruction following
+
+    Returns dict of OpenClaw provider/model ID → router dimension scores.
     """
-    print("  [livebench] not yet implemented — skipping")
-    return {}
+    BASE = (
+        "https://datasets-server.huggingface.co/rows"
+        "?dataset=livebench%2Fmodel_judgment"
+        "&config=default&split=leaderboard"
+    )
+    PAGE = 500  # rows per request
+    MAX_ROWS = 60_500
+
+    # Aggregate: {model -> {category -> (sum, count)}}
+    agg: dict[str, dict[str, list]] = {}
+
+    offset = 0
+    total_fetched = 0
+    try:
+        while offset < MAX_ROWS:
+            url = f"{BASE}&offset={offset}&length={PAGE}"
+            req = urllib.request.Request(url, headers={"User-Agent": "nexus-router/1.0"})
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                data = json.loads(resp.read())
+
+            rows = data.get("rows", [])
+            if not rows:
+                break
+
+            for row in rows:
+                r = row.get("row", {})
+                model    = r.get("model", "")
+                category = r.get("category", "")
+                score    = r.get("score")
+                if not model or not category or score is None:
+                    continue
+                agg.setdefault(model, {}).setdefault(category, []).append(float(score))
+                total_fetched += 1
+
+            offset += PAGE
+            if len(rows) < PAGE:
+                break  # last page
+
+    except Exception as e:
+        print(f"    LiveBench fetch error: {e}")
+        if not agg:
+            return {}
+
+    # Compute per-model per-category averages (×100 for %)
+    raw_scores: dict[str, dict[str, float]] = {}
+    for model, cats in agg.items():
+        raw_scores[model] = {
+            cat: (sum(v) / len(v)) * 100
+            for cat, v in cats.items()
+        }
+
+    print(f"    {total_fetched} rows fetched, {len(raw_scores)} LiveBench models aggregated")
+
+    # Map LiveBench model names → OpenClaw provider/model IDs
+    MODEL_MAP = {
+        "claude-3-5-sonnet-20241022":          "github-copilot/claude-sonnet-4",
+        "claude-3-7-sonnet-20250219-base":     "github-copilot/claude-sonnet-4.5",
+        "claude-3-opus-20240229":              "github-copilot/claude-opus-4.5",
+        "gemini-2.0-flash":                    "google-gemini-cli/gemini-2.0-flash",
+        "gemini-2.0-flash-001":                "google-gemini-cli/gemini-2.0-flash",
+        "gemini-2.5-pro-exp-03-25":            "google-gemini-cli/gemini-2.5-pro",
+        "gemini-2.5-flash":                    "google-gemini-cli/gemini-2.5-flash",
+        "gpt-4o-2024-11-20":                   "github-copilot/gpt-4o",
+    }
+
+    result: dict[str, dict] = {}
+    for lb_model, scores in raw_scores.items():
+        oc_model = MODEL_MAP.get(lb_model)
+        if not oc_model:
+            continue
+
+        entry: dict = {"_source": "livebench", "_updated_at": TODAY}
+
+        if "reasoning" in scores:
+            entry["reasoning"] = normalize_reasoning(scores["reasoning"])
+        if "coding" in scores:
+            entry["coding"] = normalize_coding(scores["coding"])
+        if "language" in scores:
+            entry["review"]    = normalize_coding(scores["language"])
+            entry["summarize"] = normalize_coding(scores["language"] * 0.95)
+        if "math" in scores:
+            # math sub-score also proxies reasoning quality
+            existing = entry.get("reasoning", 0.0)
+            entry["reasoning"] = round((existing + normalize_reasoning(scores["math"])) / 2, 4)
+
+        if len(entry) > 2:
+            result[oc_model] = entry
+
+    print(f"    {len(result)} models mapped to OpenClaw IDs")
+    return result
 
 
 def fetch_vellum() -> dict[str, dict]:
