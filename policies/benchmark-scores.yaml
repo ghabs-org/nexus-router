@@ -1,0 +1,98 @@
+# benchmark-scores.yaml
+#
+# Benchmark-derived capability scores for the Nexus Router.
+# These override family-prior heuristics when present.
+#
+# Format per model:
+#   models:
+#     "provider/model-id":
+#       coding:       0.0-1.0   # HumanEval / LiveCodeBench
+#       review:       0.0-1.0   # proxy: instruction_following × reasoning
+#       reasoning:    0.0-1.0   # MATH / LiveBench reasoning / MMLU-Pro
+#       summarize:    0.0-1.0   # proxy: instruction_following × output_quality
+#       fast:         0.0-1.0   # artificialanalysis.ai tokens/s, normalized
+#       cost:         0.0-1.0   # 1.0 = cheapest; derived from $/M tokens
+#       context:      0.0-1.0   # derived from actual context window
+#       vision:       0.0-1.0   # VQA / MMMU benchmark score (0 if text-only)
+#       tools:        0.0-1.0   # BFCL (Berkeley Function Calling Leaderboard)
+#       multilingual: 0.0-1.0   # MGSM or multilingual reasoning benchmark
+#       _source:      string    # source label, e.g. "livebench-2026-03"
+#       _updated_at:  string    # ISO date of last update
+#
+# Score normalization rules:
+#   coding:       HumanEval pass@1 / 100
+#   reasoning:    LiveBench reasoning composite / 100
+#   fast:         min(provider_tps / 200, 1.0)  — 200 tok/s = 1.0
+#   cost:         1.0 - min(avg_cost_per_M / 20.0, 1.0)  — $20/M = 0.0
+#   context:      derived from window size (see generate_registry.py)
+#   tools:        BFCL overall accuracy / 100
+#   multilingual: MGSM composite / 100
+#
+# Sources:
+#   artificialanalysis.ai — speed, cost, quality composite
+#   livebench.ai          — reasoning, coding, instruction following
+#   vellum.ai/llm-leaderboard — multi-task quality
+#   scale.com/leaderboard — coding, reasoning
+#   berkeley-nest/gorilla (BFCL) — tool use / function calling
+#
+# This file is intentionally sparse on initial commit.
+# Populate it by running: python src/fetch_benchmarks.py
+# Or manually add entries below as you gather data.
+
+_meta:
+  description: "Benchmark-derived model scores for Nexus Router"
+  sources:
+    - id: artificialanalysis
+      url: "https://artificialanalysis.ai/leaderboards/models"
+      dimensions: [fast, cost, context]
+      update_cadence: monthly
+    - id: livebench
+      url: "https://livebench.ai"
+      dimensions: [reasoning, coding]
+      update_cadence: monthly
+    - id: vellum
+      url: "https://vellum.ai/llm-leaderboard"
+      dimensions: [coding, reasoning, review]
+      update_cadence: monthly
+    - id: bfcl
+      url: "https://gorilla.cs.berkeley.edu/leaderboard.html"
+      dimensions: [tools]
+      update_cadence: monthly
+    - id: mgsm
+      url: "https://github.com/google-research/url-nlp/tree/main/mgsm"
+      dimensions: [multilingual]
+      update_cadence: yearly
+
+# Model entries — populated by src/fetch_benchmarks.py or manually
+# Example (fill in real values after fetching benchmark data):
+#
+# models:
+#   openai-codex/gpt-5.4:
+#     coding: 0.92
+#     reasoning: 0.87
+#     tools: 0.91
+#     fast: 0.65
+#     cost: 0.52
+#     _source: artificialanalysis+livebench-2026-03
+#     _updated_at: "2026-03-27"
+#
+#   github-copilot/claude-sonnet-4.6:
+#     coding: 0.87
+#     review: 0.91
+#     reasoning: 0.90
+#     tools: 0.88
+#     multilingual: 0.89
+#     _source: livebench+vellum-2026-03
+#     _updated_at: "2026-03-27"
+#
+#   google-gemini-cli/gemini-3.1-pro-preview:
+#     reasoning: 0.89
+#     summarize: 0.91
+#     vision: 0.90
+#     multilingual: 0.92
+#     fast: 0.81
+#     cost: 0.76
+#     _source: artificialanalysis-2026-03
+#     _updated_at: "2026-03-27"
+
+models: {}

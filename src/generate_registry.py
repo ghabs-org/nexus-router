@@ -4,10 +4,18 @@ Generate normalized model registry from:
 - catalog/raw/openclaw-models.json  (openclaw models list --all --json)
 - policies/families.yaml
 - policies/overrides.yaml
+- policies/benchmark-scores.yaml   (optional, benchmark-derived scores)
 
 Output: catalog/normalized/models.json
+
+Flags:
+  --only-configured       Include only models whose provider has auth=true
+  --providers A,B,C       Include only models from listed providers
+  --all                   Include all 800+ catalog models (default without flags)
+  --benchmark-file PATH   Path to benchmark-scores.yaml (default: policies/benchmark-scores.yaml)
 """
 
+import argparse
 import json
 import re
 import sys
@@ -22,10 +30,11 @@ except ImportError:
 
 ROOT = Path(__file__).parent.parent
 
-RAW_CATALOG   = ROOT / "catalog/raw/openclaw-models.json"
-FAMILIES_FILE = ROOT / "policies/families.yaml"
-OVERRIDES_FILE= ROOT / "policies/overrides.yaml"
-OUT_FILE      = ROOT / "catalog/normalized/models.json"
+RAW_CATALOG      = ROOT / "catalog/raw/openclaw-models.json"
+FAMILIES_FILE    = ROOT / "policies/families.yaml"
+OVERRIDES_FILE   = ROOT / "policies/overrides.yaml"
+BENCHMARKS_FILE  = ROOT / "policies/benchmark-scores.yaml"
+OUT_FILE         = ROOT / "catalog/normalized/models.json"
 
 
 def load_json(path: Path) -> dict:
@@ -46,7 +55,7 @@ def extract_provider(key: str) -> tuple[str, str]:
     return key, key
 
 
-def resolve_scores(provider: str, model_id: str, features: dict, families: dict) -> tuple[dict, dict]:
+def resolve_scores(provider: str, model_id: str, features: dict, families: dict, benchmarks: dict) -> tuple[dict, dict]:
     """
     Resolve scoring priors for a model using:
     1. Family defaults
@@ -104,10 +113,19 @@ def resolve_scores(provider: str, model_id: str, features: dict, families: dict)
                 source[k] = f"pattern:{pattern}"
             break  # first matching pattern wins
 
+    # Apply benchmark-derived scores (highest-priority source, overrides family)
+    full_key = f"{provider}/{model_id}"
+    bench_entry = (benchmarks.get("models") or {}).get(full_key, {})
+    for k, v in bench_entry.items():
+        if k in defaults:
+            defaults[k] = v
+            source[k] = f"benchmark:{bench_entry.get('_source', 'unknown')}"
+
     return defaults, source
 
 
-def normalize(raw: dict, families: dict, overrides: dict) -> list[dict]:
+def normalize(raw: dict, families: dict, overrides: dict, benchmarks: dict,
+              only_providers: set[str] | None = None) -> list[dict]:
     models = []
     for entry in raw.get("models", []):
         key = entry.get("key", "")
@@ -115,6 +133,10 @@ def normalize(raw: dict, families: dict, overrides: dict) -> list[dict]:
             continue
 
         provider, model_id = extract_provider(key)
+
+        # Provider filter
+        if only_providers and provider not in only_providers:
+            continue
 
         features = {
             "supportsVision": "image" in entry.get("input", ""),
@@ -130,7 +152,7 @@ def normalize(raw: dict, families: dict, overrides: dict) -> list[dict]:
             "local": entry.get("local", False),
         }
 
-        scores, score_source = resolve_scores(provider, model_id, features, families)
+        scores, score_source = resolve_scores(provider, model_id, features, families, benchmarks)
 
         # Apply manual overrides
         manual = (overrides.get("overrides") or {}).get(key, {})
@@ -153,6 +175,17 @@ def normalize(raw: dict, families: dict, overrides: dict) -> list[dict]:
 
 
 def main():
+    parser = argparse.ArgumentParser(description="Generate Nexus Router model registry")
+    parser.add_argument("--only-configured", action="store_true",
+                        help="Include only models whose provider has auth=true (available=true in catalog)")
+    parser.add_argument("--providers", type=str, default=None,
+                        help="Comma-separated provider ids to include, e.g. openai-codex,github-copilot")
+    parser.add_argument("--all", dest="include_all", action="store_true",
+                        help="Include all 800+ catalog models (default without filters)")
+    parser.add_argument("--benchmark-file", type=Path, default=None,
+                        help="Path to benchmark-scores.yaml (default: policies/benchmark-scores.yaml)")
+    args = parser.parse_args()
+
     print(f"Loading raw catalog from {RAW_CATALOG}...")
     raw = load_json(RAW_CATALOG)
 
@@ -162,12 +195,44 @@ def main():
     print(f"Loading overrides from {OVERRIDES_FILE}...")
     overrides = load_yaml(OVERRIDES_FILE)
 
+    bench_path = args.benchmark_file or BENCHMARKS_FILE
+    benchmarks = {}
+    if bench_path.exists():
+        print(f"Loading benchmark scores from {bench_path}...")
+        benchmarks = load_yaml(bench_path)
+        n_bench = len((benchmarks.get("models") or {}))
+        print(f"  {n_bench} benchmark model entries loaded")
+    else:
+        print(f"No benchmark file found at {bench_path} — using family priors only")
+
+    # Resolve provider filter
+    only_providers: set[str] | None = None
+
+    if args.providers:
+        only_providers = {p.strip() for p in args.providers.split(",")}
+        print(f"Provider filter: {sorted(only_providers)}")
+
+    elif args.only_configured:
+        # Collect providers that have at least one authed model
+        all_models = raw.get("models", [])
+        authed_providers = {
+            extract_provider(m.get("key", ""))[0]
+            for m in all_models
+            if m.get("available", False)
+        }
+        only_providers = authed_providers
+        print(f"Only-configured filter: {sorted(only_providers)}")
+
     print("Normalizing...")
-    models = normalize(raw, families, overrides)
+    models = normalize(raw, families, overrides, benchmarks, only_providers)
 
     result = {
         "generatedAt": datetime.now(timezone.utc).isoformat(),
         "totalModels": len(models),
+        "filter": {
+            "onlyConfigured": args.only_configured,
+            "providers": sorted(only_providers) if only_providers else None,
+        },
         "models": models,
     }
 
@@ -177,11 +242,13 @@ def main():
 
     print(f"Written {len(models)} models → {OUT_FILE}")
 
-    # Print a quick summary
     authed = [m for m in models if m["availability"]["authed"]]
+    bench_count = sum(
+        1 for m in models
+        if any(v.startswith("benchmark:") for v in m["scoreSource"].values())
+    )
     print(f"  authed/available: {len(authed)}")
-
-    # Show providers present
+    print(f"  benchmark-scored: {bench_count}")
     providers = sorted(set(m["provider"] for m in models))
     print(f"  providers ({len(providers)}): {', '.join(providers[:8])}{'...' if len(providers) > 8 else ''}")
 

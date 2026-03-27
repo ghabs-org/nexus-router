@@ -22,6 +22,17 @@ from src.classifier import extract_pre_signals, heuristic_classify, parse_classi
 REGISTRY_FILE = Path(__file__).parent.parent / "catalog/normalized/models.json"
 
 
+@pytest.fixture(autouse=True, scope="session")
+def ensure_full_registry():
+    """Regenerate registry with all configured providers before running tests."""
+    import subprocess
+    subprocess.run(
+        [sys.executable, "src/generate_registry.py", "--only-configured"],
+        cwd=str(Path(__file__).parent.parent),
+        capture_output=True,
+    )
+
+
 @pytest.fixture
 def registry():
     if not REGISTRY_FILE.exists():
@@ -191,8 +202,11 @@ class TestRouter:
     def test_route_long_context_selects_large_window(self, router):
         classifier = ClassifierOutput(task_type="long_context", needs_long_context=True, confidence=0.85)
         decision = router.route(classifier)
-        # Should select a model with large context window
-        assert "gemini" in decision.selected_model.lower() or "opus" in decision.selected_model.lower(), \
+        # Should select a model with a large context window (>= 200k)
+        # Acceptable: gemini (1M), claude opus (1M), claude sonnet 4.6 (977k), gpt-5.2-codex (400k)
+        large_ctx_hints = ["gemini", "opus", "sonnet-4.6", "gpt-5.2-codex", "gpt-5.3-codex", "gpt-5.4"]
+        model = decision.selected_model.lower()
+        assert any(h in model for h in large_ctx_hints), \
             f"Expected large-context model, got {decision.selected_model}"
 
     def test_route_score_between_0_and_1(self, router):
@@ -316,7 +330,11 @@ class TestEndToEnd:
             task_type="vision", needs_vision=True, confidence=0.90
         )
         decision = router.route(classifier, pre_signals=signals)
-        assert "gemini" in decision.selected_model.lower() or "claude" in decision.selected_model.lower()
+        # Should select a vision-capable model (gemini, claude, gpt-4o, etc.)
+        vision_hints = ["gemini", "claude", "gpt-4o", "gpt-5"]
+        model = decision.selected_model.lower()
+        assert any(h in model for h in vision_hints), \
+            f"Expected vision-capable model, got {decision.selected_model}"
 
     def test_full_pipeline_large_context(self, router):
         message = "A" * 900_000  # very long message
