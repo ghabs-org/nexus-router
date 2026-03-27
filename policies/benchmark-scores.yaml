@@ -95,4 +95,90 @@ _meta:
 #     _source: artificialanalysis-2026-03
 #     _updated_at: "2026-03-27"
 
-models: {}
+models:
+  github-copilot/claude-opus-4.5:
+    _source: artificialanalysis
+    _updated_at: '2026-03-27'
+    coding: 0.7772
+    cost: 0.3333
+    multilingual: 0.9128
+    reasoning: 0.7882
+    tools: 0.7455
+  github-copilot/claude-opus-4.6:
+    _source: artificialanalysis
+    _updated_at: '2026-03-27'
+    coding: 0.6794
+    cost: 0.3333
+    multilingual: 0.9064
+    reasoning: 0.7518
+    tools: 0.8027
+  github-copilot/claude-sonnet-4.6:
+    _source: artificialanalysis
+    _updated_at: '2026-03-27'
+    coding: 0.6633
+    cost: 0.6
+    multilingual: 0.8924
+    reasoning: 0.7165
+    tools: 0.7702
+  github-copilot/gemini-3.1-pro-preview:
+    _source: artificialanalysis
+    _updated_at: '2026-03-27'
+    coding: 0.7929
+    cost: 0.7
+    multilingual: 0.9317
+    reasoning: 0.8789
+    tools: 0.7386
+  google-gemini-cli/gemini-2.0-flash:
+    _source: artificialanalysis
+    _updated_at: '2026-03-27'
+    coding: 0.2645
+    cost: 0.9825
+    reasoning: 0.4437
+    tools: 0.1971
+  google-gemini-cli/gemini-2.5-flash:
+    _source: artificialanalysis
+    _updated_at: '2026-03-27'
+    coding: 0.406
+    reasoning: 0.4244
+  google-gemini-cli/gemini-2.5-pro:
+    _source: artificialanalysis
+    _updated_at: '2026-03-27'
+    coding: 0.7228
+    reasoning: 0.6344
+  google-gemini-cli/gemini-3.1-pro-preview:
+    _source: artificialanalysis
+    _updated_at: '2026-03-27'
+    coding: 0.7929
+    cost: 0.7
+    multilingual: 0.9317
+    reasoning: 0.8789
+    tools: 0.7386
+  openai-codex/gpt-5.2-codex:
+    _source: artificialanalysis
+    _updated_at: '2026-03-27'
+    coding: 0.6137
+    cost: 0.6792
+    reasoning: 0.7997
+    tools: 0.7065
+  openai-codex/gpt-5.3-codex:
+    _source: artificialanalysis
+    _updated_at: '2026-03-27'
+    coding: 0.7586
+    cost: 0.6792
+    reasoning: 0.843
+    tools: 0.7774
+  openai-codex/gpt-5.4:
+    _source: artificialanalysis
+    _updated_at: '2026-03-27'
+    coding: 0.8179
+    cost: 0.625
+    reasoning: 0.8683
+    tools: 0.8678
+  openai-codex/gpt-5.4-mini:
+    _source: artificialanalysis
+    _updated_at: '2026-03-27'
+    coding: 0.7354
+    cost: 0.8875
+    multilingual: 0.8941
+    reasoning: 0.7811
+    tools: 0.6957

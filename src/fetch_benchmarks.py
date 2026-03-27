@@ -94,15 +94,204 @@ def fetch_artificialanalysis() -> dict[str, dict]:
     """
     Fetch speed, cost, and quality data from artificialanalysis.ai.
 
-    Returns dict of model_id → {fast, cost, context, _source, _updated_at}
+    Uses the RSC (React Server Components) payload embedded in the page response.
+    The data is a JSON array starting at a predictable offset in the payload.
 
-    Implementation note:
-    - Check https://artificialanalysis.ai/leaderboards/models for export options
-    - If no public API exists, consider scraping the JSON embedded in the page
-    - Look for network requests to /api/models or similar endpoints in DevTools
+    Fields extracted:
+      coding_index       → coding
+      intelligence_index → reasoning
+      agentic_index      → proxy for tools
+      gpqa               → proxy for reasoning (cross-check)
+      livecodebench      → proxy for coding (cross-check)
+      price_1m_blended   → cost (inverted, normalized)
+      multilingual_aa.average.score → multilingual
+      context_window_tokens → context (derived)
+
+    The slug field is used for model name mapping.
     """
-    print("  [artificialanalysis] not yet implemented — skipping")
-    return {}
+    import re as _re
+
+    PAGE_URL = "https://artificialanalysis.ai/leaderboards/models"
+    ARRAY_MARKER = '"critpt"'
+
+    try:
+        req = urllib.request.Request(
+            PAGE_URL,
+            headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"},
+        )
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            raw = resp.read().decode("utf-8", errors="replace")
+    except Exception as e:
+        print(f"    artificialanalysis fetch error: {e}")
+        return {}
+
+    # The data is JSON-escaped inside a Next.js HTML payload
+    # Unescape it first so we can parse the JSON normally
+    if '\\"critpt\\"' in raw:
+        # Find the outer string boundary and unescape it
+        idx = raw.find('\\"critpt\\"')
+        # Find the start of the enclosing string — look for [{ pattern escaped
+        start = raw.rfind('[{\\"', 0, idx)
+        if start != -1:
+            # Find the end: look for the closing ] of the array
+            # We'll extract a large slice and unescape it
+            end_hint = raw.find('\\"]', idx)
+            slice_raw = raw[start:end_hint + 20000] if end_hint != -1 else raw[start:start + 2_000_000]
+            # Unescape: replace \" with " and \\ with \
+            unescaped = slice_raw.replace('\\"', '"').replace('\\\\', '\\')
+            raw = unescaped  # continue with unescaped data
+            ARRAY_MARKER = '"critpt"'
+        else:
+            print("    artificialanalysis: could not find array start in escaped data")
+            return {}
+
+    # Find the array of model objects
+    idx = raw.find(ARRAY_MARKER)
+    if idx == -1:
+        print("    artificialanalysis: marker not found in page")
+        return {}
+
+    # Walk back to find the opening [ of the array
+    start = raw.rfind('[{', 0, idx)
+    if start == -1:
+        print("    artificialanalysis: could not find array start")
+        return {}
+
+    # Walk forward to find the end of the array
+    partial = raw[start:]
+    depth = 0
+    in_str = False
+    escape = False
+    end = -1
+    for i, c in enumerate(partial):
+        if escape:
+            escape = False
+            continue
+        if c == '\\' and in_str:
+            escape = True
+            continue
+        if c == '"' and not escape:
+            in_str = not in_str
+            continue
+        if not in_str:
+            if c in ('[', '{'):
+                depth += 1
+            elif c in (']', '}'):
+                depth -= 1
+                if depth == 0:
+                    end = i
+                    break
+
+    if end == -1:
+        print("    artificialanalysis: could not find array end")
+        return {}
+
+    try:
+        models_raw = json.loads(partial[:end + 1])
+    except Exception as e:
+        print(f"    artificialanalysis: JSON parse error: {e}")
+        return {}
+
+    print(f"    {len(models_raw)} models found in AA page")
+
+    # Slug → OpenClaw model ID mapping
+    # AA slugs use dashes, OpenClaw uses provider/model-id format
+    SLUG_MAP: dict[str, str] = {
+        # openai-codex
+        "gpt-5-4":           "openai-codex/gpt-5.4",
+        "gpt-5-3-codex":     "openai-codex/gpt-5.3-codex",
+        "gpt-5-2-codex":     "openai-codex/gpt-5.2-codex",
+        "gpt-5-4-mini":      "openai-codex/gpt-5.4-mini",
+        # github-copilot (claude)
+        "claude-sonnet-4-6":               "github-copilot/claude-sonnet-4.6",
+        "claude-opus-4-6":                 "github-copilot/claude-opus-4.6",
+        "claude-opus-4-5":                 "github-copilot/claude-opus-4.5",
+        "claude-opus-4-5-thinking":        "github-copilot/claude-opus-4.5",
+        "claude-sonnet-4-6-adaptive":      "github-copilot/claude-sonnet-4.6",
+        "claude-opus-4-6-adaptive":        "github-copilot/claude-opus-4.6",
+        # github-copilot (gemini)
+        "gemini-3-1-pro-preview":          "github-copilot/gemini-3.1-pro-preview",
+        # google-gemini-cli
+        "gemini-3-1-pro-preview":          "google-gemini-cli/gemini-3.1-pro-preview",
+        "gemini-2-5-pro":                  "google-gemini-cli/gemini-2.5-pro",
+        "gemini-2-5-pro-03-25":            "google-gemini-cli/gemini-2.5-pro",
+        "gemini-2-5-flash-reasoning":      "google-gemini-cli/gemini-2.5-flash",
+        "gemini-2-5-flash-04-2025":        "google-gemini-cli/gemini-2.5-flash",
+        "gemini-2-0-flash":                "google-gemini-cli/gemini-2.0-flash",
+    }
+
+    # Normalisation helpers (local to this function to avoid name collisions)
+    def _norm(val: float, ceiling: float, invert: bool = False) -> float:
+        if val is None:
+            return None
+        v = max(0.0, min(1.0, val / ceiling))
+        return round(1.0 - v if invert else v, 4)
+
+    MAX_INTELLIGENCE = 70.0  # approximate max observed intelligence_index
+    MAX_CODING       = 70.0
+    MAX_AGENTIC      = 80.0
+    MAX_BLENDED_COST = 15.0  # $/M — above this = cost score 0.0
+
+    result: dict[str, dict] = {}
+    for m in models_raw:
+        slug = m.get("slug", "")
+        oc_model = SLUG_MAP.get(slug)
+        if not oc_model:
+            continue
+
+        entry: dict = {"_source": "artificialanalysis", "_updated_at": TODAY}
+
+        # Coding
+        ci = m.get("coding_index")
+        if ci is not None:
+            entry["coding"] = _norm(ci, MAX_CODING)
+
+        # Reasoning (intelligence_index + gpqa cross-check)
+        ii = m.get("intelligence_index")
+        gpqa = m.get("gpqa")
+        if ii is not None:
+            reasoning = _norm(ii, MAX_INTELLIGENCE)
+            if gpqa is not None:
+                reasoning = round((reasoning + float(gpqa)) / 2, 4)
+            entry["reasoning"] = reasoning
+        elif gpqa is not None:
+            entry["reasoning"] = round(float(gpqa), 4)
+
+        # Tools (agentic_index)
+        ai = m.get("agentic_index")
+        if ai is not None:
+            entry["tools"] = _norm(ai, MAX_AGENTIC)
+
+        # Cost (blended price, inverted)
+        price = m.get("price_1m_blended_3_to_1")
+        if price is not None and price > 0:
+            entry["cost"] = _norm(price, MAX_BLENDED_COST, invert=True)
+
+        # Multilingual
+        multi = m.get("multilingual_aa")
+        if multi and isinstance(multi, dict):
+            avg = multi.get("average", {})
+            ml_score = avg.get("score")
+            if ml_score is not None:
+                entry["multilingual"] = round(float(ml_score), 4)
+
+        # Coding cross-check with livecodebench
+        lcb = m.get("livecodebench")
+        if lcb is not None and "coding" in entry:
+            entry["coding"] = round((entry["coding"] + float(lcb)) / 2, 4)
+        elif lcb is not None:
+            entry["coding"] = round(float(lcb), 4)
+
+        if len(entry) > 2:
+            result[oc_model] = entry
+
+    # gemini-3.1-pro-preview should be in both providers
+    g31 = result.get("google-gemini-cli/gemini-3.1-pro-preview")
+    if g31:
+        result["github-copilot/gemini-3.1-pro-preview"] = dict(g31)
+
+    print(f"    {len(result)} models mapped to OpenClaw IDs")
+    return result
 
 
 def fetch_livebench() -> dict[str, dict]:
@@ -135,7 +324,13 @@ def fetch_livebench() -> dict[str, dict]:
     try:
         while offset < MAX_ROWS:
             url = f"{BASE}&offset={offset}&length={PAGE}"
-            req = urllib.request.Request(url, headers={"User-Agent": "nexus-router/1.0"})
+            req = urllib.request.Request(
+                url,
+                headers={
+                    "User-Agent": "nexus-router/1.0",
+                    "Accept": "application/json",
+                }
+            )
             with urllib.request.urlopen(req, timeout=30) as resp:
                 data = json.loads(resp.read())
 
@@ -287,7 +482,11 @@ def merge_scores(existing: dict, new_scores: dict, force: bool) -> dict:
     if "_source" in new_scores:
         prev_src = merged.get("_source", "")
         new_src = new_scores["_source"]
-        merged["_source"] = f"{prev_src}+{new_src}".strip("+") if prev_src else new_src
+        # Deduplicate sources
+        existing_parts = set(prev_src.split("+")) if prev_src else set()
+        new_parts = set(new_src.split("+")) if new_src else set()
+        all_parts = existing_parts | new_parts
+        merged["_source"] = "+".join(sorted(all_parts)) if all_parts else new_src
     merged["_updated_at"] = TODAY
     return merged
 
