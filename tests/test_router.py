@@ -15,6 +15,7 @@ from src.types import ClassifierOutput, PreSignals, ProviderHealth
 from src.scorer import score_models, _preference_score, _learned_score, _fast_mode_correction, _reasoning_mode_correction
 from src.router import Router, _adapt_classifier_for_light_chat
 from src.classifier import extract_pre_signals, heuristic_classify, parse_classifier_response, classify_with_model
+from src.server import should_reclassify_with_llm
 
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
@@ -440,6 +441,12 @@ class TestClassifier:
     def test_parse_classifier_response_malformed(self):
         result = parse_classifier_response("This is not JSON at all")
         assert result is None
+
+    def test_should_reclassify_with_llm_on_reply_context(self):
+        classifier = ClassifierOutput(task_type="fast_utility", confidence=0.72)
+        assert should_reclassify_with_llm(classifier, True, "Previous coding discussion")
+        assert not should_reclassify_with_llm(classifier, False, "Previous coding discussion")
+        assert not should_reclassify_with_llm(ClassifierOutput(task_type="coding", confidence=0.72), True, "Previous coding discussion")
 
     def test_classify_with_model_parses_output(self, monkeypatch):
         class Result:

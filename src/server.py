@@ -29,6 +29,16 @@ from .health import load_provider_health
 from .health_updater import probe_all_providers, observe_turn_outcome
 from .db import ensure_schema, update_outcome, load_model_stats
 
+
+def should_reclassify_with_llm(classifier: ClassifierOutput | None, use_llm: bool, conversation_context: str | None) -> bool:
+    return bool(
+        use_llm
+        and classifier is not None
+        and classifier.task_type == "fast_utility"
+        and conversation_context
+        and conversation_context.strip()
+    )
+
 DEFAULT_PORT = 7771
 
 # Lazy-init router
@@ -151,6 +161,9 @@ class RouterHandler(BaseHTTPRequestHandler):
 
             if classifier is None:
                 classifier = heuristic_classify(message, pre_signals)
+
+            if should_reclassify_with_llm(classifier, use_llm, classifier_context):
+                classifier = None
 
             if classifier is None and use_llm:
                 classifier = classify_with_model(

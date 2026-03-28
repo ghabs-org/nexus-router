@@ -25,6 +25,24 @@
  */
 
 const DEFAULT_ROUTER_URL = "http://127.0.0.1:7771";
+const PLUGIN_VERSION = "0.1.0";
+
+function splitSelectedModelRef(selectedModel: string): {
+  providerOverride?: string;
+  modelOverride: string;
+} {
+  const trimmed = selectedModel.trim();
+  const slashIndex = trimmed.indexOf("/");
+
+  if (slashIndex <= 0 || slashIndex === trimmed.length - 1) {
+    return { modelOverride: trimmed };
+  }
+
+  return {
+    providerOverride: trimmed.slice(0, slashIndex),
+    modelOverride: trimmed.slice(slashIndex + 1),
+  };
+}
 
 interface RouterConfig {
   routerUrl?: string;
@@ -96,7 +114,10 @@ async function post<T>(url: string, body: unknown, timeoutMs = 3000): Promise<T 
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     const res = await fetch(url, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        "Editor-Version": PLUGIN_VERSION,
+      },
       body: JSON.stringify(body),
       signal: controller.signal,
     });
@@ -112,7 +133,12 @@ async function get<T>(url: string, timeoutMs = 2000): Promise<T | null> {
   try {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
-    const res = await fetch(url, { signal: controller.signal });
+    const res = await fetch(url, {
+      signal: controller.signal,
+      headers: {
+        "Editor-Version": PLUGIN_VERSION,
+      },
+    });
     clearTimeout(timer);
     if (!res.ok) return null;
     return (await res.json()) as T;
