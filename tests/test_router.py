@@ -15,7 +15,7 @@ from src.types import ClassifierOutput, PreSignals, ProviderHealth
 from src.scorer import score_models, _preference_score, _learned_score, _fast_mode_correction, _reasoning_mode_correction
 from src.router import Router, _adapt_classifier_for_light_chat
 from src.classifier import extract_pre_signals, heuristic_classify, parse_classifier_response, classify_with_model
-from src.server import should_reclassify_with_llm
+from src.server import should_reclassify_with_llm, RouterHandler
 
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
@@ -502,3 +502,191 @@ class TestEndToEnd:
         assert decision.selected_model
         # Should pick a model with large context window
         assert signals.estimated_tokens > 200_000
+
+
+
+
+# ── Provenance fields: /route endpoint ───────────────────────────────────────
+
+import io
+import src.server as server_module
+from src.server import RouterHandler
+
+_MINIMAL_REGISTRY = {
+    "generatedAt": "2026-01-01T00:00:00Z",
+    "totalModels": 1,
+    "models": [
+        {
+            "id": "openai-codex/gpt-5.4",
+            "provider": "openai-codex",
+            "modelId": "gpt-5.4",
+            "name": "GPT-5.4",
+            "features": {
+                "supportsVision": True,
+                "supportsTools": True,
+                "supportsReasoning": False,
+                "contextWindow": 266000,
+                "inputModalities": ["text", "image"],
+            },
+            "availability": {"authed": True, "available": True, "local": False},
+            "scores": {
+                "coding": 0.96,
+                "review": 0.82,
+                "reasoning": 0.85,
+                "summarize": 0.74,
+                "fast": 0.68,
+                "cost": 0.55,
+                "context": 0.80,
+                "vision": 0.75,
+                "tools": 0.92,
+                "multilingual": 0.78,
+            },
+            "scoreSource": {},
+        }
+    ],
+}
+
+
+class _MockWFile:
+    def __init__(self):
+        self._buf = io.BytesIO()
+
+    def write(self, b: bytes):
+        self._buf.write(b)
+
+
+class _MockHandler:
+    """Minimal BaseHTTPRequestHandler stand-in for testing _handle_route directly."""
+
+    def __init__(self):
+        self.wfile = _MockWFile()
+        self.status: int | None = None
+
+    def send_response(self, code: int):
+        self.status = code
+
+    def send_header(self, key: str, value: str):
+        pass
+
+    def end_headers(self):
+        pass
+
+    def call_route(self, body: dict) -> tuple[int, dict]:
+        RouterHandler._handle_route(self, body)
+        return self.status, json.loads(self.wfile._buf.getvalue())
+
+
+class TestRouteProvenance:
+
+    @pytest.fixture(autouse=True)
+    def _patch_router(self, tmp_path, monkeypatch):
+        """Provide a minimal router so /route tests don't need a real registry."""
+        reg_file = tmp_path / "models.json"
+        reg_file.write_text(json.dumps(_MINIMAL_REGISTRY))
+        minimal_router = Router(registry_path=reg_file, persist=False)
+        monkeypatch.setattr(server_module, "_router", minimal_router)
+
+    def test_explicit_classifier_source(self):
+        """Providing a 'classifier' hint yields classifier_source='explicit'."""
+        status, body = _MockHandler().call_route({
+            "message": "summarise this",
+            "classifier": {
+                "task_type": "summarization",
+                "complexity": "low",
+                "confidence": 0.90,
+            },
+        })
+        assert status == 200
+        assert body["classifier_source"] == "explicit"
+        assert body["reply_context_used"] is False
+
+    def test_heuristic_classifier_source(self):
+        """Diff message → heuristic detects code_review → classifier_source='heuristic'."""
+        diff_msg = (
+            "--- a/file.py\n+++ b/file.py\n@@ -1,3 +1,4 @@\n"
+            " def foo():\n-    return 1\n+    return 2\n+    pass"
+        )
+        status, body = _MockHandler().call_route({"message": diff_msg})
+        assert status == 200
+        assert body["classifier_source"] == "heuristic"
+        assert body["reply_context_used"] is False
+
+    def test_fallback_classifier_source(self):
+        """Medium-length message with no special signals, no LLM → classifier_source='fallback'."""
+        status, body = _MockHandler().call_route({
+            "message": (
+                "Please explain the difference between REST and GraphQL in detail,"
+                " including performance trade-offs for various use cases."
+            ),
+            "use_llm_classifier": False,
+        })
+        assert status == 200
+        assert body["classifier_source"] == "fallback"
+        assert body["reply_context_used"] is False
+
+    def test_llm_classifier_source_with_context(self, monkeypatch):
+        """LLM path taken with context → classifier_source='llm', reply_context_used=True."""
+        mock_result = ClassifierOutput(
+            task_type="reasoning", complexity="medium", confidence=0.88
+        )
+        monkeypatch.setattr(server_module, "classify_with_model", lambda **_kw: mock_result)
+        monkeypatch.setattr(server_module, "heuristic_classify", lambda *_a: None)
+
+        status, body = _MockHandler().call_route({
+            "message": "what do you think?",
+            "use_llm_classifier": True,
+            "conversation_context": "We were discussing distributed systems.",
+        })
+        assert status == 200
+        assert body["classifier_source"] == "llm"
+        assert body["reply_context_used"] is True
+
+    def test_llm_classifier_source_without_context(self, monkeypatch):
+        """LLM path taken but no context → classifier_source='llm', reply_context_used=False."""
+        mock_result = ClassifierOutput(
+            task_type="general_chat", complexity="low", confidence=0.80
+        )
+        monkeypatch.setattr(server_module, "classify_with_model", lambda **_kw: mock_result)
+        monkeypatch.setattr(server_module, "heuristic_classify", lambda *_a: None)
+
+        status, body = _MockHandler().call_route({
+            "message": "Hello",
+            "use_llm_classifier": True,
+        })
+        assert status == 200
+        assert body["classifier_source"] == "llm"
+        assert body["reply_context_used"] is False
+
+    def test_heuristic_with_context_does_not_set_reply_context_used(self):
+        """Heuristic classifies as code_review (not reclassified by LLM) → reply_context_used=False."""
+        diff_msg = (
+            "--- a/file.py\n+++ b/file.py\n@@ -1,3 +1,4 @@\n"
+            " def foo():\n-    return 1\n+    return 2\n+    pass"
+        )
+        status, body = _MockHandler().call_route({
+            "message": diff_msg,
+            "use_llm_classifier": True,
+            "conversation_context": "We discussed Python earlier.",
+        })
+        assert status == 200
+        # code_review task_type ≠ fast_utility → no LLM reclassification triggered
+        assert body["classifier_source"] == "heuristic"
+        assert body["reply_context_used"] is False
+
+    def test_invalid_conversation_context_list_returns_400(self):
+        """Non-string conversation_context (list) → 400."""
+        status, body = _MockHandler().call_route({
+            "message": "Hello",
+            "conversation_context": ["not", "a", "string"],
+        })
+        assert status == 400
+        assert body.get("error") == "invalid_conversation_context_type"
+
+    def test_invalid_conversation_context_dict_returns_400(self):
+        """Non-string conversation_context (dict) → 400."""
+        status, body = _MockHandler().call_route({
+            "message": "Hello",
+            "conversation_context": {"key": "value"},
+        })
+        assert status == 400
+        assert body.get("error") == "invalid_conversation_context_type"

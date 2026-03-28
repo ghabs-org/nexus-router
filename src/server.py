@@ -135,8 +135,14 @@ class RouterHandler(BaseHTTPRequestHandler):
             cost_profile = body.get("cost_profile", "balanced")
             use_llm = bool(body.get("use_llm_classifier", False))
             classifier_model = body.get("classifier_model", "openai-codex/gpt-5.4-mini")
-            classifier_context = body.get("conversation_context")
-            reply_context_used = bool(classifier_context and str(classifier_context).strip())
+            raw_classifier_context = body.get("conversation_context")
+            if raw_classifier_context is None:
+                classifier_context = None
+            elif isinstance(raw_classifier_context, str):
+                classifier_context = raw_classifier_context
+            else:
+                _json_response(self, 400, {"error": "invalid_conversation_context_type"})
+                return
             nexus_context = body.get("nexus_context")
             route_mode = body.get("route_mode")
 
@@ -180,6 +186,11 @@ class RouterHandler(BaseHTTPRequestHandler):
                 )
                 if classifier is not None:
                     classifier_source = "llm"
+
+            reply_context_used = (
+                classifier_source == "llm"
+                and bool(classifier_context and classifier_context.strip())
+            )
 
             if classifier is None:
                 classifier = ClassifierOutput(
