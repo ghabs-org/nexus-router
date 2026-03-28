@@ -98,8 +98,12 @@ class Router:
                 )
             else:
                 effective_classifier = replace(effective_classifier, cost_profile="premium")
-        elif effective_route_mode == "fast":
+        elif effective_route_mode in {"fast", "auto"}:
+            # auto is cheap-first in plugin flow; keep parity if server is called directly
             effective_classifier = replace(effective_classifier, cost_profile="cheap")
+        elif effective_route_mode == "balanced":
+            # balanced preserves classifier cost_profile as provided by caller
+            pass
 
         # Load fresh health and learned stats on each call
         # (cheap reads; health file is small, DB lookup is indexed)
@@ -130,7 +134,7 @@ class Router:
         fallbacks = [s.model_id for s in eligible[1:4]]  # top 3 fallbacks
 
         reason = _build_reason(primary, classifier, effective_classifier, pre_signals)
-        if effective_route_mode in {"fast", "reasoning", "off"}:
+        if effective_route_mode in {"auto", "balanced", "fast", "reasoning", "off"}:
             reason.append(f"route mode: {effective_route_mode}")
 
         decision = RoutingDecision(

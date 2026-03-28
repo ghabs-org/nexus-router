@@ -249,6 +249,18 @@ class TestRouter:
         reasons_text = " ".join(decision.reason)
         assert "code" in reasons_text.lower() or "diff" in reasons_text.lower()
 
+    def test_route_mode_auto_forces_cheap_profile(self, router):
+        classifier = ClassifierOutput(task_type="general_chat", cost_profile="balanced", confidence=0.70)
+        decision = router.route(classifier, route_mode="auto")
+        reasons_text = " ".join(decision.reason).lower()
+        assert "route mode: auto" in reasons_text
+
+    def test_route_mode_balanced_preserves_profile(self, router):
+        classifier = ClassifierOutput(task_type="general_chat", cost_profile="balanced", confidence=0.70)
+        decision = router.route(classifier, route_mode="balanced")
+        reasons_text = " ".join(decision.reason).lower()
+        assert "route mode: balanced" in reasons_text
+
 
 # ── Classifier tests ──────────────────────────────────────────────────────────
 
