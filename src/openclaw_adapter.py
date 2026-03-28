@@ -20,17 +20,12 @@ Typical usage in an OpenClaw plugin:
         context.set_fallbacks(decision.fallbacks)
 """
 
-import json
-import subprocess
-import time
 from typing import Optional
 
 from .router import Router
-from .classifier import extract_pre_signals, heuristic_classify, build_classification_prompt, parse_classifier_response, SYSTEM_PROMPT
+from .classifier import extract_pre_signals, heuristic_classify, classify_with_model
 from .types import ClassifierOutput, PreSignals, RoutingDecision
 from .health_updater import observe_turn_outcome
-
-OPENCLAW_BIN = "openclaw"
 
 # Lazy-init router singleton
 _router: Optional[Router] = None
@@ -75,7 +70,7 @@ def route_turn(
 
     # Step 3: if heuristic wasn't confident enough and LLM classifier is enabled
     if classifier_output is None and use_llm_classifier and classifier_model:
-        classifier_output = _classify_with_openclaw(
+        classifier_output = classify_with_model(
             message=message,
             pre_signals=pre_signals,
             conversation_context=conversation_context,
@@ -164,39 +159,3 @@ def format_decision_for_chat(decision: RoutingDecision, verbose: bool = False) -
     return line
 
 
-# ── LLM classifier via OpenClaw agent ────────────────────────────────────────
-
-def _classify_with_openclaw(
-    message: str,
-    pre_signals: PreSignals,
-    conversation_context: Optional[str],
-    model: str,
-) -> Optional[ClassifierOutput]:
-    """
-    Call openclaw agent with a classification prompt and parse the result.
-    Used only when heuristic classification is not confident enough.
-    """
-    prompt = build_classification_prompt(message, pre_signals, conversation_context)
-
-    try:
-        result = subprocess.run(
-            [
-                OPENCLAW_BIN, "agent",
-                "--model", model,
-                "--message", prompt,
-                "--system", SYSTEM_PROMPT,
-                "--no-persist",
-            ],
-            capture_output=True,
-            text=True,
-            timeout=15,
-        )
-        if result.returncode != 0:
-            return None
-
-        return parse_classifier_response(result.stdout.strip())
-
-    except subprocess.TimeoutExpired:
-        return None
-    except Exception:
-        return None

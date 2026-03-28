@@ -23,7 +23,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 from .router import Router
-from .classifier import extract_pre_signals, heuristic_classify
+from .classifier import extract_pre_signals, heuristic_classify, classify_with_model
 from .types import ClassifierOutput, PreSignals
 from .health import load_provider_health
 from .health_updater import probe_all_providers, observe_turn_outcome
@@ -124,6 +124,8 @@ class RouterHandler(BaseHTTPRequestHandler):
             has_image = bool(body.get("has_image", False))
             cost_profile = body.get("cost_profile", "balanced")
             use_llm = bool(body.get("use_llm_classifier", False))
+            classifier_model = body.get("classifier_model", "openai-codex/gpt-5.4-mini")
+            classifier_context = body.get("conversation_context")
             nexus_context = body.get("nexus_context")
             route_mode = body.get("route_mode")
 
@@ -149,6 +151,14 @@ class RouterHandler(BaseHTTPRequestHandler):
 
             if classifier is None:
                 classifier = heuristic_classify(message, pre_signals)
+
+            if classifier is None and use_llm:
+                classifier = classify_with_model(
+                    message=message,
+                    pre_signals=pre_signals,
+                    conversation_context=classifier_context,
+                    model=classifier_model,
+                )
 
             if classifier is None:
                 classifier = ClassifierOutput(

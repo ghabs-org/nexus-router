@@ -14,7 +14,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from src.types import ClassifierOutput, PreSignals, ProviderHealth
 from src.scorer import score_models, _preference_score, _learned_score, _fast_mode_correction, _reasoning_mode_correction
 from src.router import Router, _adapt_classifier_for_light_chat
-from src.classifier import extract_pre_signals, heuristic_classify, parse_classifier_response
+from src.classifier import extract_pre_signals, heuristic_classify, parse_classifier_response, classify_with_model
 
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
@@ -440,6 +440,21 @@ class TestClassifier:
     def test_parse_classifier_response_malformed(self):
         result = parse_classifier_response("This is not JSON at all")
         assert result is None
+
+    def test_classify_with_model_parses_output(self, monkeypatch):
+        class Result:
+            returncode = 0
+            stdout = '{"task_type":"reasoning","subtype":"comparison","complexity":"medium","needs_tools":false,"needs_vision":false,"needs_long_context":false,"cost_profile":"balanced","confidence":0.91,"detected_language":"it"}'
+
+        monkeypatch.setattr("src.classifier.shutil.which", lambda _: "/usr/bin/openclaw")
+        monkeypatch.setattr("src.classifier.subprocess.run", lambda *a, **k: Result())
+
+        pre = PreSignals(message_length=42)
+        result = classify_with_model("Confronta queste due architetture.", pre)
+        assert result is not None
+        assert result.task_type == "reasoning"
+        assert result.subtype == "comparison"
+        assert result.detected_language == "it"
 
 
 # ── Integration: end-to-end ───────────────────────────────────────────────────

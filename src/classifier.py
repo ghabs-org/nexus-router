@@ -12,6 +12,8 @@ For V1 this uses a lightweight prompt; it can be swapped for a Nexus workflow st
 
 import json
 import re
+import shutil
+import subprocess
 from typing import Optional
 
 from .types import ClassifierOutput, PreSignals
@@ -126,6 +128,49 @@ def parse_classifier_response(raw: str) -> Optional[ClassifierOutput]:
         confidence=float(data.get("confidence", 0.75)),
         detected_language=data.get("detected_language"),
     )
+
+
+def classify_with_model(
+    message: str,
+    pre_signals: PreSignals,
+    conversation_context: Optional[str] = None,
+    model: str = "openai-codex/gpt-5.4-mini",
+    binary: str = "openclaw",
+    timeout_seconds: int = 15,
+) -> Optional[ClassifierOutput]:
+    """
+    Classify a message using a model-backed classifier.
+
+    This is the language-aware path: use it when heuristics are inconclusive.
+    Returns None if the model invocation fails or emits invalid JSON.
+    """
+    if not shutil.which(binary):
+        return None
+
+    prompt = build_classification_prompt(message, pre_signals, conversation_context)
+
+    try:
+        result = subprocess.run(
+            [
+                binary, "agent",
+                "--model", model,
+                "--message", prompt,
+                "--system", SYSTEM_PROMPT,
+                "--no-persist",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=timeout_seconds,
+        )
+    except subprocess.TimeoutExpired:
+        return None
+    except Exception:
+        return None
+
+    if result.returncode != 0:
+        return None
+
+    return parse_classifier_response(result.stdout.strip())
 
 
 # ── Pre-signal extraction ─────────────────────────────────────────────────────
