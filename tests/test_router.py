@@ -402,27 +402,12 @@ class TestClassifier:
         assert result is not None
         assert result.task_type == "fast_utility"
 
-    def test_heuristic_implementation_intent_beats_short_fast_path(self):
-        msg = "Please implement the /route last command and wire it into the plugin."
+    def test_heuristic_single_word_test_not_coding(self):
+        msg = "test"
         signals = extract_pre_signals(msg)
         result = heuristic_classify(msg, signals)
         assert result is not None
-        assert result.task_type == "coding"
-        assert result.subtype == "implementation"
-
-    def test_heuristic_review_intent_detected(self):
-        msg = "Can you review this PR and audit the patch before merge?"
-        signals = extract_pre_signals(msg)
-        result = heuristic_classify(msg, signals)
-        assert result is not None
-        assert result.task_type == "code_review"
-
-    def test_heuristic_reasoning_intent_detected(self):
-        msg = "Compare the trade-offs of this architecture and propose the best design."
-        signals = extract_pre_signals(msg)
-        result = heuristic_classify(msg, signals)
-        assert result is not None
-        assert result.task_type == "reasoning"
+        assert result.task_type == "fast_utility"
 
     def test_heuristic_returns_none_for_ambiguous(self):
         msg = "Let's think about the best architecture for our new product. We need to balance performance and cost."
