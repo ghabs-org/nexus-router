@@ -225,9 +225,9 @@ def _fast_mode_correction(task_fit: float, cost_score: float, speed_score: float
     """
     cost_delta = cost_score - 0.5
     speed_delta = speed_score - 0.5
-    task_fit_guardrail = max(0.0, 0.65 - task_fit)
+    task_fit_guardrail = max(0.0, 0.68 - task_fit)
 
-    correction = (0.16 * cost_delta) + (0.08 * speed_delta) - (0.06 * task_fit_guardrail)
+    correction = (0.28 * cost_delta) + (0.12 * speed_delta) - (0.08 * task_fit_guardrail)
     return correction
 
 

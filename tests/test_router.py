@@ -216,6 +216,7 @@ class TestScorer:
         expensive_fast = by_id(fast_ranked, "p/high-taskfit-expensive").total_score
 
         assert (cheap_fast - expensive_fast) > (cheap_base - expensive_base)
+        assert fast_ranked[0].model_id == "p/good-taskfit-cheap-fast"
 
 
 # ── Router tests ──────────────────────────────────────────────────────────────
