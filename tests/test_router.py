@@ -12,7 +12,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.types import ClassifierOutput, PreSignals, ProviderHealth
-from src.scorer import score_models, _preference_score, _learned_score, _fast_mode_correction
+from src.scorer import score_models, _preference_score, _learned_score, _fast_mode_correction, _reasoning_mode_correction
 from src.router import Router, _adapt_classifier_for_light_chat
 from src.classifier import extract_pre_signals, heuristic_classify, parse_classifier_response
 
@@ -163,6 +163,11 @@ class TestScorer:
         expensive_slow = _fast_mode_correction(task_fit=0.80, cost_score=0.55, speed_score=0.55)
         assert cheap_fast > expensive_slow
 
+    def test_reasoning_mode_correction_rewards_top_models(self):
+        strong = _reasoning_mode_correction(task_fit=0.93, health=0.95, learned=0.92)
+        weak = _reasoning_mode_correction(task_fit=0.75, health=0.80, learned=0.78)
+        assert strong > weak
+
     def test_fast_route_mode_changes_ranking_bias(self):
         classifier = ClassifierOutput(task_type="coding", complexity="medium", confidence=0.80)
         provider_health = {
@@ -217,6 +222,36 @@ class TestScorer:
 
         assert (cheap_fast - expensive_fast) > (cheap_base - expensive_base)
         assert fast_ranked[0].model_id == "p/good-taskfit-cheap-fast"
+
+    def test_reasoning_route_mode_prefers_strong_models(self):
+        classifier = ClassifierOutput(task_type="reasoning", complexity="high", confidence=0.85, cost_profile="balanced")
+        provider_health = {"p": ProviderHealth(provider="p", auth="ok", quota="healthy", health_score=0.95)}
+
+        models = [
+            {
+                "id": "p/strong-reasoning",
+                "provider": "p",
+                "scores": {
+                    "coding": 0.72, "review": 0.72, "reasoning": 0.95, "summarize": 0.74,
+                    "fast": 0.60, "cost": 0.62, "context": 0.80, "vision": 0.60,
+                },
+                "features": {"contextWindow": 200000},
+                "availability": {"authed": True},
+            },
+            {
+                "id": "p/weaker-reasoning",
+                "provider": "p",
+                "scores": {
+                    "coding": 0.72, "review": 0.72, "reasoning": 0.82, "summarize": 0.74,
+                    "fast": 0.80, "cost": 0.90, "context": 0.80, "vision": 0.60,
+                },
+                "features": {"contextWindow": 200000},
+                "availability": {"authed": True},
+            },
+        ]
+
+        ranked = score_models(classifier, models, provider_health, {}, route_mode="reasoning")
+        assert ranked[0].model_id == "p/strong-reasoning"
 
 
 # ── Router tests ──────────────────────────────────────────────────────────────

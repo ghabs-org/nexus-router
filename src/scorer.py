@@ -59,6 +59,7 @@ COST_PROFILE_WEIGHT = {
     "cheap":    {"cost": 0.20, "speed": 0.10, "task_fit": 0.40, "health": 0.20, "preference": 0.05, "learned": 0.05},
     "balanced": DEFAULT_WEIGHTS,
     "premium":  {"task_fit": 0.60, "health": 0.15, "preference": 0.10, "learned": 0.10, "cost": 0.02, "speed": 0.03},
+    "reasoning": {"task_fit": 0.62, "health": 0.14, "preference": 0.10, "learned": 0.10, "cost": 0.02, "speed": 0.02},
 }
 
 
@@ -171,6 +172,9 @@ def score_models(
             cost_score = min(1.0, cost_score + 0.10)
         elif classifier.cost_profile == "premium":
             cost_score = max(0.0, cost_score - 0.10)
+        elif classifier.cost_profile == "reasoning":
+            # Slightly de-emphasize pure cost so stronger models can win when task fit is high.
+            cost_score = max(0.0, cost_score - 0.05)
 
         # Speed: direct from model capability profile
         speed_score = scores_raw.get("fast", 0.70)
@@ -185,8 +189,11 @@ def score_models(
             + speed_score * weights["speed"]
         )
 
-        if (route_mode or "").strip().lower() == "fast":
+        mode = (route_mode or "").strip().lower()
+        if mode == "fast":
             total += _fast_mode_correction(task_fit=task_fit, cost_score=cost_score, speed_score=speed_score)
+        elif mode == "reasoning":
+            total += _reasoning_mode_correction(task_fit=task_fit, health=health, learned=learned)
 
         eligible.append(ModelScore(
             model_id=model_id,
@@ -218,7 +225,7 @@ def _fast_mode_correction(task_fit: float, cost_score: float, speed_score: float
 
     Intuition:
     - Reward higher cost/speed scores beyond the neutral midpoint (0.5)
-    - Apply a small guardrail so very low task-fit models are less likely to win
+    - Apply a guardrail so very low task-fit models are less likely to win
 
     This avoids vendor-specific rules while still reducing "same strong model always wins"
     behavior in fast mode.
@@ -229,6 +236,19 @@ def _fast_mode_correction(task_fit: float, cost_score: float, speed_score: float
 
     correction = (0.28 * cost_delta) + (0.12 * speed_delta) - (0.08 * task_fit_guardrail)
     return correction
+
+
+def _reasoning_mode_correction(task_fit: float, health: float, learned: float) -> float:
+    """
+    Boost higher-end models in reasoning mode without hard-coding providers.
+
+    We bias toward confident, healthy, historically successful options and slightly
+    favor top-tier task-fit models.
+    """
+    task_bonus = max(0.0, task_fit - 0.78)
+    health_bonus = max(0.0, health - 0.82)
+    learned_bonus = max(0.0, learned - 0.80)
+    return (0.20 * task_bonus) + (0.10 * health_bonus) + (0.10 * learned_bonus)
 
 
 def _build_preference_order(task_type: str, routing_policy: Optional[dict]) -> list[str]:
