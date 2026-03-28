@@ -70,6 +70,7 @@ class Router:
         classifier: ClassifierOutput,
         pre_signals: Optional[PreSignals] = None,
         nexus_context: Optional[dict] = None,
+        route_mode: Optional[str] = None,
     ) -> RoutingDecision:
         """
         Route a request to the best available model.
@@ -87,6 +88,18 @@ class Router:
         nexus_context = nexus_context or {}
 
         effective_classifier = _adapt_classifier_for_light_chat(classifier, pre_signals)
+        effective_route_mode = (route_mode or "auto").strip().lower()
+        if effective_route_mode == "reasoning":
+            if effective_classifier.task_type in {"general_chat", "fast_utility", "summarization"}:
+                effective_classifier = replace(
+                    effective_classifier,
+                    task_type="reasoning",
+                    cost_profile="premium",
+                )
+            else:
+                effective_classifier = replace(effective_classifier, cost_profile="premium")
+        elif effective_route_mode == "fast":
+            effective_classifier = replace(effective_classifier, cost_profile="cheap")
 
         # Load fresh health and learned stats on each call
         # (cheap reads; health file is small, DB lookup is indexed)
@@ -117,6 +130,8 @@ class Router:
         fallbacks = [s.model_id for s in eligible[1:4]]  # top 3 fallbacks
 
         reason = _build_reason(primary, classifier, effective_classifier, pre_signals)
+        if effective_route_mode in {"fast", "reasoning", "off"}:
+            reason.append(f"route mode: {effective_route_mode}")
 
         decision = RoutingDecision(
             task_type=effective_classifier.task_type,

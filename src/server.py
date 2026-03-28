@@ -125,6 +125,7 @@ class RouterHandler(BaseHTTPRequestHandler):
             cost_profile = body.get("cost_profile", "balanced")
             use_llm = bool(body.get("use_llm_classifier", False))
             nexus_context = body.get("nexus_context")
+            route_mode = body.get("route_mode")
 
             # Extract pre-signals
             pre_signals = extract_pre_signals(message, has_image_attachment=has_image)
@@ -162,6 +163,7 @@ class RouterHandler(BaseHTTPRequestHandler):
                 classifier=classifier,
                 pre_signals=pre_signals,
                 nexus_context=nexus_context or {},
+                route_mode=route_mode,
             )
 
             print(
