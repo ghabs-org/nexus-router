@@ -22,6 +22,7 @@ from .types import ClassifierOutput, PreSignals, ProviderHealth
 ROOT = Path(__file__).parent.parent
 REGISTRY_FILE = ROOT / "catalog/normalized/models.json"
 DEFAULT_CLASSIFIER_LIMIT = 4
+CLASSIFIER_PROFILE = "nexus-router-classifier"
 
 # ── Classification prompt ─────────────────────────────────────────────────────
 
@@ -102,8 +103,47 @@ def build_classification_prompt(
 def parse_classifier_response(raw: str) -> Optional[ClassifierOutput]:
     """
     Parse raw model response into ClassifierOutput.
-    Handles JSON embedded in markdown code fences or bare JSON.
+    Handles JSON embedded in markdown code fences, bare JSON, OpenClaw JSON wrappers,
+    and a permissive key:value fallback when the model is slightly malformed.
     """
+    def _build_classifier_output(data: dict) -> Optional[ClassifierOutput]:
+        if not isinstance(data, dict):
+            return None
+
+        valid_task_types = {
+            "coding", "code_review", "reasoning", "summarization",
+            "fast_utility", "long_context", "vision", "general_chat",
+        }
+        task_type = data.get("task_type", "general_chat")
+        if task_type not in valid_task_types:
+            task_type = "general_chat"
+
+        return ClassifierOutput(
+            task_type=task_type,
+            subtype=data.get("subtype"),
+            complexity=data.get("complexity", "medium"),
+            needs_tools=bool(data.get("needs_tools", True)),
+            needs_vision=bool(data.get("needs_vision", False)),
+            needs_long_context=bool(data.get("needs_long_context", False)),
+            cost_profile=data.get("cost_profile", "balanced"),
+            confidence=float(data.get("confidence", 0.75)),
+            detected_language=data.get("detected_language"),
+        )
+
+    # OpenClaw --json wraps payloads; unwrap the first assistant text payload if present.
+    try:
+        wrapped = json.loads(raw)
+        if isinstance(wrapped, dict) and isinstance(wrapped.get("payloads"), list):
+            texts = [
+                payload.get("text", "")
+                for payload in wrapped["payloads"]
+                if isinstance(payload, dict) and isinstance(payload.get("text"), str)
+            ]
+            if texts:
+                raw = "\n".join(texts)
+    except Exception:
+        pass
+
     # Strip markdown fences if present
     raw = raw.strip()
     if raw.startswith("```"):
@@ -113,34 +153,48 @@ def parse_classifier_response(raw: str) -> Optional[ClassifierOutput]:
 
     # Extract first JSON object if there's surrounding prose
     match = re.search(r"\{.*\}", raw, re.DOTALL)
-    if not match:
+    if match:
+        try:
+            data = json.loads(match.group())
+            out = _build_classifier_output(data)
+            if out is not None:
+                return out
+        except json.JSONDecodeError:
+            pass
+
+    # Permissive fallback for lightly malformed output like:
+    # {task_type:general_chat,confidence:0.5}
+    normalized = raw.replace("\\", "").strip().strip("{}")
+    if not normalized:
         return None
 
-    try:
-        data = json.loads(match.group())
-    except json.JSONDecodeError:
+    extracted: dict[str, str] = {}
+    for key in ("task_type", "subtype", "complexity", "needs_tools", "needs_vision", "needs_long_context", "cost_profile", "confidence", "detected_language"):
+        m = re.search(rf"{key}\s*[:=]\s*([^,\n}}]+)", normalized)
+        if m:
+            extracted[key] = m.group(1).strip().strip('"\'')
+
+    if not extracted:
         return None
 
-    valid_task_types = {
-        "coding", "code_review", "reasoning", "summarization",
-        "fast_utility", "long_context", "vision", "general_chat",
+    data = {
+        "task_type": extracted.get("task_type", "general_chat"),
+        "subtype": extracted.get("subtype"),
+        "complexity": extracted.get("complexity", "medium"),
+        "needs_tools": extracted.get("needs_tools", "true"),
+        "needs_vision": extracted.get("needs_vision", "false"),
+        "needs_long_context": extracted.get("needs_long_context", "false"),
+        "cost_profile": extracted.get("cost_profile", "balanced"),
+        "confidence": extracted.get("confidence", "0.75"),
+        "detected_language": extracted.get("detected_language"),
     }
 
-    task_type = data.get("task_type", "general_chat")
-    if task_type not in valid_task_types:
-        task_type = "general_chat"
+    try:
+        data["confidence"] = float(data["confidence"])
+    except Exception:
+        data["confidence"] = 0.75
 
-    return ClassifierOutput(
-        task_type=task_type,
-        subtype=data.get("subtype"),
-        complexity=data.get("complexity", "medium"),
-        needs_tools=bool(data.get("needs_tools", True)),
-        needs_vision=bool(data.get("needs_vision", False)),
-        needs_long_context=bool(data.get("needs_long_context", False)),
-        cost_profile=data.get("cost_profile", "balanced"),
-        confidence=float(data.get("confidence", 0.75)),
-        detected_language=data.get("detected_language"),
-    )
+    return _build_classifier_output(data)
 
 
 def select_classifier_models(
@@ -206,6 +260,110 @@ def select_classifier_models(
     return ordered[:limit] if limit > 0 else ordered
 
 
+def _prepare_openclaw_profile(profile: str = CLASSIFIER_PROFILE) -> None:
+    source = Path.home() / ".openclaw"
+    target = Path.home() / f".openclaw-{profile}"
+
+    try:
+        if source.exists():
+            target.mkdir(parents=True, exist_ok=True)
+            shutil.copytree(source, target, dirs_exist_ok=True)
+
+        # Keep the classifier profile lean: auth + model config only.
+        ext_dir = target / "extensions"
+        if ext_dir.exists():
+            shutil.rmtree(ext_dir)
+
+        config_path = target / "openclaw.json"
+        if config_path.exists():
+            config = json.loads(config_path.read_text())
+            hooks = config.get("hooks")
+            if isinstance(hooks, dict):
+                hooks["enabled"] = False
+                hooks["internal"] = {"enabled": False, "entries": {}}
+            # Remove plugins entirely for the classifier profile so the router cannot recurse.
+            if "plugins" in config:
+                config.pop("plugins", None)
+            config_path.write_text(json.dumps(config, indent=2))
+    except Exception:
+        # Best effort: if the profile can't be prepared, the classifier will fall back.
+        return
+
+
+def _read_openclaw_default_model(binary: str = "openclaw", profile: str = CLASSIFIER_PROFILE) -> Optional[str]:
+    _prepare_openclaw_profile(profile)
+    try:
+        result = subprocess.run(
+            [binary, "--profile", profile, "models", "status", "--json"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except Exception:
+        return None
+
+    if result.returncode != 0:
+        return None
+
+    try:
+        payload = json.loads(result.stdout or "{}")
+    except Exception:
+        return None
+
+    for key in ("primaryModel", "primary", "model", "defaultModel"):
+        value = payload.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+        if isinstance(value, dict):
+            for nested_key in ("id", "model", "value"):
+                nested = value.get(nested_key)
+                if isinstance(nested, str) and nested.strip():
+                    return nested.strip()
+    return None
+
+
+def _set_openclaw_default_model(model: str, binary: str = "openclaw", profile: str = CLASSIFIER_PROFILE) -> bool:
+    _prepare_openclaw_profile(profile)
+    try:
+        result = subprocess.run(
+            [binary, "--profile", profile, "models", "set", model],
+            capture_output=True,
+            text=True,
+            timeout=20,
+        )
+    except Exception:
+        return False
+    return result.returncode == 0
+
+
+def _run_openclaw_classifier_turn(
+    prompt: str,
+    model: str,
+    binary: str,
+    timeout_seconds: int,
+) -> Optional[str]:
+    result = None
+    try:
+        if not _set_openclaw_default_model(model, binary=binary):
+            return None
+
+        result = subprocess.run(
+            [binary, "--profile", CLASSIFIER_PROFILE, "agent", "--agent", "main", "--json", "--thinking", "low", "--message", prompt, "--timeout", str(timeout_seconds)],
+            capture_output=True,
+            text=True,
+            timeout=timeout_seconds + 5,
+        )
+    except subprocess.TimeoutExpired:
+        return None
+    except Exception:
+        return None
+
+    if result is None or result.returncode != 0:
+        return None
+
+    return (result.stdout or "").strip()
+
+
 def classify_with_model(
     message: str,
     pre_signals: PreSignals,
@@ -247,31 +405,11 @@ def classify_with_model(
     if not candidate_models:
         return None
 
-    last_stdout = ""
     for candidate in candidate_models:
-        try:
-            result = subprocess.run(
-                [
-                    binary, "agent",
-                    "--model", candidate,
-                    "--message", prompt,
-                    "--system", SYSTEM_PROMPT,
-                    "--no-persist",
-                ],
-                capture_output=True,
-                text=True,
-                timeout=timeout_seconds,
-            )
-        except subprocess.TimeoutExpired:
+        stdout = _run_openclaw_classifier_turn(prompt, candidate, binary=binary, timeout_seconds=timeout_seconds)
+        if not stdout:
             continue
-        except Exception:
-            continue
-
-        last_stdout = (result.stdout or "").strip()
-        if result.returncode != 0:
-            continue
-
-        parsed = parse_classifier_response(last_stdout)
+        parsed = parse_classifier_response(stdout)
         if parsed is not None:
             return parsed
 
