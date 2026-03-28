@@ -164,6 +164,19 @@ class RouterHandler(BaseHTTPRequestHandler):
                 nexus_context=nexus_context or {},
             )
 
+            print(
+                "route"
+                f" task={decision.task_type}"
+                f" complexity={classifier.complexity}"
+                f" confidence={decision.confidence:.2f}"
+                f" model={decision.selected_model}"
+                f" provider={decision.selected_provider}"
+                f" score={decision.score:.3f}"
+                f" prompt_len={len(message)}"
+                f" est_tokens={pre_signals.estimated_tokens}",
+                flush=True,
+            )
+
             _json_response(self, 200, {
                 "task_type": decision.task_type,
                 "confidence": decision.confidence,
