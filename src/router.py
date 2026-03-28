@@ -155,7 +155,7 @@ class Router:
                 from .types import ProviderHealth
                 ph = ProviderHealth(provider=primary.provider)
 
-            write_decision(
+            decision_id = write_decision(
                 decision=decision,
                 classifier=classifier,
                 pre_signals=pre_signals,
@@ -165,6 +165,7 @@ class Router:
                 nexus_issue_id=nexus_context.get("nexus_issue_id"),
                 nexus_project=nexus_context.get("nexus_project"),
             )
+            decision.decision_id = decision_id
 
         return decision
 

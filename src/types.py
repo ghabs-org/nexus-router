@@ -75,6 +75,7 @@ class RoutingDecision:
     confidence: float
     selected_model: str
     selected_provider: str
+    decision_id: Optional[str] = None
     fallbacks: list[str] = field(default_factory=list)
     score: float = 0.0
     reason: list[str] = field(default_factory=list)

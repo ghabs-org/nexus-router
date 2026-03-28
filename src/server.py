@@ -180,6 +180,7 @@ class RouterHandler(BaseHTTPRequestHandler):
             )
 
             _json_response(self, 200, {
+                "decision_id": decision.decision_id,
                 "task_type": decision.task_type,
                 "confidence": decision.confidence,
                 "selected_model": decision.selected_model,
