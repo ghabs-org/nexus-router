@@ -165,8 +165,8 @@ class TestScorer:
         assert cheap_fast > expensive_slow
 
     def test_reasoning_mode_correction_rewards_top_models(self):
-        strong = _reasoning_mode_correction(task_fit=0.93, health=0.95, learned=0.92)
-        weak = _reasoning_mode_correction(task_fit=0.75, health=0.80, learned=0.78)
+        strong = _reasoning_mode_correction(task_fit=0.93, reasoning_score=0.95, health=0.95, learned=0.92)
+        weak = _reasoning_mode_correction(task_fit=0.75, reasoning_score=0.80, health=0.80, learned=0.78)
         assert strong > weak
 
     def test_fast_route_mode_changes_ranking_bias(self):
@@ -224,8 +224,8 @@ class TestScorer:
         assert (cheap_fast - expensive_fast) > (cheap_base - expensive_base)
         assert fast_ranked[0].model_id == "p/good-taskfit-cheap-fast"
 
-    def test_reasoning_route_mode_prefers_strong_models(self):
-        classifier = ClassifierOutput(task_type="reasoning", complexity="high", confidence=0.85, cost_profile="balanced")
+    def test_reasoning_route_mode_prefers_stronger_reasoning_models(self):
+        classifier = ClassifierOutput(task_type="coding", complexity="high", confidence=0.85, cost_profile="balanced")
         provider_health = {"p": ProviderHealth(provider="p", auth="ok", quota="healthy", health_score=0.95)}
 
         models = [
@@ -233,7 +233,7 @@ class TestScorer:
                 "id": "p/strong-reasoning",
                 "provider": "p",
                 "scores": {
-                    "coding": 0.72, "review": 0.72, "reasoning": 0.95, "summarize": 0.74,
+                    "coding": 0.85, "review": 0.80, "reasoning": 0.95, "summarize": 0.74,
                     "fast": 0.60, "cost": 0.62, "context": 0.80, "vision": 0.60,
                 },
                 "features": {"contextWindow": 200000},
@@ -243,7 +243,7 @@ class TestScorer:
                 "id": "p/weaker-reasoning",
                 "provider": "p",
                 "scores": {
-                    "coding": 0.72, "review": 0.72, "reasoning": 0.82, "summarize": 0.74,
+                    "coding": 0.90, "review": 0.70, "reasoning": 0.82, "summarize": 0.74,
                     "fast": 0.80, "cost": 0.90, "context": 0.80, "vision": 0.60,
                 },
                 "features": {"contextWindow": 200000},
@@ -445,6 +445,7 @@ class TestClassifier:
     def test_should_reclassify_with_llm_on_reply_context(self):
         classifier = ClassifierOutput(task_type="fast_utility", confidence=0.72)
         assert should_reclassify_with_llm(classifier, True, "Previous coding discussion")
+        assert should_reclassify_with_llm(ClassifierOutput(task_type="general_chat", confidence=0.55), True, "Previous coding discussion")
         assert not should_reclassify_with_llm(classifier, False, "Previous coding discussion")
         assert not should_reclassify_with_llm(ClassifierOutput(task_type="coding", confidence=0.72), True, "Previous coding discussion")
 

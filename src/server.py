@@ -30,11 +30,15 @@ from .health_updater import probe_all_providers, observe_turn_outcome
 from .db import ensure_schema, update_outcome, load_model_stats
 
 
-def should_reclassify_with_llm(classifier: ClassifierOutput | None, use_llm: bool, conversation_context: str | None) -> bool:
+def should_reclassify_with_llm(
+    classifier: ClassifierOutput | None,
+    use_llm: bool,
+    conversation_context: str | None,
+) -> bool:
     return bool(
         use_llm
         and classifier is not None
-        and classifier.task_type == "fast_utility"
+        and classifier.task_type in {"general_chat", "fast_utility"}
         and conversation_context
         and conversation_context.strip()
     )

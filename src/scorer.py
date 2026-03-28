@@ -178,6 +178,7 @@ def score_models(
 
         # Speed: direct from model capability profile
         speed_score = scores_raw.get("fast", 0.70)
+        reasoning_score = scores_raw.get("reasoning", 0.70)
 
         # ── Composite score ──────────────────────────────────────────────────
         total = (
@@ -193,7 +194,14 @@ def score_models(
         if mode == "fast":
             total += _fast_mode_correction(task_fit=task_fit, cost_score=cost_score, speed_score=speed_score)
         elif mode == "reasoning":
-            total += _reasoning_mode_correction(task_fit=task_fit, health=health, learned=learned)
+            total += (0.38 * reasoning_score)
+            total += max(0.0, reasoning_score - task_fit) * 0.14
+            total += _reasoning_mode_correction(
+                task_fit=task_fit,
+                reasoning_score=reasoning_score,
+                health=health,
+                learned=learned,
+            )
 
         eligible.append(ModelScore(
             model_id=model_id,
@@ -238,17 +246,23 @@ def _fast_mode_correction(task_fit: float, cost_score: float, speed_score: float
     return correction
 
 
-def _reasoning_mode_correction(task_fit: float, health: float, learned: float) -> float:
+def _reasoning_mode_correction(
+    task_fit: float,
+    reasoning_score: float,
+    health: float,
+    learned: float,
+) -> float:
     """
-    Boost higher-end models in reasoning mode without hard-coding providers.
+    Strongly bias reasoning mode toward top reasoning-capable models without hard-coding providers.
 
-    We bias toward confident, healthy, historically successful options and slightly
-    favor top-tier task-fit models.
+    This intentionally gives more weight to the model's reasoning capability and
+    only then layers health / learned history on top.
     """
-    task_bonus = max(0.0, task_fit - 0.78)
+    task_bonus = max(0.0, task_fit - 0.72)
+    reasoning_bonus = max(0.0, reasoning_score - 0.78)
     health_bonus = max(0.0, health - 0.82)
     learned_bonus = max(0.0, learned - 0.80)
-    return (0.20 * task_bonus) + (0.10 * health_bonus) + (0.10 * learned_bonus)
+    return (0.10 * task_bonus) + (0.30 * reasoning_bonus) + (0.08 * health_bonus) + (0.08 * learned_bonus)
 
 
 def _build_preference_order(task_type: str, routing_policy: Optional[dict]) -> list[str]:
