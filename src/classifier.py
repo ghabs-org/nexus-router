@@ -143,6 +143,27 @@ _RE_STACK_TRACE = re.compile(
 _RE_URL         = re.compile(r"https?://\S+")
 _RE_FILE_PATH   = re.compile(r"(?:^|\s)(?:\./|/|~/)[\w./\-]+\.\w{1,6}", re.MULTILINE)
 
+_RE_REASONING_INTENT = re.compile(
+    r"\b(plan|planning|compare|comparison|trade[ -]?off|decision|decide|architecture|architectural|design|strategy|approach|pros and cons|confronta|confronto|piano|architettura|strategia)\b",
+    re.IGNORECASE,
+)
+
+_RE_REVIEW_INTENT = re.compile(
+    r"\b(review|code review|pull request|merge request|pr\b|mr\b|audit|auditare|revisiona|reviewa|diff|patch)\b",
+    re.IGNORECASE,
+)
+
+_RE_CODING_INTENT = re.compile(
+    r"\b(implement|implementation|build|create|add|fix|bug|debug|patch|refactor|write code|test(?:s|ing)?|function|endpoint|feature|integrat(?:e|ion)|wire(?: up)?|rename|implementa|aggiungi|correggi|sistema|refactorizza|funzione)\b",
+    re.IGNORECASE,
+)
+
+_RE_SUMMARIZE_INTENT = re.compile(
+    r"\b(summary|summari[sz]e|tl;dr|extract|distill|synthesi[sz]e|riassum[iere]|sintesi|estrai)\b",
+    re.IGNORECASE,
+)
+
+
 # Rough token estimate: average 4 chars per token
 def _estimate_tokens(text: str) -> int:
     return max(1, len(text) // 4)
@@ -229,6 +250,50 @@ def heuristic_classify(message: str, pre_signals: PreSignals) -> Optional[Classi
             complexity="medium",
             needs_tools=True,
             confidence=0.80,
+        )
+
+    # Intent cues should win before the generic "short message" fast-path.
+    # This is especially important when routing on compiled prompt/context:
+    # short implementation/review/planning requests must not collapse into fast_utility.
+    if _RE_REVIEW_INTENT.search(message):
+        return ClassifierOutput(
+            task_type="code_review",
+            subtype="review",
+            complexity="medium",
+            needs_tools=True,
+            confidence=0.79,
+        )
+
+    if _RE_CODING_INTENT.search(message) or (pre_signals.has_code and not pre_signals.has_diff):
+        subtype = "debugging" if pre_signals.has_logs else "implementation"
+        complexity = "medium" if pre_signals.message_length < 2000 else "high"
+        return ClassifierOutput(
+            task_type="coding",
+            subtype=subtype,
+            complexity=complexity,
+            needs_tools=True,
+            confidence=0.78,
+        )
+
+    if _RE_REASONING_INTENT.search(message):
+        subtype = "architecture" if re.search(r"\b(architecture|architectural|design|architettura)\b", message, re.IGNORECASE) else "planning"
+        return ClassifierOutput(
+            task_type="reasoning",
+            subtype=subtype,
+            complexity="medium",
+            needs_tools=False,
+            cost_profile="premium",
+            confidence=0.77,
+        )
+
+    if _RE_SUMMARIZE_INTENT.search(message):
+        return ClassifierOutput(
+            task_type="summarization",
+            subtype="synthesis",
+            complexity="medium",
+            needs_tools=False,
+            cost_profile="cheap",
+            confidence=0.78,
         )
 
     # Very short message, no code: likely fast utility
