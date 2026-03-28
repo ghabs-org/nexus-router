@@ -136,6 +136,7 @@ class RouterHandler(BaseHTTPRequestHandler):
             use_llm = bool(body.get("use_llm_classifier", False))
             classifier_model = body.get("classifier_model", "openai-codex/gpt-5.4-mini")
             classifier_context = body.get("conversation_context")
+            reply_context_used = bool(classifier_context and str(classifier_context).strip())
             nexus_context = body.get("nexus_context")
             route_mode = body.get("route_mode")
 
@@ -145,6 +146,7 @@ class RouterHandler(BaseHTTPRequestHandler):
             # Classify — explicit classifier hint (e.g. from Nexus) always wins over heuristic
             raw_cls = body.get("classifier")
             classifier = None
+            classifier_source = "fallback"
 
             if raw_cls:
                 classifier = ClassifierOutput(
@@ -158,12 +160,16 @@ class RouterHandler(BaseHTTPRequestHandler):
                     confidence=float(raw_cls.get("confidence", 0.75)),
                     detected_language=raw_cls.get("detected_language"),
                 )
+                classifier_source = "explicit"
 
             if classifier is None:
                 classifier = heuristic_classify(message, pre_signals)
+                if classifier is not None:
+                    classifier_source = "heuristic"
 
             if should_reclassify_with_llm(classifier, use_llm, classifier_context):
                 classifier = None
+                classifier_source = "fallback"
 
             if classifier is None and use_llm:
                 classifier = classify_with_model(
@@ -172,6 +178,8 @@ class RouterHandler(BaseHTTPRequestHandler):
                     conversation_context=classifier_context,
                     model=classifier_model,
                 )
+                if classifier is not None:
+                    classifier_source = "llm"
 
             if classifier is None:
                 classifier = ClassifierOutput(
@@ -179,6 +187,7 @@ class RouterHandler(BaseHTTPRequestHandler):
                     cost_profile=cost_profile,
                     confidence=0.60,
                 )
+                classifier_source = "fallback"
             else:
                 classifier.cost_profile = cost_profile
 
@@ -211,6 +220,8 @@ class RouterHandler(BaseHTTPRequestHandler):
                 "fallbacks": decision.fallbacks,
                 "score": decision.score,
                 "reason": decision.reason,
+                "classifier_source": classifier_source,
+                "reply_context_used": reply_context_used,
                 "pre_signals": {
                     "has_image": pre_signals.has_image,
                     "has_code": pre_signals.has_code,
