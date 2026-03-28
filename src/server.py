@@ -138,7 +138,7 @@ class RouterHandler(BaseHTTPRequestHandler):
             has_image = bool(body.get("has_image", False))
             cost_profile = body.get("cost_profile", "balanced")
             use_llm = bool(body.get("use_llm_classifier", False))
-            classifier_model = body.get("classifier_model", "openai-codex/gpt-5.4-mini")
+            classifier_model = body.get("classifier_model")
             raw_classifier_context = body.get("conversation_context")
             if raw_classifier_context is None:
                 classifier_context = None
@@ -152,6 +152,8 @@ class RouterHandler(BaseHTTPRequestHandler):
 
             # Extract pre-signals
             pre_signals = extract_pre_signals(message, has_image_attachment=has_image)
+            provider_health = load_provider_health()
+            registry = _get_router()._registry
 
             # Classify — explicit classifier hint (e.g. from Nexus) always wins over heuristic
             raw_cls = body.get("classifier")
@@ -187,6 +189,8 @@ class RouterHandler(BaseHTTPRequestHandler):
                     pre_signals=pre_signals,
                     conversation_context=classifier_context,
                     model=classifier_model,
+                    registry=registry,
+                    provider_health=provider_health,
                 )
                 if classifier is not None:
                     classifier_source = "llm"

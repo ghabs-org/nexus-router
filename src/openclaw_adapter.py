@@ -25,6 +25,7 @@ from typing import Optional
 from .router import Router
 from .classifier import extract_pre_signals, heuristic_classify, classify_with_model
 from .types import ClassifierOutput, PreSignals, RoutingDecision
+from .health import load_provider_health
 from .health_updater import observe_turn_outcome
 
 # Lazy-init router singleton
@@ -45,7 +46,7 @@ def route_turn(
     cost_profile: str = "balanced",
     nexus_context: Optional[dict] = None,
     use_llm_classifier: bool = False,
-    classifier_model: Optional[str] = "openai-codex/gpt-5.4-mini",
+    classifier_model: Optional[str] = None,
 ) -> RoutingDecision:
     """
     Main entry point for routing a single chat turn.
@@ -69,12 +70,14 @@ def route_turn(
     classifier_output = heuristic_classify(message, pre_signals)
 
     # Step 3: if heuristic wasn't confident enough and LLM classifier is enabled
-    if classifier_output is None and use_llm_classifier and classifier_model:
+    if classifier_output is None and use_llm_classifier:
         classifier_output = classify_with_model(
             message=message,
             pre_signals=pre_signals,
             conversation_context=conversation_context,
             model=classifier_model,
+            registry=_get_router()._registry,
+            provider_health=load_provider_health(),
         )
 
     # Step 4: fallback to general_chat if still no classification

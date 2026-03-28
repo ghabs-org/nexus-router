@@ -14,9 +14,14 @@ import json
 import re
 import shutil
 import subprocess
+from pathlib import Path
 from typing import Optional
 
-from .types import ClassifierOutput, PreSignals
+from .types import ClassifierOutput, PreSignals, ProviderHealth
+
+ROOT = Path(__file__).parent.parent
+REGISTRY_FILE = ROOT / "catalog/normalized/models.json"
+DEFAULT_CLASSIFIER_LIMIT = 4
 
 # ── Classification prompt ─────────────────────────────────────────────────────
 
@@ -80,8 +85,16 @@ def build_classification_prompt(
     if hints:
         parts.append("Pre-detected signals:\n" + "\n".join(hints))
     if conversation_context:
-        parts.append(f"Conversation context:\n{conversation_context}")
-    parts.append(f"Message to classify:\n{message}")
+        parts.append(
+            "Conversation context (use this to infer the true intent of short replies, "
+            "follow-ups, config questions, and continuation messages):\n"
+            f"{conversation_context}"
+        )
+    parts.append(
+        "Message to classify (classify the current turn together with the conversation context, "
+        "not just the raw last message):\n"
+        f"{message}"
+    )
 
     return "\n\n".join(parts)
 
@@ -130,11 +143,77 @@ def parse_classifier_response(raw: str) -> Optional[ClassifierOutput]:
     )
 
 
+def select_classifier_models(
+    registry: Optional[list[dict]] = None,
+    provider_health: Optional[dict[str, ProviderHealth]] = None,
+    limit: int = DEFAULT_CLASSIFIER_LIMIT,
+    has_image: bool = False,
+    preferred_model: Optional[str] = None,
+) -> list[str]:
+    """
+    Pick the most efficient available classifier models from the normalized registry.
+
+    Primary objective: keep classifier cost low while preserving enough reasoning /
+    multilingual quality to avoid brittle routing.
+    """
+    if registry is None:
+        try:
+            with open(REGISTRY_FILE) as f:
+                raw = json.load(f)
+            registry = raw.get("models", [])
+        except Exception:
+            registry = []
+
+    scored: list[tuple[float, str]] = []
+    for model in registry:
+        if not model.get("availability", {}).get("authed", False):
+            continue
+
+        model_id = model.get("id")
+        if not model_id:
+            continue
+
+        scores = model.get("scores", {})
+        provider = model.get("provider")
+        health = 0.85
+        if provider_health and provider in provider_health:
+            health = provider_health[provider].health_score
+
+        if health < 0.30:
+            continue
+
+        cost = float(scores.get("cost", 0.65))
+        fast = float(scores.get("fast", 0.70))
+        reasoning = float(scores.get("reasoning", 0.70))
+        multilingual = float(scores.get("multilingual", 0.70))
+        tools = float(scores.get("tools", 0.70))
+        vision = float(scores.get("vision", 0.70))
+
+        score = (
+            0.42 * cost
+            + 0.22 * fast
+            + 0.18 * reasoning
+            + 0.08 * multilingual
+            + 0.05 * tools
+            + 0.05 * (vision if has_image else 0.0)
+            + 0.10 * health
+        )
+        scored.append((score, model_id))
+
+    ordered = [m for _, m in sorted(scored, key=lambda x: x[0], reverse=True)]
+    if preferred_model:
+        ordered = [preferred_model] + [m for m in ordered if m != preferred_model]
+    return ordered[:limit] if limit > 0 else ordered
+
+
 def classify_with_model(
     message: str,
     pre_signals: PreSignals,
     conversation_context: Optional[str] = None,
-    model: str = "openai-codex/gpt-5.4-mini",
+    model: Optional[str] = None,
+    fallback_models: Optional[list[str]] = None,
+    registry: Optional[list[dict]] = None,
+    provider_health: Optional[dict[str, ProviderHealth]] = None,
     binary: str = "openclaw",
     timeout_seconds: int = 15,
 ) -> Optional[ClassifierOutput]:
@@ -142,35 +221,61 @@ def classify_with_model(
     Classify a message using a model-backed classifier.
 
     This is the language-aware path: use it when heuristics are inconclusive.
-    Returns None if the model invocation fails or emits invalid JSON.
+    Returns None if all model invocations fail or emit invalid JSON.
     """
     if not shutil.which(binary):
         return None
 
     prompt = build_classification_prompt(message, pre_signals, conversation_context)
 
-    try:
-        result = subprocess.run(
-            [
-                binary, "agent",
-                "--model", model,
-                "--message", prompt,
-                "--system", SYSTEM_PROMPT,
-                "--no-persist",
-            ],
-            capture_output=True,
-            text=True,
-            timeout=timeout_seconds,
+    candidate_models: list[str] = []
+    if model and model != "auto":
+        candidate_models.append(model)
+    else:
+        candidate_models.extend(
+            select_classifier_models(
+                registry=registry,
+                provider_health=provider_health,
+                has_image=pre_signals.has_image,
+                preferred_model=None,
+            )
         )
-    except subprocess.TimeoutExpired:
-        return None
-    except Exception:
+
+    if fallback_models:
+        candidate_models.extend([m for m in fallback_models if m not in candidate_models])
+
+    if not candidate_models:
         return None
 
-    if result.returncode != 0:
-        return None
+    last_stdout = ""
+    for candidate in candidate_models:
+        try:
+            result = subprocess.run(
+                [
+                    binary, "agent",
+                    "--model", candidate,
+                    "--message", prompt,
+                    "--system", SYSTEM_PROMPT,
+                    "--no-persist",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=timeout_seconds,
+            )
+        except subprocess.TimeoutExpired:
+            continue
+        except Exception:
+            continue
 
-    return parse_classifier_response(result.stdout.strip())
+        last_stdout = (result.stdout or "").strip()
+        if result.returncode != 0:
+            continue
+
+        parsed = parse_classifier_response(last_stdout)
+        if parsed is not None:
+            return parsed
+
+    return None
 
 
 # ── Pre-signal extraction ─────────────────────────────────────────────────────

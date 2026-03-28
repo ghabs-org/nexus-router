@@ -14,7 +14,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from src.types import ClassifierOutput, PreSignals, ProviderHealth
 from src.scorer import score_models, _preference_score, _learned_score, _fast_mode_correction, _reasoning_mode_correction
 from src.router import Router, _adapt_classifier_for_light_chat
-from src.classifier import extract_pre_signals, heuristic_classify, parse_classifier_response, classify_with_model
+from src.classifier import extract_pre_signals, heuristic_classify, parse_classifier_response, classify_with_model, select_classifier_models
 from src.server import should_reclassify_with_llm, RouterHandler
 
 
@@ -448,6 +448,36 @@ class TestClassifier:
         assert should_reclassify_with_llm(ClassifierOutput(task_type="general_chat", confidence=0.55), True, "Previous coding discussion")
         assert not should_reclassify_with_llm(classifier, False, "Previous coding discussion")
         assert not should_reclassify_with_llm(ClassifierOutput(task_type="coding", confidence=0.72), True, "Previous coding discussion")
+
+    def test_select_classifier_models_prefers_efficient_healthy_model(self):
+        registry = [
+            {
+                "id": "slow/strong",
+                "provider": "slow",
+                "availability": {"authed": True},
+                "scores": {"cost": 0.55, "fast": 0.55, "reasoning": 0.95, "multilingual": 0.95, "tools": 0.80, "vision": 0.80},
+            },
+            {
+                "id": "cheap/healthy",
+                "provider": "cheap",
+                "availability": {"authed": True},
+                "scores": {"cost": 0.95, "fast": 0.92, "reasoning": 0.78, "multilingual": 0.80, "tools": 0.80, "vision": 0.80},
+            },
+            {
+                "id": "cheap/bad-health",
+                "provider": "cheap-low",
+                "availability": {"authed": True},
+                "scores": {"cost": 0.97, "fast": 0.94, "reasoning": 0.79, "multilingual": 0.78, "tools": 0.80, "vision": 0.80},
+            },
+        ]
+        health = {
+            "slow": ProviderHealth(provider="slow", auth="ok", quota="healthy", health_score=0.85),
+            "cheap": ProviderHealth(provider="cheap", auth="ok", quota="healthy", health_score=0.95),
+            "cheap-low": ProviderHealth(provider="cheap-low", auth="ok", quota="healthy", health_score=0.25),
+        }
+        selected = select_classifier_models(registry=registry, provider_health=health, preferred_model=None, limit=3)
+        assert selected[0] == "cheap/healthy"
+        assert "cheap/bad-health" not in selected
 
     def test_classify_with_model_parses_output(self, monkeypatch):
         class Result:
