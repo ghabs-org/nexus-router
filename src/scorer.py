@@ -69,6 +69,7 @@ def score_models(
     learned_stats: dict[str, dict],
     policy_weights: Optional[dict] = None,
     routing_policy: Optional[dict] = None,
+    route_mode: Optional[str] = None,
 ) -> list[ModelScore]:
     """
     Score all candidate models and return a ranked list.
@@ -184,6 +185,9 @@ def score_models(
             + speed_score * weights["speed"]
         )
 
+        if (route_mode or "").strip().lower() == "fast":
+            total += _fast_mode_correction(task_fit=task_fit, cost_score=cost_score, speed_score=speed_score)
+
         eligible.append(ModelScore(
             model_id=model_id,
             provider=provider,
@@ -206,6 +210,25 @@ def _resolve_weights(classifier: ClassifierOutput, policy_weights: Optional[dict
     if policy_weights:
         return policy_weights
     return COST_PROFILE_WEIGHT.get(classifier.cost_profile, DEFAULT_WEIGHTS)
+
+
+def _fast_mode_correction(task_fit: float, cost_score: float, speed_score: float) -> float:
+    """
+    Provider-agnostic correction for fast mode.
+
+    Intuition:
+    - Reward higher cost/speed scores beyond the neutral midpoint (0.5)
+    - Apply a small guardrail so very low task-fit models are less likely to win
+
+    This avoids vendor-specific rules while still reducing "same strong model always wins"
+    behavior in fast mode.
+    """
+    cost_delta = cost_score - 0.5
+    speed_delta = speed_score - 0.5
+    task_fit_guardrail = max(0.0, 0.65 - task_fit)
+
+    correction = (0.16 * cost_delta) + (0.08 * speed_delta) - (0.06 * task_fit_guardrail)
+    return correction
 
 
 def _build_preference_order(task_type: str, routing_policy: Optional[dict]) -> list[str]:

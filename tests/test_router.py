@@ -12,7 +12,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.types import ClassifierOutput, PreSignals, ProviderHealth
-from src.scorer import score_models, _preference_score, _learned_score
+from src.scorer import score_models, _preference_score, _learned_score, _fast_mode_correction
 from src.router import Router, _adapt_classifier_for_light_chat
 from src.classifier import extract_pre_signals, heuristic_classify, parse_classifier_response
 
@@ -157,6 +157,65 @@ class TestScorer:
         low_override = {"m": {"total_selected": 100, "total_success": 80, "success_rate": 0.80, "total_override": 2}}
         high_override = {"m": {"total_selected": 100, "total_success": 80, "success_rate": 0.80, "total_override": 40}}
         assert _learned_score("m", "coding", low_override) > _learned_score("m", "coding", high_override)
+
+    def test_fast_mode_correction_prefers_lower_cost_and_higher_speed(self):
+        cheap_fast = _fast_mode_correction(task_fit=0.80, cost_score=0.90, speed_score=0.90)
+        expensive_slow = _fast_mode_correction(task_fit=0.80, cost_score=0.55, speed_score=0.55)
+        assert cheap_fast > expensive_slow
+
+    def test_fast_route_mode_changes_ranking_bias(self):
+        classifier = ClassifierOutput(task_type="coding", complexity="medium", confidence=0.80)
+        provider_health = {
+            "p": ProviderHealth(provider="p", auth="ok", quota="healthy", health_score=0.95),
+        }
+
+        models = [
+            {
+                "id": "p/high-taskfit-expensive",
+                "provider": "p",
+                "scores": {
+                    "coding": 0.92,
+                    "review": 0.70,
+                    "reasoning": 0.70,
+                    "summarize": 0.70,
+                    "fast": 0.60,
+                    "cost": 0.55,
+                    "context": 0.70,
+                    "vision": 0.60,
+                },
+                "features": {"contextWindow": 200000},
+                "availability": {"authed": True},
+            },
+            {
+                "id": "p/good-taskfit-cheap-fast",
+                "provider": "p",
+                "scores": {
+                    "coding": 0.85,
+                    "review": 0.70,
+                    "reasoning": 0.70,
+                    "summarize": 0.70,
+                    "fast": 0.95,
+                    "cost": 0.95,
+                    "context": 0.70,
+                    "vision": 0.60,
+                },
+                "features": {"contextWindow": 200000},
+                "availability": {"authed": True},
+            },
+        ]
+
+        base_ranked = score_models(classifier, models, provider_health, {}, route_mode="balanced")
+        fast_ranked = score_models(classifier, models, provider_health, {}, route_mode="fast")
+
+        def by_id(rows, model_id):
+            return next(r for r in rows if r.model_id == model_id)
+
+        cheap_base = by_id(base_ranked, "p/good-taskfit-cheap-fast").total_score
+        expensive_base = by_id(base_ranked, "p/high-taskfit-expensive").total_score
+        cheap_fast = by_id(fast_ranked, "p/good-taskfit-cheap-fast").total_score
+        expensive_fast = by_id(fast_ranked, "p/high-taskfit-expensive").total_score
+
+        assert (cheap_fast - expensive_fast) > (cheap_base - expensive_base)
 
 
 # ── Router tests ──────────────────────────────────────────────────────────────

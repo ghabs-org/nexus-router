@@ -119,6 +119,7 @@ class Router:
             learned_stats=learned_stats,
             policy_weights=policy_weights,
             routing_policy=self._routing,
+            route_mode=effective_route_mode,
         )
 
         eligible = [s for s in scored if not s.excluded]
