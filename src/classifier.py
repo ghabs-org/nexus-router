@@ -11,11 +11,15 @@ For V1 this uses a lightweight prompt; it can be swapped for a Nexus workflow st
 """
 
 import json
+import os
 import re
 import shutil
 import subprocess
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
+from urllib import error as urllib_error
+from urllib import request as urllib_request
 
 from .types import ClassifierOutput, PreSignals, ProviderHealth
 
@@ -23,6 +27,7 @@ ROOT = Path(__file__).parent.parent
 REGISTRY_FILE = ROOT / "catalog/normalized/models.json"
 DEFAULT_CLASSIFIER_LIMIT = 4
 CLASSIFIER_PROFILE = "nexus-router-classifier"
+DEFAULT_DIRECT_PROVIDER_TIMEOUT_SECONDS = 15
 
 # ── Classification prompt ─────────────────────────────────────────────────────
 
@@ -58,6 +63,24 @@ Output schema (JSON only):
   "confidence": 0.0,
   "detected_language": "en|it|fr|es|de|mixed|unknown"
 }"""
+
+
+@dataclass(frozen=True)
+class DirectClassifierProviderAdapter:
+    provider: str
+    env_var: str
+    base_url: str
+    api_path: str
+
+
+DIRECT_PROVIDER_ADAPTERS: dict[str, DirectClassifierProviderAdapter] = {
+    "openai-codex": DirectClassifierProviderAdapter(
+        provider="openai-codex",
+        env_var="OPENAI_API_KEY",
+        base_url="https://api.openai.com",
+        api_path="/v1/responses",
+    ),
+}
 
 
 def build_classification_prompt(
@@ -364,6 +387,93 @@ def _run_openclaw_classifier_turn(
     return (result.stdout or "").strip()
 
 
+def _split_model_ref(model: str) -> tuple[Optional[str], str]:
+    trimmed = (model or "").strip()
+    if not trimmed:
+        return None, ""
+    if "/" not in trimmed:
+        return None, trimmed
+    provider, model_id = trimmed.split("/", 1)
+    return provider or None, model_id
+
+
+def _extract_response_output_text(payload: dict) -> str:
+    output = payload.get("output")
+    if not isinstance(output, list):
+        return ""
+
+    parts: list[str] = []
+    for item in output:
+        if not isinstance(item, dict):
+            continue
+        content = item.get("content")
+        if not isinstance(content, list):
+            continue
+        for block in content:
+            if not isinstance(block, dict):
+                continue
+            if block.get("type") in {"output_text", "text"} and isinstance(block.get("text"), str):
+                parts.append(block["text"])
+    return "\n".join(parts).strip()
+
+
+def _call_direct_provider_classifier(
+    prompt: str,
+    model: str,
+    timeout_seconds: int = DEFAULT_DIRECT_PROVIDER_TIMEOUT_SECONDS,
+) -> Optional[str]:
+    provider, model_id = _split_model_ref(model)
+    if not provider or not model_id:
+        return None
+
+    adapter = DIRECT_PROVIDER_ADAPTERS.get(provider)
+    if adapter is None:
+        return None
+
+    api_key = os.environ.get(adapter.env_var)
+    if not api_key:
+        return None
+
+    payload = {
+        "model": model_id,
+        "input": [
+            {"role": "system", "content": [{"type": "input_text", "text": SYSTEM_PROMPT}]},
+            {"role": "user", "content": [{"type": "input_text", "text": prompt}]},
+        ],
+        "text": {"format": {"type": "json_object"}},
+    }
+
+    req = urllib_request.Request(
+        f"{adapter.base_url}{adapter.api_path}",
+        data=json.dumps(payload).encode("utf-8"),
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {api_key}",
+        },
+        method="POST",
+    )
+
+    try:
+        with urllib_request.urlopen(req, timeout=timeout_seconds) as response:
+            raw = response.read().decode("utf-8")
+    except (urllib_error.URLError, urllib_error.HTTPError, TimeoutError, OSError):
+        return None
+
+    try:
+        parsed = json.loads(raw)
+    except Exception:
+        return raw.strip() or None
+
+    text = _extract_response_output_text(parsed)
+    if text:
+        return text
+
+    if isinstance(parsed.get("output_text"), str):
+        return parsed["output_text"].strip() or None
+
+    return raw.strip() or None
+
+
 def classify_with_model(
     message: str,
     pre_signals: PreSignals,
@@ -381,9 +491,6 @@ def classify_with_model(
     This is the language-aware path: use it when heuristics are inconclusive.
     Returns None if all model invocations fail or emit invalid JSON.
     """
-    if not shutil.which(binary):
-        return None
-
     prompt = build_classification_prompt(message, pre_signals, conversation_context)
 
     candidate_models: list[str] = []
@@ -403,6 +510,22 @@ def classify_with_model(
         candidate_models.extend([m for m in fallback_models if m not in candidate_models])
 
     if not candidate_models:
+        return None
+
+    direct_attempted = False
+    for candidate in candidate_models:
+        stdout = _call_direct_provider_classifier(
+            prompt,
+            candidate,
+            timeout_seconds=timeout_seconds,
+        )
+        if stdout is not None:
+            direct_attempted = True
+            parsed = parse_classifier_response(stdout)
+            if parsed is not None:
+                return parsed
+
+    if not shutil.which(binary):
         return None
 
     for candidate in candidate_models:

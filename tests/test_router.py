@@ -14,7 +14,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from src.types import ClassifierOutput, PreSignals, ProviderHealth
 from src.scorer import score_models, _preference_score, _learned_score, _fast_mode_correction, _reasoning_mode_correction
 from src.router import Router, _adapt_classifier_for_light_chat
-from src.classifier import extract_pre_signals, heuristic_classify, parse_classifier_response, classify_with_model, select_classifier_models
+from src.classifier import extract_pre_signals, heuristic_classify, parse_classifier_response, classify_with_model, select_classifier_models, _call_direct_provider_classifier
 from src.server import should_reclassify_with_llm, RouterHandler
 
 
@@ -479,20 +479,94 @@ class TestClassifier:
         assert selected[0] == "cheap/healthy"
         assert "cheap/bad-health" not in selected
 
-    def test_classify_with_model_parses_output(self, monkeypatch):
-        class Result:
-            returncode = 0
-            stdout = '{"task_type":"reasoning","subtype":"comparison","complexity":"medium","needs_tools":false,"needs_vision":false,"needs_long_context":false,"cost_profile":"balanced","confidence":0.91,"detected_language":"it"}'
+    def test_call_direct_provider_classifier_openai_codex(self, monkeypatch):
+        class FakeResponse:
+            def __init__(self, payload):
+                self._payload = payload
 
-        monkeypatch.setattr("src.classifier.shutil.which", lambda _: "/usr/bin/openclaw")
-        monkeypatch.setattr("src.classifier.subprocess.run", lambda *a, **k: Result())
+            def read(self):
+                return json.dumps(self._payload).encode("utf-8")
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+        captured = {}
+
+        def fake_urlopen(req, timeout):
+            captured["url"] = req.full_url
+            captured["headers"] = dict(req.header_items())
+            captured["body"] = json.loads(req.data.decode("utf-8"))
+            captured["timeout"] = timeout
+            return FakeResponse({
+                "output": [
+                    {
+                        "content": [
+                            {
+                                "type": "output_text",
+                                "text": '{"task_type":"reasoning","complexity":"medium","needs_tools":false,"needs_vision":false,"needs_long_context":false,"cost_profile":"balanced","confidence":0.89}'
+                            }
+                        ]
+                    }
+                ]
+            })
+
+        monkeypatch.setenv("OPENAI_API_KEY", "test-openai-key")
+        monkeypatch.setattr("src.classifier.urllib_request.urlopen", fake_urlopen)
+
+        raw = _call_direct_provider_classifier("classify this", "openai-codex/gpt-5.4-mini", timeout_seconds=7)
+        assert raw is not None
+        assert '"task_type":"reasoning"' in raw
+        assert captured["url"] == "https://api.openai.com/v1/responses"
+        assert captured["headers"]["Authorization"] == "Bearer test-openai-key"
+        assert captured["body"]["model"] == "gpt-5.4-mini"
+        assert captured["timeout"] == 7
+
+    def test_classify_with_model_prefers_direct_provider_before_cli(self, monkeypatch):
+        monkeypatch.setenv("OPENAI_API_KEY", "test-openai-key")
+        monkeypatch.setattr(
+            "src.classifier._call_direct_provider_classifier",
+            lambda *args, **kwargs: '{"task_type":"reasoning","subtype":"comparison","complexity":"medium","needs_tools":false,"needs_vision":false,"needs_long_context":false,"cost_profile":"balanced","confidence":0.91,"detected_language":"it"}',
+        )
+        monkeypatch.setattr("src.classifier.shutil.which", lambda _: None)
 
         pre = PreSignals(message_length=42)
-        result = classify_with_model("Confronta queste due architetture.", pre)
+        result = classify_with_model("Confronta queste due architetture.", pre, model="openai-codex/gpt-5.4-mini")
         assert result is not None
         assert result.task_type == "reasoning"
         assert result.subtype == "comparison"
         assert result.detected_language == "it"
+
+    def test_classify_with_model_falls_back_to_openclaw_cli(self, monkeypatch):
+        class Result:
+            def __init__(self, returncode=0, stdout=""):
+                self.returncode = returncode
+                self.stdout = stdout
+
+        calls = []
+
+        def fake_run(cmd, **kwargs):
+            calls.append(cmd)
+            if cmd[:4] == ["openclaw", "--profile", "nexus-router-classifier", "models"] and cmd[4] == "set":
+                return Result(0, "")
+            if cmd[:6] == ["openclaw", "--profile", "nexus-router-classifier", "agent", "--agent", "main"]:
+                return Result(0, '{"task_type":"reasoning","subtype":"comparison","complexity":"medium","needs_tools":false,"needs_vision":false,"needs_long_context":false,"cost_profile":"balanced","confidence":0.91,"detected_language":"it"}')
+            raise AssertionError(f"Unexpected command: {cmd}")
+
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+        monkeypatch.setattr("src.classifier._call_direct_provider_classifier", lambda *args, **kwargs: None)
+        monkeypatch.setattr("src.classifier.shutil.which", lambda _: "/usr/bin/openclaw")
+        monkeypatch.setattr("src.classifier.subprocess.run", fake_run)
+
+        pre = PreSignals(message_length=42)
+        result = classify_with_model("Confronta queste due architetture.", pre, model="openai-codex/gpt-5.4-mini")
+        assert result is not None
+        assert result.task_type == "reasoning"
+        assert result.subtype == "comparison"
+        assert result.detected_language == "it"
+        assert any(cmd[:4] == ["openclaw", "--profile", "nexus-router-classifier", "models"] and cmd[4] == "set" for cmd in calls)
 
 
 # ── Integration: end-to-end ───────────────────────────────────────────────────
