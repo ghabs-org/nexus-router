@@ -310,16 +310,22 @@ class TestRouter:
         decision = router.route(classifier)
         assert 0.0 <= decision.score <= 1.0
 
-    def test_adapt_low_complexity_general_chat_to_fast_utility(self):
+    def test_adapt_only_weak_tiny_low_complexity_general_chat_to_fast_utility(self):
         classifier = ClassifierOutput(task_type="general_chat", complexity="low", confidence=0.80)
         pre = PreSignals(message_length=80, estimated_tokens=20)
         adapted = _adapt_classifier_for_light_chat(classifier, pre)
         assert adapted.task_type == "fast_utility"
         assert adapted.cost_profile == "cheap"
 
+    def test_keep_high_confidence_low_complexity_general_chat_as_general_chat(self):
+        classifier = ClassifierOutput(task_type="general_chat", complexity="low", confidence=0.95)
+        pre = PreSignals(message_length=80, estimated_tokens=20)
+        adapted = _adapt_classifier_for_light_chat(classifier, pre)
+        assert adapted.task_type == "general_chat"
+
     def test_adapt_low_confidence_short_general_chat_to_fast_utility(self):
         classifier = ClassifierOutput(task_type="general_chat", complexity="medium", confidence=0.60)
-        pre = PreSignals(message_length=300, estimated_tokens=90)
+        pre = PreSignals(message_length=180, estimated_tokens=40)
         adapted = _adapt_classifier_for_light_chat(classifier, pre)
         assert adapted.task_type == "fast_utility"
         assert adapted.complexity == "low"
@@ -340,10 +346,12 @@ class TestRouter:
 
     def test_pre_signals_affect_reason(self, router):
         classifier = ClassifierOutput(task_type="coding", confidence=0.85)
-        pre = PreSignals(has_code=True, has_diff=True, estimated_tokens=500)
+        pre = PreSignals(has_code=True, has_diff=True, has_file_refs=True, estimated_tokens=500)
         decision = router.route(classifier, pre_signals=pre)
-        reasons_text = " ".join(decision.reason)
-        assert "code" in reasons_text.lower() or "diff" in reasons_text.lower()
+        reasons_text = " ".join(decision.reason).lower()
+        assert "inline/fenced code detected" in reasons_text
+        assert "diff/patch detected" in reasons_text
+        assert "file path/reference detected" in reasons_text
 
     def test_route_mode_auto_forces_cheap_profile(self, router):
         classifier = ClassifierOutput(task_type="general_chat", cost_profile="balanced", confidence=0.70)

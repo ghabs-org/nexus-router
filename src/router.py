@@ -216,13 +216,10 @@ def _adapt_classifier_for_light_chat(
     pre_signals: PreSignals,
 ) -> ClassifierOutput:
     """
-    Remap lightweight general chat to fast_utility so greetings / tiny asks do not
-    burn a premium model by default.
+    Remap only *very lightweight* general chat to fast_utility.
 
-    Rules:
-    - explicit low-complexity general_chat -> fast_utility
-    - low-confidence generic general_chat with no rich signals and short-ish text
-      also downgrades to fast_utility
+    Important: high-confidence classifier output should dominate routing.
+    We only downgrade to fast_utility when the turn is genuinely tiny/simple.
     """
     if classifier.task_type != "general_chat":
         return classifier
@@ -232,17 +229,29 @@ def _adapt_classifier_for_light_chat(
         pre_signals.has_diff,
         pre_signals.has_logs,
         pre_signals.has_image,
+        pre_signals.has_file_refs,
+        pre_signals.has_url,
     ])
 
-    if classifier.complexity == "low" and not has_rich_signals:
+    # Explicitly low-complexity chat can be treated as fast utility, but only
+    # when confidence is not strongly anchoring the turn as meaningful chat.
+    if (
+        classifier.complexity == "low"
+        and classifier.confidence < 0.90
+        and not has_rich_signals
+        and pre_signals.estimated_tokens <= 80
+        and pre_signals.message_length <= 240
+    ):
         return replace(classifier, task_type="fast_utility", cost_profile="cheap")
 
+    # Weak/ambiguous general chat with no rich signals and very short text can
+    # still downgrade to fast_utility.
     if (
         classifier.complexity in (None, "medium")
-        and classifier.confidence <= 0.65
+        and classifier.confidence <= 0.70
         and not has_rich_signals
-        and pre_signals.estimated_tokens <= 120
-        and pre_signals.message_length <= 500
+        and pre_signals.estimated_tokens <= 80
+        and pre_signals.message_length <= 240
     ):
         return replace(classifier, task_type="fast_utility", complexity="low", cost_profile="cheap")
 
@@ -271,15 +280,19 @@ def _build_reason(
     if classifier.complexity != "medium":
         reasons.append(f"complexity: {classifier.complexity}")
 
-    # Pre-signals
+    # Pre-signals (keep these explicit so /route explain is understandable)
     if pre_signals.has_code:
-        reasons.append("code content detected")
+        reasons.append("inline/fenced code detected")
     if pre_signals.has_diff:
         reasons.append("diff/patch detected")
     if pre_signals.has_image:
         reasons.append("image attachment detected")
     if pre_signals.has_logs:
         reasons.append("log/stack trace detected")
+    if pre_signals.has_file_refs:
+        reasons.append("file path/reference detected")
+    if pre_signals.has_url:
+        reasons.append("URL detected")
     if pre_signals.estimated_tokens > 50_000:
         reasons.append(f"large context estimated (~{pre_signals.estimated_tokens:,} tokens)")
 

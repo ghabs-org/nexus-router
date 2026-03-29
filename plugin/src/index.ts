@@ -51,7 +51,10 @@ interface LastRouteDecision {
   classifierSource: "explicit" | "heuristic" | "llm" | "fallback";
   costProfile: "cheap" | "balanced" | "premium";
   taskType: string;
+  effectiveTaskType?: string;
   confidence: number;
+  firstPassModel?: string;
+  firstPassProvider?: string;
   selectedModel: string;
   selectedProvider: string;
   actualModel?: string;
@@ -164,6 +167,8 @@ const recentLastDecisionByDecisionId = new Map<string, LastRouteDecision>();
 const pendingOutcomeQueueBySessionId = new Map<string, PendingOutcome[]>();
 const recentRouteCacheBySession = new Map<string, { text: string; mode: RouteMode; at: number; selectedModel?: string }>();
 const routeBurstBySession = new Map<string, { windowStart: number; count: number; blockedUntil?: number }>();
+const recentSlashCommandBySession = new Map<string, { at: number; cmd: string }>();
+const RECENT_COMMAND_GUARD_MS = 15_000;
 let recentLastDecisionGlobal: LastRouteDecision | null = null;
 
 function rememberRecentUserMessage(sessionKey: string, text: string): void {
@@ -363,6 +368,14 @@ function takeLastDecisionForConversation(conversationKey: string): LastRouteDeci
   return entry;
 }
 
+function extractEffectiveTaskType(reason: string[]): string | undefined {
+  for (const item of reason) {
+    const m = item.match(/adapted to '([^']+)'/i);
+    if (m) return m[1];
+  }
+  return undefined;
+}
+
 function buildRouteDecisionText(last: LastRouteDecision | null, detailed: boolean): { text: string } {
   if (!last) {
     return {
@@ -384,8 +397,10 @@ function buildRouteDecisionText(last: LastRouteDecision | null, detailed: boolea
     `Input: ${last.source}`,
     `Context: ${contextLabel}`,
     `Classifier: ${last.classifierSource}`,
-    `Task: ${last.taskType}`,
+    `Classifier task: ${last.taskType}`,
+    `Effective route task: ${last.effectiveTaskType ?? last.taskType}`,
     `Confidence: ${last.confidence.toFixed(2)}`,
+    `First pass: ${last.firstPassModel ?? last.selectedModel}`,
     `Selected: ${last.selectedModel}`,
     `Actual: ${actual}${usageBits}`,
     `Fallbacks: ${fallbacks}`,
@@ -693,6 +708,9 @@ export default definePluginEntry({
 
       // Skip slash commands — they are not user prompts and should not be routed.
       const isSlashCommand = rawText.startsWith("/");
+      if (sessionKey && rawText && isSlashCommand) {
+        recentSlashCommandBySession.set(sessionKey, { at: Date.now(), cmd: rawText });
+      }
       if (sessionKey && rawText && !isSlashCommand) {
         rememberRecentUserMessage(sessionKey, rawText);
       }
@@ -736,6 +754,16 @@ export default definePluginEntry({
         return;
       }
 
+      const sessionForCommandGuard = String(ctx?.sessionKey ?? "");
+      if (sessionForCommandGuard) {
+        const cmd = recentSlashCommandBySession.get(sessionForCommandGuard);
+        if (cmd && Date.now() - cmd.at < RECENT_COMMAND_GUARD_MS) {
+          await debugLog(`[hook-result] source=command route=skipped cmd=${cmd.cmd.slice(0, 80)}`);
+          recentSlashCommandBySession.delete(sessionForCommandGuard);
+          return;
+        }
+      }
+
       const rawUserText = takeRecentUserMessage(ctx.sessionKey) ?? "";
       const conversationContext = takeRecentConversationContext(ctx.sessionKey) ?? "";
       const routingText = rawUserText || prompt;
@@ -775,13 +803,14 @@ export default definePluginEntry({
       }
 
       let decision: RouteResponse | null = null;
+      let autoDecision: RouteResponse | null = null;
       let finalMode: RouteMode = routeMode;
       let finalCostProfile = firstPassCostProfile;
 
       const shouldUseLlmClassifier = Boolean(conversationContext.trim());
 
       if (routeMode === "auto") {
-        const autoDecision = await routeRequest(
+        autoDecision = await routeRequest(
           routerUrl,
           routingText,
           firstPassCostProfile,
@@ -879,7 +908,10 @@ export default definePluginEntry({
         classifierSource: (decision.classifier_source ?? (shouldUseLlmClassifier ? "llm" : "heuristic")) as LastRouteDecision["classifierSource"],
         costProfile: finalCostProfile,
         taskType: decision.task_type,
+        effectiveTaskType: extractEffectiveTaskType(decision.reason),
         confidence: decision.confidence,
+        firstPassModel: routeMode === "auto" && autoDecision ? autoDecision.selected_model : decision.selected_model,
+        firstPassProvider: routeMode === "auto" && autoDecision ? autoDecision.selected_provider : decision.selected_provider,
         selectedModel: decision.selected_model,
         selectedProvider: decision.selected_provider,
         fallbacks: decision.fallbacks,
