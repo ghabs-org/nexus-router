@@ -58,11 +58,14 @@ def _get_router() -> Router:
 
 def _json_response(handler: BaseHTTPRequestHandler, status: int, data: Any):
     body = json.dumps(data, default=str).encode()
-    handler.send_response(status)
-    handler.send_header("Content-Type", "application/json")
-    handler.send_header("Content-Length", str(len(body)))
-    handler.end_headers()
-    handler.wfile.write(body)
+    try:
+        handler.send_response(status)
+        handler.send_header("Content-Type", "application/json")
+        handler.send_header("Content-Length", str(len(body)))
+        handler.end_headers()
+        handler.wfile.write(body)
+    except BrokenPipeError:
+        pass  # Client disconnected before response was sent — benign
 
 
 def _read_body(handler: BaseHTTPRequestHandler) -> dict:
@@ -81,38 +84,44 @@ class RouterHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         path = urlparse(self.path).path
 
-        if path == "/health":
-            provider_health = load_provider_health()
-            _json_response(self, 200, {
-                "status": "ok",
-                "providers": {
-                    p: {
-                        "auth": ph.auth,
-                        "quota": ph.quota,
-                        "health_score": ph.health_score,
-                    }
-                    for p, ph in provider_health.items()
-                },
-            })
+        try:
+            if path == "/health":
+                provider_health = load_provider_health()
+                _json_response(self, 200, {
+                    "status": "ok",
+                    "providers": {
+                        p: {
+                            "auth": ph.auth,
+                            "quota": ph.quota,
+                            "health_score": ph.health_score,
+                        }
+                        for p, ph in provider_health.items()
+                    },
+                })
 
-        elif path == "/stats":
-            stats = load_model_stats()
-            _json_response(self, 200, {
-                "total_models": len(stats),
-                "models": [
-                    {
-                        "model": m,
-                        "total_selected": s.get("total_selected", 0),
-                        "success_rate": s.get("success_rate"),
-                        "avg_latency_ms": s.get("avg_latency_ms"),
-                        "total_override": s.get("total_override", 0),
-                    }
-                    for m, s in sorted(stats.items(), key=lambda x: -(x[1].get("total_selected") or 0))
-                ],
-            })
+            elif path == "/stats":
+                stats = load_model_stats()
+                _json_response(self, 200, {
+                    "total_models": len(stats),
+                    "models": [
+                        {
+                            "model": m,
+                            "total_selected": s.get("total_selected", 0),
+                            "success_rate": s.get("success_rate"),
+                            "avg_latency_ms": s.get("avg_latency_ms"),
+                            "total_override": s.get("total_override", 0),
+                        }
+                        for m, s in sorted(stats.items(), key=lambda x: -(x[1].get("total_selected") or 0))
+                    ],
+                })
 
-        else:
-            _json_response(self, 404, {"error": "not_found"})
+            else:
+                _json_response(self, 404, {"error": "not_found"})
+
+        except Exception as e:
+            print(f"[router] GET {path} error: {e}")
+            traceback.print_exc()
+            _json_response(self, 500, {"error": str(e)})
 
     def do_POST(self):
         path = urlparse(self.path).path
