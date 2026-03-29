@@ -404,6 +404,67 @@ def _set_openclaw_default_model(model: str, binary: str = "openclaw", profile: s
     return result.returncode == 0
 
 
+def _run_codex_classifier_turn(
+    prompt: str,
+    model: str,
+    binary: str = "codex",
+    timeout_seconds: int = 15,
+) -> Optional[str]:
+    """
+    Run a single classifier turn through the Codex CLI.
+    Uses `codex exec --skip-git-repo-check -q --model <model> <prompt>`.
+    Returns raw stdout string or None on failure.
+    """
+    if not shutil.which(binary):
+        return None
+
+    model_id = model.split("/", 1)[1] if "/" in model else model
+
+    # Build a compact one-shot prompt asking for JSON only
+    one_shot = (
+        "Return ONLY a JSON object (no markdown, no explanation) matching this schema:\n"
+        "{task_type, subtype?, complexity, needs_tools, needs_vision, needs_long_context, "
+        "cost_profile, confidence, detected_language?}\n\n"
+        f"Message to classify:\n{prompt}"
+    )
+
+    cmd = [
+        binary, "exec",
+        "--skip-git-repo-check",
+        "--json",
+        "-m", model_id,
+        one_shot,
+    ]
+
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=timeout_seconds,
+        )
+        # --json mode: scan lines for item.completed with agent_message text
+        for line in result.stdout.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                event = json.loads(line)
+            except Exception:
+                continue
+            if event.get("type") == "item.completed":
+                item = event.get("item", {})
+                if item.get("type") == "agent_message":
+                    text = item.get("text", "").strip()
+                    if text:
+                        return text
+        # Fallback: return raw stdout
+        output = result.stdout.strip()
+        return output if output else None
+    except (subprocess.TimeoutExpired, OSError, FileNotFoundError):
+        return None
+
+
 def _run_openclaw_classifier_turn(
     prompt: str,
     model: str,
@@ -585,6 +646,22 @@ def classify_with_model(
                 object.__setattr__(parsed, "classifier_model", candidate)
                 return parsed
 
+    # Codex CLI path — preferred over openclaw agent for openai-codex provider
+    codex_binary = "codex"
+    if shutil.which(codex_binary):
+        for candidate in candidate_models:
+            if not candidate.startswith("openai-codex/"):
+                continue
+            stdout = _run_codex_classifier_turn(prompt, candidate, binary=codex_binary, timeout_seconds=timeout_seconds)
+            if not stdout:
+                continue
+            parsed = parse_classifier_response(stdout)
+            if parsed is not None:
+                object.__setattr__(parsed, "classifier_provider", "openai-codex")
+                object.__setattr__(parsed, "classifier_model", candidate)
+                return parsed
+
+    # OpenClaw CLI fallback
     if not shutil.which(binary):
         return None
 

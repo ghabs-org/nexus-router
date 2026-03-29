@@ -2,6 +2,14 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
+# Install Python + Node runtime so the classifier can invoke the OpenClaw CLI
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends curl ca-certificates gnupg \
+    && curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
+    && apt-get install -y --no-install-recommends nodejs \
+    && npm install -g openclaw @openai/codex \
+    && rm -rf /var/lib/apt/lists/*
+
 # Install dependencies
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt

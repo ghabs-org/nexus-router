@@ -559,7 +559,8 @@ class TestClassifier:
 
         monkeypatch.delenv("OPENAI_API_KEY", raising=False)
         monkeypatch.setattr("src.classifier._call_direct_provider_classifier", lambda *args, **kwargs: None)
-        monkeypatch.setattr("src.classifier.shutil.which", lambda _: "/usr/bin/openclaw")
+        monkeypatch.setattr("src.classifier._run_codex_classifier_turn", lambda *args, **kwargs: None)
+        monkeypatch.setattr("src.classifier.shutil.which", lambda b: "/usr/bin/openclaw" if b == "openclaw" else None)
         monkeypatch.setattr("src.classifier.subprocess.run", fake_run)
 
         pre = PreSignals(message_length=42)

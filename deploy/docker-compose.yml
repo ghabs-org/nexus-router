@@ -13,6 +13,8 @@ services:
       - ../policies:/app/policies
       - ../state:/app/state
       - ../data:/app/data
+      - /home/ubuntu/.openclaw:/root/.openclaw:ro
+      - /home/ubuntu/.codex:/root/.codex:ro
     environment:
       - PYTHONUNBUFFERED=1
     healthcheck:
