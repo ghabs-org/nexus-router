@@ -241,6 +241,8 @@ class RouterHandler(BaseHTTPRequestHandler):
                 "reason": decision.reason,
                 "classifier_source": classifier_source,
                 "reply_context_used": reply_context_used,
+                "classifier_provider": getattr(classifier, "classifier_provider", None),
+                "classifier_model": getattr(classifier, "classifier_model", None),
                 "pre_signals": {
                     "has_image": pre_signals.has_image,
                     "has_code": pre_signals.has_code,

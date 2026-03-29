@@ -538,6 +538,8 @@ class TestClassifier:
         assert result.task_type == "reasoning"
         assert result.subtype == "comparison"
         assert result.detected_language == "it"
+        assert result.classifier_model is not None
+        assert result.classifier_provider is not None
 
     def test_classify_with_model_falls_back_to_openclaw_cli(self, monkeypatch):
         class Result:
@@ -566,6 +568,8 @@ class TestClassifier:
         assert result.task_type == "reasoning"
         assert result.subtype == "comparison"
         assert result.detected_language == "it"
+        assert result.classifier_model is not None
+        assert result.classifier_provider is not None
         assert any(cmd[:4] == ["openclaw", "--profile", "nexus-router-classifier", "models"] and cmd[4] == "set" for cmd in calls)
 
 

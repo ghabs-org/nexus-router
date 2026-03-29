@@ -15,6 +15,11 @@ import os
 import re
 import shutil
 import subprocess
+
+try:
+    import anthropic  # type: ignore
+except Exception:
+    anthropic = None
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
@@ -514,6 +519,7 @@ def classify_with_model(
 
     direct_attempted = False
     for candidate in candidate_models:
+        provider_name = candidate.split("/", 1)[0] if "/" in candidate else ""
         stdout = _call_direct_provider_classifier(
             prompt,
             candidate,
@@ -529,11 +535,14 @@ def classify_with_model(
         return None
 
     for candidate in candidate_models:
+        provider_name = candidate.split("/", 1)[0] if "/" in candidate else ""
         stdout = _run_openclaw_classifier_turn(prompt, candidate, binary=binary, timeout_seconds=timeout_seconds)
         if not stdout:
             continue
         parsed = parse_classifier_response(stdout)
         if parsed is not None:
+            parsed.classifier_provider = candidate.split("/", 1)[0] if "/" in candidate else None
+            parsed.classifier_model = candidate
             return parsed
 
     return None
@@ -656,3 +665,37 @@ def heuristic_classify(message: str, pre_signals: PreSignals) -> Optional[Classi
 
     # Not confident enough for fast-path
     return None
+
+
+class AnthropicDirectClassifierAdapter:
+    provider_name = "anthropic"
+
+    def is_available(self) -> bool:
+        return anthropic is not None and bool(os.getenv("ANTHROPIC_API_KEY"))
+
+    def classify(self, model_ref: str, prompt: str, timeout_seconds: int) -> Optional[str]:
+        if anthropic is None:
+            return None
+        api_key = os.getenv("ANTHROPIC_API_KEY")
+        if not api_key:
+            return None
+
+        client = anthropic.Anthropic(api_key=api_key)
+        try:
+            message = client.messages.create(
+                model=model_ref,
+                max_tokens=512,
+                temperature=0,
+                system=SYSTEM_PROMPT,
+                messages=[{"role": "user", "content": prompt}],
+                timeout=timeout_seconds,
+            )
+        except Exception:
+            return None
+
+        chunks = []
+        for block in getattr(message, "content", []) or []:
+            if getattr(block, "type", None) == "text" and getattr(block, "text", None):
+                chunks.append(block.text)
+        return "
+".join(chunks).strip() if chunks else None

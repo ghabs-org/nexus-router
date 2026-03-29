@@ -21,6 +21,8 @@ class ClassifierOutput:
     cost_profile: str = "balanced"    # cheap|balanced|premium
     confidence: float = 0.75
     detected_language: Optional[str] = None
+    classifier_provider: Optional[str] = None
+    classifier_model: Optional[str] = None
 
 
 @dataclass
