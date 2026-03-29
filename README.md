@@ -48,8 +48,8 @@ inbound message
 | Family priors | `policies/families.yaml` | Provider/pattern scoring |
 | Routing policy | `policies/routing.yaml` | Task → preferred models |
 | Overrides | `policies/overrides.yaml` | Per-model manual scores |
-| Runtime health | `state/runtime-health.json` | Auth/quota/error state |
-| Routing history | `data/routing-history.sqlite` | Outcomes and feedback |
+| Runtime health | `~/.local/state/nexus-router/state/runtime-health.json` (host) / `/app/state/runtime-health.json` (container) | Auth/quota/error state |
+| Routing history | `~/.local/state/nexus-router/data/routing-history.sqlite` (host) / `/app/data/routing-history.sqlite` (container) | Outcomes and feedback |
 
 ## Classifier output schema
 

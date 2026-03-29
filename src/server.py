@@ -93,7 +93,9 @@ class RouterHandler(BaseHTTPRequestHandler):
                         p: {
                             "auth": ph.auth,
                             "quota": ph.quota,
+                            "quota_remaining_ratio": ph.quota_remaining_ratio,
                             "health_score": ph.health_score,
+                            "last_check_at": ph.last_check_at,
                         }
                         for p, ph in provider_health.items()
                     },
@@ -288,6 +290,8 @@ class RouterHandler(BaseHTTPRequestHandler):
                     http_status=body.get("http_status", 200 if body.get("success") else 500),
                     latency_ms=body.get("latency_ms"),
                     error_type=body.get("error_type"),
+                    quota_hint=body.get("quota_hint"),
+                    quota_remaining_ratio=body.get("quota_remaining_ratio"),
                 )
 
             _json_response(self, 200, {"ok": True})

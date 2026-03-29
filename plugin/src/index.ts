@@ -73,11 +73,17 @@ interface PendingOutcome {
   sessionKey?: string;
 }
 
+interface RouteRequestResult {
+  decision: RouteResponse | null;
+  error?: "timeout" | "http_error" | "network_error";
+  status?: number;
+}
+
 // ── Defaults ──────────────────────────────────────────────────────────────────
 
 const DEFAULT_URL         = "http://127.0.0.1:7771";
 const DEFAULT_CONFIDENCE  = 0.60;
-const DEFAULT_TIMEOUT_MS  = 3000;
+const DEFAULT_TIMEOUT_MS  = 10000;
 const DEFAULT_COST        = "balanced";
 const PLUGIN_VERSION      = "0.1.0";
 const RECENT_MESSAGE_TTL_MS = 5 * 60 * 1000;
@@ -123,11 +129,11 @@ async function routeRequest(
   routeMode: RouteMode,
   conversationContext?: string,
   useLlmClassifier?: boolean,
-): Promise<RouteResponse | null> {
-  try {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
+): Promise<RouteRequestResult> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
 
+  try {
     const res = await fetch(`${url}/route`, {
       method: "POST",
       headers: {
@@ -144,20 +150,51 @@ async function routeRequest(
       signal: controller.signal,
     });
 
-    clearTimeout(timer);
+    if (!res.ok) {
+      return { decision: null, error: "http_error", status: res.status };
+    }
 
-    if (!res.ok) return null;
-    return (await res.json()) as RouteResponse;
-  } catch {
-    return null;
+    return { decision: (await res.json()) as RouteResponse };
+  } catch (error: any) {
+    if (error?.name === "AbortError") {
+      return { decision: null, error: "timeout" };
+    }
+    return { decision: null, error: "network_error" };
+  } finally {
+    clearTimeout(timer);
   }
+}
+
+function describeRouteRequestFailure(result: RouteRequestResult, timeoutMs: number): string {
+  if (result.error === "timeout") {
+    return `router_timeout timeout_ms=${timeoutMs}`;
+  }
+  if (result.error === "http_error") {
+    return `router_http_error status=${result.status ?? "?"}`;
+  }
+  if (result.error === "network_error") {
+    return "router_network_error";
+  }
+  return "router_unavailable";
 }
 
 // ── Plugin entry ──────────────────────────────────────────────────────────────
 
 const recentUserMessages = new Map<string, { text: string; at: number }>();
-const recentRouteModes = new Map<string, { mode: RouteMode; at: number }>();
-const recentConversationRouteModes = new Map<string, { mode: RouteMode; at: number }>();
+interface RouteModeEntry {
+  mode: RouteMode;
+  at: number;
+  sticky: boolean;
+}
+
+interface RouteModeResolution {
+  mode: RouteMode;
+  source: "session" | "conversation" | "channel" | "default";
+  key?: string;
+}
+
+const recentRouteModes = new Map<string, RouteModeEntry>();
+const recentConversationRouteModes = new Map<string, RouteModeEntry>();
 const recentConversationKeyBySession = new Map<string, { conversationKey: string; at: number }>();
 const recentSessionKeyByConversation = new Map<string, { sessionKey: string; at: number }>();
 const recentConversationContextBySession = new Map<string, { context: string; at: number }>();
@@ -182,15 +219,20 @@ const STICKY_ROUTE_MODES = new Set<RouteMode>(["off"]);
 
 function rememberRouteMode(sessionKey: string, mode: RouteMode): void {
   if (!sessionKey || !ROUTE_MODES.has(mode)) return;
-  // Sticky modes use a far-future timestamp so they never expire.
-  const at = STICKY_ROUTE_MODES.has(mode) ? Number.MAX_SAFE_INTEGER : Date.now();
-  recentRouteModes.set(sessionKey, { mode, at });
+  recentRouteModes.set(sessionKey, {
+    mode,
+    at: Date.now(),
+    sticky: STICKY_ROUTE_MODES.has(mode),
+  });
 }
 
 function rememberConversationRouteMode(conversationKey: string, mode: RouteMode): void {
   if (!conversationKey || !ROUTE_MODES.has(mode)) return;
-  const at = STICKY_ROUTE_MODES.has(mode) ? Number.MAX_SAFE_INTEGER : Date.now();
-  recentConversationRouteModes.set(conversationKey, { mode, at });
+  recentConversationRouteModes.set(conversationKey, {
+    mode,
+    at: Date.now(),
+    sticky: STICKY_ROUTE_MODES.has(mode),
+  });
 }
 
 function rememberConversationKeyForSession(sessionKey: string, conversationKey: string): void {
@@ -286,26 +328,34 @@ function takeRecentUserMessage(sessionKey?: string): string | null {
   return entry.text;
 }
 
-function takeRecentRouteMode(sessionKey?: string): RouteMode | null {
+function getRecentRouteModeEntry(sessionKey?: string): RouteModeEntry | null {
   if (!sessionKey) return null;
   const entry = recentRouteModes.get(sessionKey);
   if (!entry) return null;
-  if (Date.now() - entry.at > RECENT_MESSAGE_TTL_MS) {
+  if (!entry.sticky && Date.now() - entry.at > RECENT_MESSAGE_TTL_MS) {
     recentRouteModes.delete(sessionKey);
     return null;
   }
-  return entry.mode;
+  return entry;
 }
 
-function takeRecentConversationRouteMode(conversationKey?: string): RouteMode | null {
+function takeRecentRouteMode(sessionKey?: string): RouteMode | null {
+  return getRecentRouteModeEntry(sessionKey)?.mode ?? null;
+}
+
+function getRecentConversationRouteModeEntry(conversationKey?: string): RouteModeEntry | null {
   if (!conversationKey) return null;
   const entry = recentConversationRouteModes.get(conversationKey);
   if (!entry) return null;
-  if (Date.now() - entry.at > RECENT_MESSAGE_TTL_MS) {
+  if (!entry.sticky && Date.now() - entry.at > RECENT_MESSAGE_TTL_MS) {
     recentConversationRouteModes.delete(conversationKey);
     return null;
   }
-  return entry.mode;
+  return entry;
+}
+
+function takeRecentConversationRouteMode(conversationKey?: string): RouteMode | null {
+  return getRecentConversationRouteModeEntry(conversationKey)?.mode ?? null;
 }
 
 function parseRouteModeFromText(text: string): RouteMode | null {
@@ -403,6 +453,7 @@ function buildRouteDecisionText(last: LastRouteDecision | null, detailed: boolea
     `First pass: ${last.firstPassModel ?? last.selectedModel}`,
     `Selected: ${last.selectedModel}`,
     `Actual: ${actual}${usageBits}`,
+    `Execution override detected: ${last.actualModel && last.actualModel !== last.selectedModel ? "yes" : "no"}`,
     `Fallbacks: ${fallbacks}`,
     `Reason: ${reason}`,
   ];
@@ -434,8 +485,8 @@ async function buildRouteCompareReply(
   const results = await Promise.all(
     uniqueModes.map(async (mode) => {
       const costProfile = resolveCostProfileForRouteMode(mode, last.costProfile);
-      const decision = await routeRequest(routerUrl, last.promptText ?? "", costProfile, timeoutMs, mode);
-      return { mode, costProfile, decision };
+      const result = await routeRequest(routerUrl, last.promptText ?? "", costProfile, timeoutMs, mode);
+      return { mode, costProfile, decision: result.decision, error: result.error, status: result.status };
     }),
   );
 
@@ -447,7 +498,15 @@ async function buildRouteCompareReply(
 
   for (const row of results) {
     if (!row.decision) {
-      lines.push(`${row.mode}: unavailable`);
+      if (row.error === "timeout") {
+        lines.push(`${row.mode}: timeout (${timeoutMs}ms)`);
+      } else if (row.error === "http_error") {
+        lines.push(`${row.mode}: http error (${row.status ?? "?"})`);
+      } else if (row.error === "network_error") {
+        lines.push(`${row.mode}: network error`);
+      } else {
+        lines.push(`${row.mode}: unavailable`);
+      }
       continue;
     }
     lines.push(
@@ -477,13 +536,13 @@ function resolveCostProfileForRouteMode(
   }
 }
 
-function buildRouteInteractiveReply(mode?: RouteMode): {
+function buildRouteInteractiveReply(mode?: RouteMode, scopeLabel = "this conversation"): {
   text: string;
   interactive: { blocks: Array<{ type: "text"; text: string } | { type: "buttons"; buttons: Array<{ label: string; value: string; style?: "primary" | "secondary" | "success" | "danger" }> }> };
 } {
   const label = mode ?? "auto";
   return {
-    text: `⚙️ Routing mode: ${label} (this session).`,
+    text: `⚙️ Routing mode: ${label} (${scopeLabel}).`,
     interactive: {
       blocks: [
         { type: "text", text: `Choose a routing mode (current: ${label}, sticky for this session):` },
@@ -566,54 +625,73 @@ function buildConversationContextFromMessages(messages: unknown[]): string {
 }
 
 async function resolveRouteModeFromSession(api: any, sessionKey?: string): Promise<RouteMode> {
-  const cached = takeRecentRouteMode(sessionKey);
-  if (cached) return cached;
+  return (await resolveRouteModeDetailsFromContext(api, { sessionKey })).mode;
+}
 
-  const conversationKey = resolveConversationKeyForSession(sessionKey);
-  const conversationMode = takeRecentConversationRouteMode(conversationKey ?? undefined);
-  if (conversationMode) {
-    if (sessionKey) rememberRouteMode(sessionKey, conversationMode);
-    return conversationMode;
+async function resolveRouteModeDetailsFromContext(api: any, ctx: any): Promise<RouteModeResolution> {
+  const candidates: Array<RouteModeResolution & { at: number }> = [];
+  const seen = new Set<string>();
+
+  const addConversationCandidate = (
+    key: string | null | undefined,
+    source: "conversation" | "channel",
+  ): void => {
+    if (!key || seen.has(`${source}:${key}`)) return;
+    seen.add(`${source}:${key}`);
+    const entry = getRecentConversationRouteModeEntry(key);
+    if (!entry) return;
+    candidates.push({ mode: entry.mode, source, key, at: entry.at });
+  };
+
+  const addSessionCandidate = (key?: string): void => {
+    if (!key || seen.has(`session:${key}`)) return;
+    seen.add(`session:${key}`);
+    const entry = getRecentRouteModeEntry(key);
+    if (!entry) return;
+    candidates.push({ mode: entry.mode, source: "session", key, at: entry.at });
+  };
+
+  addSessionCandidate(ctx?.sessionKey);
+
+  const conversationKey = buildConversationKeyFromContext(ctx);
+  addConversationCandidate(conversationKey, "conversation");
+
+  const mappedConversationKey = resolveConversationKeyForSession(ctx?.sessionKey);
+  if (mappedConversationKey && mappedConversationKey !== conversationKey) {
+    addConversationCandidate(mappedConversationKey, "conversation");
   }
 
-  // Do not recover mode from historical session messages.
-  // That can resurrect stale modes (e.g. old `/route off`) when command/session keys diverge.
-  return "auto";
+  const conversationIdKey = (ctx?.channelId ?? ctx?.channel)
+    ? [ctx.channelId ?? ctx.channel, ctx.accountId ?? "default", ctx.conversationId ?? "", ""].join(":")
+    : null;
+  if (conversationIdKey && conversationIdKey !== conversationKey) {
+    addConversationCandidate(conversationIdKey, "conversation");
+  }
+
+  const channelKey = ctx?.channelId ?? ctx?.channel ?? "";
+  if (channelKey) {
+    addConversationCandidate(channelKey, "channel");
+  }
+
+  candidates.sort((a, b) => b.at - a.at);
+  const resolved = candidates[0];
+  if (!resolved) {
+    return { mode: "auto", source: "default" };
+  }
+
+  if (ctx?.sessionKey && resolved.source !== "session") {
+    rememberRouteMode(ctx.sessionKey, resolved.mode);
+  }
+
+  return {
+    mode: resolved.mode,
+    source: resolved.source,
+    key: resolved.key,
+  };
 }
 
 async function resolveRouteModeFromContext(api: any, ctx: any): Promise<RouteMode> {
-  const conversationKey = buildConversationKeyFromContext(ctx);
-  if (conversationKey) {
-    const conversationMode = takeRecentConversationRouteMode(conversationKey);
-    if (conversationMode) {
-      if (ctx?.sessionKey) rememberRouteMode(ctx.sessionKey, conversationMode);
-      return conversationMode;
-    }
-  }
-
-  const sessionMode = await resolveRouteModeFromSession(api, ctx?.sessionKey);
-  if (sessionMode !== "auto") return sessionMode;
-
-  if (conversationKey) {
-    const fallbackConversationMode = takeRecentConversationRouteMode(conversationKey);
-    if (fallbackConversationMode) {
-      if (ctx?.sessionKey) rememberRouteMode(ctx.sessionKey, fallbackConversationMode);
-      return fallbackConversationMode;
-    }
-  }
-
-  // Fallback: check channel-only key — covers the case where the hook ctx lacks
-  // from/to/thread fields that the command ctx used when building conversationKey.
-  const channelKey = ctx?.channelId ?? ctx?.channel ?? "";
-  if (channelKey && channelKey !== conversationKey) {
-    const channelMode = takeRecentConversationRouteMode(channelKey);
-    if (channelMode) {
-      if (ctx?.sessionKey) rememberRouteMode(ctx.sessionKey, channelMode);
-      return channelMode;
-    }
-  }
-
-  return sessionMode;
+  return (await resolveRouteModeDetailsFromContext(api, ctx)).mode;
 }
 
 export default definePluginEntry({
@@ -648,18 +726,21 @@ export default definePluginEntry({
         const normalized = arg && ROUTE_MODES.has(arg) ? (arg as RouteMode) : undefined;
         const conversationKey = buildConversationKeyFromContext(ctx) ?? [ctx.channelId ?? ctx.channel, ctx.accountId ?? "default", ctx.from ?? ctx.to ?? "", ctx.messageThreadId ?? ""].join(":");
         const sessionKeyForConversation = conversationKey ? resolveSessionKeyForConversation(conversationKey) ?? undefined : undefined;
-        const inferredMode = await resolveRouteModeFromContext(api, ctx);
-        const currentMode = inferredMode ?? takeRecentConversationRouteMode(conversationKey) ?? "auto";
+        const modeResolution = await resolveRouteModeDetailsFromContext(api, ctx);
+        const currentMode = modeResolution.mode;
 
         if (!arg || arg === "help" || arg === "?") {
           return {
             text: buildRouteHelpText(currentMode),
-            interactive: buildRouteInteractiveReply(currentMode).interactive,
+            interactive: buildRouteInteractiveReply(currentMode, "this conversation").interactive,
           };
         }
 
         if (arg === "status") {
-          return buildRouteInteractiveReply(currentMode);
+          const scopeLabel = modeResolution.source === "default"
+            ? "default"
+            : `resolved from ${modeResolution.source}`;
+          return buildRouteInteractiveReply(currentMode, scopeLabel);
         }
 
         if (arg === "last") {
@@ -696,7 +777,7 @@ export default definePluginEntry({
         if (channelOnlyKey && channelOnlyKey !== conversationKey) {
           rememberConversationRouteMode(channelOnlyKey, normalized);
         }
-        return buildRouteInteractiveReply(normalized);
+        return buildRouteInteractiveReply(normalized, "this conversation");
       },
     });
 
@@ -810,7 +891,7 @@ export default definePluginEntry({
       const shouldUseLlmClassifier = Boolean(conversationContext.trim());
 
       if (routeMode === "auto") {
-        autoDecision = await routeRequest(
+        const autoResult = await routeRequest(
           routerUrl,
           routingText,
           firstPassCostProfile,
@@ -819,15 +900,17 @@ export default definePluginEntry({
           conversationContext,
           shouldUseLlmClassifier,
         );
+        autoDecision = autoResult.decision;
         if (!autoDecision) {
-          await debugLog(`[hook-result] source=${source} route=${routeMode} router_unavailable`);
-          if (debugMode) console.warn("[nexus-router] router unavailable, using default model");
+          const failure = describeRouteRequestFailure(autoResult, timeoutMs);
+          await debugLog(`[hook-result] source=${source} route=${routeMode} ${failure}`);
+          if (debugMode) console.warn(`[nexus-router] ${failure}, using default model`);
           return;
         }
 
         if (autoDecision.confidence < AUTO_ESCALATE_CONFIDENCE) {
           const balancedCostProfile = resolveCostProfileForRouteMode("balanced", costProfile);
-          const balancedDecision = await routeRequest(
+          const balancedResult = await routeRequest(
             routerUrl,
             routingText,
             balancedCostProfile,
@@ -836,6 +919,7 @@ export default definePluginEntry({
             conversationContext,
             shouldUseLlmClassifier,
           );
+          const balancedDecision = balancedResult.decision;
           if (balancedDecision) {
             decision = balancedDecision;
             finalMode = "balanced";
@@ -844,13 +928,17 @@ export default definePluginEntry({
               `[hook-auto-escalate] source=${source} from=auto confidence=${autoDecision.confidence.toFixed(2)} to=balanced selected=${balancedDecision.selected_model}`,
             );
           } else {
+            if (balancedResult.error) {
+              const failure = describeRouteRequestFailure(balancedResult, timeoutMs);
+              await debugLog(`[hook-auto-escalate] source=${source} balanced_fallback_failed ${failure}`);
+            }
             decision = autoDecision;
           }
         } else {
           decision = autoDecision;
         }
       } else {
-        decision = await routeRequest(
+        const directResult = await routeRequest(
           routerUrl,
           routingText,
           firstPassCostProfile,
@@ -859,9 +947,11 @@ export default definePluginEntry({
           conversationContext,
           shouldUseLlmClassifier,
         );
+        decision = directResult.decision;
         if (!decision) {
-          await debugLog(`[hook-result] source=${source} router_unavailable`);
-          if (debugMode) console.warn("[nexus-router] router unavailable, using default model");
+          const failure = describeRouteRequestFailure(directResult, timeoutMs);
+          await debugLog(`[hook-result] source=${source} route=${routeMode} ${failure}`);
+          if (debugMode) console.warn(`[nexus-router] ${failure}, using default model`);
           return;
         }
       }
@@ -870,7 +960,7 @@ export default definePluginEntry({
         if (sessionRef) {
           recentRouteCacheBySession.set(sessionRef, { text: dedupeText, mode: routeMode, at: Date.now() });
         }
-        await debugLog(`[hook-result] source=${source} router_unavailable`);
+        await debugLog(`[hook-result] source=${source} route=${routeMode} router_unavailable`);
         if (debugMode) console.warn("[nexus-router] router unavailable, using default model");
         return;
       }

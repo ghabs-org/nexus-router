@@ -7,13 +7,14 @@ Computes a composite health score (0.0–1.0) per provider.
 
 import json
 import math
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
 from .types import ProviderHealth
 
-HEALTH_FILE = Path(__file__).parent.parent / "state" / "runtime-health.json"
+HEALTH_FILE = Path(os.environ.get("NEXUS_ROUTER_HEALTH_FILE") or (Path(__file__).parent.parent / "state" / "runtime-health.json"))
 
 # Hard thresholds
 AUTH_STATUSES_OK       = {"ok"}
@@ -45,10 +46,12 @@ def load_provider_health(providers: Optional[list[str]] = None) -> dict[str, Pro
             provider=pid,
             auth=data.get("auth", "unknown"),
             quota=data.get("quota", "unknown"),
+            quota_remaining_ratio=data.get("quotaRemainingRatio"),
             recent_error_rate=data.get("recentErrorRate", 0.0),
             rate_limit_risk=data.get("rateLimitRisk", 0.0),
             latency_ms_p50=data.get("latencyMsP50"),
             last_failure_at=data.get("lastFailureAt"),
+            last_check_at=data.get("lastCheckAt"),
             health_score=_compute_health_score(data),
         )
         result[pid] = ph
@@ -63,17 +66,18 @@ def _compute_health_score(data: dict) -> float:
     Scoring logic:
     - Auth blocked (expired/missing)  → 0.0
     - Quota exhausted                 → 0.0
-    - Auth unknown                    → 0.80 (give benefit of the doubt)
-    - Quota low                       → -0.15 penalty
-    - High error rate                 → proportional penalty
-    - High rate limit risk            → proportional penalty
-    - High latency                    → mild penalty
+    - Auth unknown                    → modest penalty
+    - Known low remaining quota       → strong penalty
+    - Stale health data               → penalty
+    - High error/rate-limit/latency   → penalty
     """
     auth  = data.get("auth", "unknown")
     quota = data.get("quota", "unknown")
     err   = data.get("recentErrorRate", 0.0)
     ratelimit = data.get("rateLimitRisk", 0.0)
     latency   = data.get("latencyMsP50")
+    quota_ratio = data.get("quotaRemainingRatio")
+    last_check_at = data.get("lastCheckAt")
 
     # Hard blocks
     if auth in AUTH_STATUSES_BLOCKED:
@@ -87,19 +91,42 @@ def _compute_health_score(data: dict) -> float:
     if auth == "unknown":
         score -= 0.10
 
-    # Low quota — penalty
-    if quota in QUOTA_PENALIZED:
-        score -= 0.15
+    # Quota penalties: explicit ratio wins over coarse state.
+    if quota_ratio is not None:
+        try:
+            ratio = max(0.0, min(1.0, float(quota_ratio)))
+        except (TypeError, ValueError):
+            ratio = None
+        if ratio is not None:
+            if ratio <= 0.02:
+                return 0.0
+            if ratio <= 0.10:
+                score -= 0.55
+            elif ratio <= 0.25:
+                score -= 0.35
+            elif ratio <= 0.50:
+                score -= 0.15
+    elif quota in QUOTA_PENALIZED:
+        score -= 0.35
 
     # Error rate penalty (linear, capped at -0.40)
     score -= min(err * 0.40, 0.40)
 
-    # Rate limit risk penalty (linear, capped at -0.20)
-    score -= min(ratelimit * 0.20, 0.20)
+    # Rate limit risk penalty (linear, capped at -0.25)
+    score -= min(ratelimit * 0.25, 0.25)
 
     # Latency penalty (mild; only above 5000ms)
     if latency and latency > 5000:
         score -= min((latency - 5000) / 20000, 0.10)
+
+    # Staleness penalty: old health snapshots should carry less confidence.
+    if last_check_at:
+        try:
+            age_seconds = (datetime.now(timezone.utc) - datetime.fromisoformat(last_check_at)).total_seconds()
+            if age_seconds > 1800:
+                score -= min((age_seconds - 1800) / 21600, 0.15)
+        except Exception:
+            pass
 
     return round(max(score, 0.0), 4)
 
@@ -107,10 +134,11 @@ def _compute_health_score(data: dict) -> float:
 def record_observation(
     provider: str,
     auth_status: str,
-    quota_state: str = "unknown",
+    quota_state: Optional[str] = None,
     error_type: Optional[str] = None,
     latency_ms: Optional[int] = None,
     http_status: Optional[int] = None,
+    quota_remaining_ratio: Optional[float] = None,
 ):
     """
     Update runtime-health.json with a new observation for a provider.
@@ -127,7 +155,24 @@ def record_observation(
     pdata = raw.get("providers", {}).get(provider, {})
 
     pdata["auth"]         = auth_status
-    pdata["quota"]        = quota_state
+    if quota_state is not None:
+        pdata["quota"] = quota_state
+    elif "quota" not in pdata:
+        pdata["quota"] = "unknown"
+
+    if quota_remaining_ratio is not None:
+        try:
+            ratio = max(0.0, min(1.0, float(quota_remaining_ratio)))
+            pdata["quotaRemainingRatio"] = ratio
+            if ratio <= 0.02:
+                pdata["quota"] = "exhausted"
+            elif ratio <= 0.25:
+                pdata["quota"] = "low"
+            else:
+                pdata["quota"] = "healthy"
+        except (TypeError, ValueError):
+            pass
+
     pdata["lastCheckAt"]  = _now_iso()
 
     if error_type:

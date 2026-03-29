@@ -16,6 +16,7 @@ import sys
 
 from .router import Router
 from .types import ClassifierOutput, PreSignals
+from .quota_sync import load_snapshots_from_path, sync_snapshots
 
 
 def cmd_route(args):
@@ -78,6 +79,21 @@ def cmd_stats(args):
               f"{f'{lat:.0f}ms' if lat else 'n/a':>12}")
 
 
+def cmd_quota_sync(args):
+    snapshots = load_snapshots_from_path(args.input, skip_missing=args.skip_missing)
+    results = sync_snapshots(snapshots)
+    if args.json:
+        print(json.dumps({"synced": results}, indent=2))
+    else:
+        for row in results:
+            ratio = row.get("quota_remaining_ratio")
+            ratio_text = f"{ratio:.3f}" if isinstance(ratio, (int, float)) else "n/a"
+            print(
+                f"{row['provider']}: auth={row.get('auth', 'unknown')} quota={row.get('quota', 'unknown')} "
+                f"ratio={ratio_text}"
+            )
+
+
 def main():
     parser = argparse.ArgumentParser(description="Nexus Router CLI")
     sub = parser.add_subparsers(dest="command")
@@ -105,6 +121,13 @@ def main():
     # stats subcommand
     p_stats = sub.add_parser("stats", help="Show learned model stats")
     p_stats.set_defaults(func=cmd_stats)
+
+    # quota-sync subcommand
+    p_quota = sub.add_parser("quota-sync", help="Sync provider quota snapshots into runtime health")
+    p_quota.add_argument("--input", default="-", help="JSON file path or - for stdin")
+    p_quota.add_argument("--skip-missing", action="store_true", help="Exit 0 if the input file is missing")
+    p_quota.add_argument("--json", action="store_true", help="Output JSON")
+    p_quota.set_defaults(func=cmd_quota_sync)
 
     args = parser.parse_args()
     if not args.command:

@@ -34,6 +34,7 @@ def observe_turn_outcome(
     latency_ms: Optional[int],
     error_type: Optional[str],
     quota_hint: Optional[str] = None,
+    quota_remaining_ratio: Optional[float] = None,
 ):
     """
     Called after each model turn to passively update provider health.
@@ -60,7 +61,7 @@ def observe_turn_outcome(
     elif quota_hint:
         quota_state = quota_hint
     else:
-        quota_state = "unknown"
+        quota_state = None
 
     record_observation(
         provider=provider,
@@ -69,15 +70,17 @@ def observe_turn_outcome(
         error_type=error_type,
         latency_ms=latency_ms,
         http_status=http_status,
+        quota_remaining_ratio=quota_remaining_ratio,
     )
 
     log_provider_observation(
         provider=provider,
         auth_status=auth_status,
-        quota_state=quota_state,
+        quota_state=quota_state or "unknown",
         http_status=http_status,
         error_type=error_type,
         latency_ms=latency_ms,
+        note=(f"quota_ratio={quota_remaining_ratio:.3f}" if quota_remaining_ratio is not None else None),
     )
 
 
@@ -110,7 +113,7 @@ def probe_provider_auth(provider: str) -> dict:
         record_observation(
             provider=provider,
             auth_status=auth_status,
-            quota_state="unknown",
+            quota_state=None,
         )
         log_provider_observation(
             provider=provider,
@@ -148,7 +151,7 @@ def mark_provider_healthy(provider: str, latency_ms: Optional[int] = None):
         http_status=200,
         latency_ms=latency_ms,
         error_type=None,
-        quota_hint="healthy",
+        quota_hint=None,
     )
 
 

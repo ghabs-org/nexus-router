@@ -47,10 +47,12 @@ class ProviderHealth:
     provider: str
     auth: str = "unknown"             # ok|expired|missing|unknown
     quota: str = "unknown"            # healthy|low|exhausted|unknown
+    quota_remaining_ratio: Optional[float] = None  # 0.0–1.0 when known
     recent_error_rate: float = 0.0    # 0.0–1.0
     rate_limit_risk: float = 0.0      # 0.0–1.0
     latency_ms_p50: Optional[float] = None
     last_failure_at: Optional[str] = None
+    last_check_at: Optional[str] = None
     health_score: float = 1.0         # composite 0.0–1.0
 
 

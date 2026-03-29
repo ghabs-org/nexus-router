@@ -112,6 +112,8 @@ def record_turn_outcome(
     fallback_model: Optional[str] = None,
     user_override: bool = False,
     user_override_model: Optional[str] = None,
+    quota_hint: Optional[str] = None,
+    quota_remaining_ratio: Optional[float] = None,
 ):
     """
     Call this after a turn completes to record outcome and update health.
@@ -146,6 +148,8 @@ def record_turn_outcome(
         http_status=http_status or (200 if success else 500),
         latency_ms=latency_ms,
         error_type=error_type,
+        quota_hint=quota_hint,
+        quota_remaining_ratio=quota_remaining_ratio,
     )
 
 

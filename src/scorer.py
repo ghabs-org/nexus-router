@@ -159,6 +159,10 @@ def score_models(
         # Health component: direct from provider health
         health = health_score
 
+        # Generic quota pressure: if provider health says quota is low,
+        # make cheap/auto style routing less eager to burn that provider.
+        quota_penalty = _quota_pressure(ph, classifier, route_mode)
+
         # Preference: rank in routing policy (higher = earlier in list = more preferred)
         preference = _preference_score(model_id, preference_order)
 
@@ -189,6 +193,7 @@ def score_models(
             + cost_score * weights["cost"]
             + speed_score * weights["speed"]
         )
+        total -= quota_penalty
 
         mode = (route_mode or "").strip().lower()
         if mode == "fast":
@@ -225,6 +230,58 @@ def _resolve_weights(classifier: ClassifierOutput, policy_weights: Optional[dict
     if policy_weights:
         return policy_weights
     return COST_PROFILE_WEIGHT.get(classifier.cost_profile, DEFAULT_WEIGHTS)
+
+
+def _quota_pressure(
+    provider_health: Optional[ProviderHealth],
+    classifier: ClassifierOutput,
+    route_mode: Optional[str],
+) -> float:
+    """
+    Generic quota-aware penalty.
+
+    Goal:
+    - when a provider is on low remaining quota, avoid spending it on cheap chatter
+    - still allow it to win for higher-value work if task fit is clearly better
+    """
+    if not provider_health:
+        return 0.0
+
+    quota = (provider_health.quota or "unknown").strip().lower()
+    ratio = provider_health.quota_remaining_ratio
+    penalty = 0.0
+
+    if quota == "exhausted":
+        return 1.0
+
+    if ratio is not None:
+        try:
+            ratio = max(0.0, min(1.0, float(ratio)))
+        except (TypeError, ValueError):
+            ratio = None
+
+    if ratio is not None:
+        if ratio <= 0.10:
+            penalty += 0.25
+        elif ratio <= 0.25:
+            penalty += 0.16
+        elif ratio <= 0.50:
+            penalty += 0.06
+    elif quota == "low":
+        penalty += 0.12
+
+    mode = (route_mode or "").strip().lower()
+    if mode in {"auto", "fast"}:
+        penalty *= 1.35
+    elif mode == "balanced":
+        penalty *= 1.10
+
+    if classifier.task_type in {"fast_utility", "general_chat", "summarization"}:
+        penalty *= 1.25
+    elif classifier.task_type in {"coding", "code_review", "reasoning", "long_context"}:
+        penalty *= 0.75
+
+    return round(min(max(penalty, 0.0), 0.45), 4)
 
 
 def _fast_mode_correction(task_fit: float, cost_score: float, speed_score: float) -> float:

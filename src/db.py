@@ -9,6 +9,7 @@ Handles:
 """
 
 import json
+import os
 import sqlite3
 import uuid
 from datetime import datetime, timezone
@@ -17,7 +18,7 @@ from typing import Optional
 
 from .types import ClassifierOutput, PreSignals, ProviderHealth, RoutingDecision
 
-DB_PATH     = Path(__file__).parent.parent / "data" / "routing-history.sqlite"
+DB_PATH     = Path(os.environ.get("NEXUS_ROUTER_DB_PATH") or (Path(__file__).parent.parent / "data" / "routing-history.sqlite"))
 SCHEMA_PATH = Path(__file__).parent / "schema.sql"
 
 
