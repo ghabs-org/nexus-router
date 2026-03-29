@@ -80,6 +80,10 @@ const PLUGIN_VERSION      = "0.1.0";
 const RECENT_MESSAGE_TTL_MS = 5 * 60 * 1000;
 const AUTO_ESCALATE_CONFIDENCE = 0.76;
 const ROUTE_MODES = new Set(["auto", "balanced", "fast", "reasoning", "off"]);
+const ROUTE_DEDUPE_WINDOW_MS = 20_000;
+const ROUTE_BURST_WINDOW_MS = 5_000;
+const ROUTE_BURST_MAX_CALLS = 4;
+const ROUTE_BURST_BLOCK_MS = 60_000;
 
 function splitSelectedModelRef(selectedModel: string): {
   providerOverride?: string;
@@ -158,6 +162,8 @@ const recentLastDecisionBySession = new Map<string, LastRouteDecision>();
 const recentLastDecisionByConversation = new Map<string, LastRouteDecision>();
 const recentLastDecisionByDecisionId = new Map<string, LastRouteDecision>();
 const pendingOutcomeQueueBySessionId = new Map<string, PendingOutcome[]>();
+const recentRouteCacheBySession = new Map<string, { text: string; mode: RouteMode; at: number; selectedModel?: string }>();
+const routeBurstBySession = new Map<string, { windowStart: number; count: number; blockedUntil?: number }>();
 let recentLastDecisionGlobal: LastRouteDecision | null = null;
 
 function rememberRecentUserMessage(sessionKey: string, text: string): void {
@@ -225,6 +231,33 @@ function resolveSessionKeyForConversation(conversationKey: string): string | nul
     return null;
   }
   return entry.sessionKey;
+}
+
+function shouldBlockRoutingForBurst(sessionRef: string): boolean {
+  if (!sessionRef) return false;
+  const now = Date.now();
+  const current = routeBurstBySession.get(sessionRef) ?? { windowStart: now, count: 0 };
+
+  if (current.blockedUntil && now < current.blockedUntil) {
+    routeBurstBySession.set(sessionRef, current);
+    return true;
+  }
+
+  if (now - current.windowStart > ROUTE_BURST_WINDOW_MS) {
+    current.windowStart = now;
+    current.count = 0;
+    current.blockedUntil = undefined;
+  }
+
+  current.count += 1;
+  if (current.count > ROUTE_BURST_MAX_CALLS) {
+    current.blockedUntil = now + ROUTE_BURST_BLOCK_MS;
+    routeBurstBySession.set(sessionRef, current);
+    return true;
+  }
+
+  routeBurstBySession.set(sessionRef, current);
+  return false;
 }
 
 function buildConversationKeyFromContext(ctx: any): string | null {
@@ -523,27 +556,8 @@ async function resolveRouteModeFromSession(api: any, sessionKey?: string): Promi
     return conversationMode;
   }
 
-  if (!sessionKey || !api?.runtime?.subagent?.getSessionMessages) {
-    return "auto";
-  }
-  try {
-    const result = await api.runtime.subagent.getSessionMessages({ sessionKey, limit: 40 });
-    const messages = Array.isArray(result?.messages) ? result.messages : [];
-    for (let i = messages.length - 1; i >= 0; i -= 1) {
-      const fragments: string[] = [];
-      collectTextFragments(messages[i], fragments);
-      for (let j = fragments.length - 1; j >= 0; j -= 1) {
-        const parsed = parseRouteModeFromText(fragments[j]);
-        if (parsed) {
-          rememberRouteMode(sessionKey, parsed);
-          return parsed;
-        }
-      }
-    }
-  } catch {
-    // ignore lookup failures and fall back to auto
-  }
-
+  // Do not recover mode from historical session messages.
+  // That can resurrect stale modes (e.g. old `/route off`) when command/session keys diverge.
   return "auto";
 }
 
@@ -654,6 +668,7 @@ export default definePluginEntry({
 
         const routeModeSessionKey = sessionKeyForConversation ?? ctx.conversationId ?? ctx.sessionKey ?? ctx.channelId ?? ctx.senderId ?? "";
         rememberRouteMode(routeModeSessionKey, normalized);
+        if (ctx.sessionKey && ctx.sessionKey !== routeModeSessionKey) rememberRouteMode(ctx.sessionKey, normalized);
         rememberConversationRouteMode(conversationKey, normalized);
         // Also store with a channel-only key so before_model_resolve can find the mode
         // even when its hook ctx does not carry the full from/to/thread fields.
@@ -695,16 +710,24 @@ export default definePluginEntry({
     });
 
     // Register the pre-model-resolve hook
-    // Classifier prompt sentinel — used to detect recursive calls
-    const CLASSIFIER_SENTINEL = "Return ONLY a JSON object";
+    // Classifier prompt sentinels — used to detect recursive classifier calls.
+    // We match multiple markers because prompt compilation can reformat text.
+    const CLASSIFIER_SENTINELS = [
+      "return only a json object",
+      "message to classify",
+      "task_type",
+      "needs_tools",
+      "needs_vision",
+      "needs_long_context",
+    ];
 
     api.on("before_model_resolve", async (event: any, ctx: any) => {
-      const prompt = event.prompt ?? "";
+      const prompt = String(event.prompt ?? "");
+      const normalizedPrompt = prompt.toLowerCase();
 
       // Guard: skip routing when this turn IS the classifier call itself.
-      // The Codex CLI classifier sends a prompt that always starts with the sentinel.
-      // Without this guard, codex exec triggers before_model_resolve → infinite loop.
-      if (prompt.includes(CLASSIFIER_SENTINEL)) {
+      // Without this guard, codex exec triggers before_model_resolve → recursion loop.
+      if (CLASSIFIER_SENTINELS.every((m) => normalizedPrompt.includes(m))) {
         return;
       }
 
@@ -720,6 +743,29 @@ export default definePluginEntry({
 
       if (routeMode === "off") {
         await debugLog(`[hook-result] source=${source} route=${routeMode} bypassed`);
+        return;
+      }
+
+      const sessionRef = String(ctx?.sessionKey ?? ctx?.sessionId ?? ctx?.conversationId ?? "");
+      if (sessionRef && shouldBlockRoutingForBurst(sessionRef)) {
+        await debugLog(`[hook-result] source=${source} route=blocked burst session=${sessionRef}`);
+        return;
+      }
+
+      const dedupeText = routingText.trim();
+      const cached = sessionRef ? recentRouteCacheBySession.get(sessionRef) : undefined;
+      if (
+        sessionRef &&
+        cached &&
+        Date.now() - cached.at < ROUTE_DEDUPE_WINDOW_MS &&
+        cached.mode === routeMode &&
+        cached.text === dedupeText
+      ) {
+        if (cached.selectedModel) {
+          await debugLog(`[hook-result] source=${source} route=${routeMode} dedupe-hit model=${cached.selectedModel}`);
+          return splitSelectedModelRef(cached.selectedModel);
+        }
+        await debugLog(`[hook-result] source=${source} route=${routeMode} dedupe-hit bypass`);
         return;
       }
 
@@ -787,9 +833,21 @@ export default definePluginEntry({
       }
 
       if (!decision) {
+        if (sessionRef) {
+          recentRouteCacheBySession.set(sessionRef, { text: dedupeText, mode: routeMode, at: Date.now() });
+        }
         await debugLog(`[hook-result] source=${source} router_unavailable`);
         if (debugMode) console.warn("[nexus-router] router unavailable, using default model");
         return;
+      }
+
+      if (sessionRef) {
+        recentRouteCacheBySession.set(sessionRef, {
+          text: dedupeText,
+          mode: routeMode,
+          at: Date.now(),
+          selectedModel: decision.selected_model,
+        });
       }
 
       if (decision.confidence < minConfidence) {
