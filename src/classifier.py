@@ -83,9 +83,49 @@ DIRECT_PROVIDER_ADAPTERS: dict[str, DirectClassifierProviderAdapter] = {
         provider="openai-codex",
         env_var="OPENAI_API_KEY",
         base_url="https://api.openai.com",
-        api_path="/v1/responses",
+        api_path="/v1/chat/completions",
     ),
 }
+
+_AUTH_PROFILES_PATH = Path.home() / ".openclaw/agents/main/agent/auth-profiles.json"
+
+
+def _resolve_provider_token(provider: str) -> Optional[str]:
+    adapter = DIRECT_PROVIDER_ADAPTERS.get(provider)
+    env_key = adapter.env_var if adapter else None
+
+    if env_key:
+        val = os.environ.get(env_key)
+        if val:
+            return val
+
+    try:
+        profiles = json.loads(_AUTH_PROFILES_PATH.read_text())
+    except Exception:
+        return None
+
+    last_good = profiles.get("lastGood", {}).get(provider)
+    all_keys = list(profiles.get("profiles", {}).keys())
+    candidates = ([last_good] + [k for k in all_keys if k != last_good]) if last_good else all_keys
+
+    for key in candidates:
+        profile = profiles.get("profiles", {}).get(key)
+        if not isinstance(profile, dict):
+            continue
+        if profile.get("provider") != provider:
+            continue
+        ptype = profile.get("type")
+        if ptype == "oauth":
+            token = profile.get("access")
+            if token:
+                return token
+        elif ptype == "token":
+            token = profile.get("token")
+            if token:
+                return token
+
+    return None
+
 
 
 def build_classification_prompt(
@@ -435,17 +475,20 @@ def _call_direct_provider_classifier(
     if adapter is None:
         return None
 
-    api_key = os.environ.get(adapter.env_var)
+    api_key = _resolve_provider_token(provider)
     if not api_key:
         return None
 
+    # Use chat/completions schema which works with both API keys and OAuth tokens.
     payload = {
         "model": model_id,
-        "input": [
-            {"role": "system", "content": [{"type": "input_text", "text": SYSTEM_PROMPT}]},
-            {"role": "user", "content": [{"type": "input_text", "text": prompt}]},
+        "messages": [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": prompt},
         ],
-        "text": {"format": {"type": "json_object"}},
+        "max_tokens": 512,
+        "temperature": 0,
+        "response_format": {"type": "json_object"},
     }
 
     req = urllib_request.Request(
@@ -469,6 +512,15 @@ def _call_direct_provider_classifier(
     except Exception:
         return raw.strip() or None
 
+    # Chat-completions response schema
+    choices = parsed.get("choices")
+    if isinstance(choices, list) and choices:
+        msg = choices[0].get("message", {})
+        content = msg.get("content")
+        if isinstance(content, str) and content.strip():
+            return content.strip()
+
+    # Fallback: responses API or raw
     text = _extract_response_output_text(parsed)
     if text:
         return text
@@ -529,6 +581,8 @@ def classify_with_model(
             direct_attempted = True
             parsed = parse_classifier_response(stdout)
             if parsed is not None:
+                object.__setattr__(parsed, "classifier_provider", candidate.split("/", 1)[0] if "/" in candidate else None)
+                object.__setattr__(parsed, "classifier_model", candidate)
                 return parsed
 
     if not shutil.which(binary):
@@ -697,5 +751,4 @@ class AnthropicDirectClassifierAdapter:
         for block in getattr(message, "content", []) or []:
             if getattr(block, "type", None) == "text" and getattr(block, "text", None):
                 chunks.append(block.text)
-        return "
-".join(chunks).strip() if chunks else None
+        return "\n".join(chunks).strip() if chunks else None

@@ -519,7 +519,7 @@ class TestClassifier:
         raw = _call_direct_provider_classifier("classify this", "openai-codex/gpt-5.4-mini", timeout_seconds=7)
         assert raw is not None
         assert '"task_type":"reasoning"' in raw
-        assert captured["url"] == "https://api.openai.com/v1/responses"
+        assert captured["url"] == "https://api.openai.com/v1/chat/completions"
         assert captured["headers"]["Authorization"] == "Bearer test-openai-key"
         assert captured["body"]["model"] == "gpt-5.4-mini"
         assert captured["timeout"] == 7
