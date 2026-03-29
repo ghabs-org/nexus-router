@@ -487,6 +487,11 @@ function buildRouteInteractiveReply(mode?: RouteMode): {
   };
 }
 
+function resolveLastDecisionForContext(ctx: any, conversationKey: string): LastRouteDecision | null {
+  const bySession = ctx?.sessionKey ? recentLastDecisionBySession.get(ctx.sessionKey) ?? null : null;
+  return bySession ?? takeLastDecisionForConversation(conversationKey) ?? recentLastDecisionGlobal;
+}
+
 function buildRouteHelpText(currentMode: RouteMode): string {
   return [
     `⚙️ Nexus Router help`,
@@ -643,17 +648,17 @@ export default definePluginEntry({
         }
 
         if (arg === "last") {
-          const last = takeLastDecisionForConversation(conversationKey) ?? recentLastDecisionGlobal;
+          const last = resolveLastDecisionForContext(ctx, conversationKey);
           return buildRouteLastReply(last);
         }
 
         if (arg === "explain") {
-          const last = takeLastDecisionForConversation(conversationKey) ?? recentLastDecisionGlobal;
+          const last = resolveLastDecisionForContext(ctx, conversationKey);
           return buildRouteExplainReply(last);
         }
 
         if (arg.startsWith("compare")) {
-          const last = takeLastDecisionForConversation(conversationKey) ?? recentLastDecisionGlobal;
+          const last = resolveLastDecisionForContext(ctx, conversationKey);
           const modeList = rawArgs.split(/\s+/).slice(1).map((m: string) => m.toLowerCase()).filter(Boolean) as RouteMode[];
           const compareModes: RouteMode[] = modeList.length ? modeList : ["fast", "balanced", "reasoning"] as RouteMode[];
           return buildRouteCompareReply(routerUrl, last, compareModes, timeoutMs);
