@@ -671,7 +671,9 @@ export default definePluginEntry({
       const channel = ctx.channelId ?? event.channel ?? "unknown";
       const conversationKey = [channel, ctx.accountId ?? "default", ctx.conversationId ?? "", ""].join(":");
 
-      if (sessionKey && rawText) {
+      // Skip slash commands — they are not user prompts and should not be routed.
+      const isSlashCommand = rawText.startsWith("/");
+      if (sessionKey && rawText && !isSlashCommand) {
         rememberRecentUserMessage(sessionKey, rawText);
       }
       if (sessionKey && ctx.conversationId) {
