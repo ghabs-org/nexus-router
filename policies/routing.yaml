@@ -69,13 +69,13 @@ routing:
     candidates:
       - model: openai-codex/gpt-5.4-mini
         priority: 1
-      - model: google-gemini-cli/gemini-2.5-flash
-        priority: 2
-      - model: github-copilot/gpt-5.4-mini
-        priority: 3
-      - model: github-copilot/gpt-5-mini
-        priority: 4
       - model: google-gemini-cli/gemini-3-flash-preview
+        priority: 2
+      - model: google-gemini-cli/gemini-2.5-flash
+        priority: 3
+      - model: github-copilot/gpt-5.4-mini
+        priority: 4
+      - model: github-copilot/gpt-5-mini
         priority: 5
 
   long_context:
@@ -126,3 +126,13 @@ scoring:
     cost: 0.05           # cost efficiency
     speed: 0.05          # latency preference
   health_hard_cutoff: 0.30  # models below this health score are excluded
+
+feedback:
+  model_preference:
+    enabled: true
+    max_bump: 0.04
+    min_samples: 3
+    decay_window_days: 30
+  adapters:
+    telegram_enabled: true
+    discord_enabled: false

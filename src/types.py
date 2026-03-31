@@ -66,8 +66,11 @@ class ModelScore:
     health: float
     preference: float
     learned: float
-    cost: float
-    speed: float
+    model_preference_bump: float = 0.0
+    model_preference_samples: int = 0
+    model_preference_reason_tag: Optional[str] = None
+    cost: float = 0.0
+    speed: float = 0.0
     excluded: bool = False
     exclusion_reason: Optional[str] = None
 

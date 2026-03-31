@@ -12,6 +12,7 @@ Returns:
 - Ranked list of ModelScore objects
 """
 
+from datetime import datetime, timezone
 from typing import Optional
 
 from .types import ClassifierOutput, ModelScore, ProviderHealth
@@ -90,6 +91,7 @@ def score_models(
     weights = _resolve_weights(classifier, policy_weights)
     task_dim = TASK_TO_DIMENSION.get(classifier.task_type, "reasoning")
     preference_order = _build_preference_order(classifier.task_type, routing_policy)
+    preference_cfg = ((routing_policy or {}).get("feedback", {}) or {}).get("model_preference", {}) or {}
 
     eligible  = []
     excluded  = []
@@ -168,6 +170,13 @@ def score_models(
 
         # Learned: derived from historical success rate + override avoidance
         learned = _learned_score(model_id, classifier.task_type, learned_stats)
+        model_preference_bump, preference_meta = _model_preference_bump(
+            model_id,
+            classifier.task_type,
+            learned_stats,
+            preference_cfg,
+        )
+        learned = round(max(0.0, min(1.0, learned + model_preference_bump)), 4)
 
         # Cost: direct from model capability profile
         cost_score = scores_raw.get("cost", 0.65)
@@ -216,6 +225,9 @@ def score_models(
             health=round(health, 4),
             preference=round(preference, 4),
             learned=round(learned, 4),
+            model_preference_bump=round(model_preference_bump, 4),
+            model_preference_samples=int(preference_meta.get("samples", 0)),
+            model_preference_reason_tag=preference_meta.get("top_reason_tag"),
             cost=round(cost_score, 4),
             speed=round(speed_score, 4),
         ))
@@ -367,3 +379,64 @@ def _learned_score(model_id: str, task_type: str, learned_stats: dict[str, dict]
     score -= min(override_rate * 0.20, 0.20)
 
     return round(max(0.0, min(1.0, score)), 4)
+
+
+def _model_preference_bump(
+    model_id: str,
+    task_type: str,
+    learned_stats: dict[str, dict],
+    preference_cfg: dict,
+) -> tuple[float, dict[str, object]]:
+    enabled = bool(preference_cfg.get("enabled", False))
+    if not enabled:
+        return 0.0, {"samples": 0}
+
+    stats = learned_stats.get(model_id) or {}
+    feedback = stats.get("feedback_preference")
+    if not isinstance(feedback, dict):
+        return 0.0, {"samples": 0}
+
+    task_feedback = feedback.get(task_type) or feedback.get("*")
+    if not isinstance(task_feedback, dict):
+        return 0.0, {"samples": 0}
+
+    samples = int(task_feedback.get("samples") or 0)
+    min_samples = max(1, int(preference_cfg.get("min_samples", 3) or 3))
+    if samples < min_samples:
+        return 0.0, {"samples": samples}
+
+    score = float(task_feedback.get("score") or 0.0)
+    if score <= 0:
+        return 0.0, {"samples": samples, "top_reason_tag": task_feedback.get("top_reason_tag")}
+
+    max_bump = float(preference_cfg.get("max_bump", 0.04) or 0.04)
+    decay_days = max(1, int(preference_cfg.get("decay_window_days", 30) or 30))
+    last_feedback_at = _parse_iso_utc(task_feedback.get("last_feedback_at"))
+    if last_feedback_at is None:
+        decay_factor = 1.0
+    else:
+        age_days = max(0.0, (datetime.now(timezone.utc) - last_feedback_at).total_seconds() / 86400.0)
+        decay_factor = max(0.0, 1.0 - min(age_days / decay_days, 1.0))
+
+    sample_factor = min(1.0, samples / max(min_samples * 3, 1))
+    bump = min(max_bump, max_bump * score * decay_factor * sample_factor)
+    return round(max(0.0, bump), 4), {
+        "samples": samples,
+        "top_reason_tag": task_feedback.get("top_reason_tag"),
+        "decay_factor": round(decay_factor, 4),
+    }
+
+
+def _parse_iso_utc(value: object) -> datetime | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    candidate = value.strip()
+    if candidate.endswith("Z"):
+        candidate = candidate[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(candidate)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)

@@ -10,6 +10,7 @@ Usage:
 """
 
 import json
+import os
 from dataclasses import replace
 from pathlib import Path
 from typing import Optional
@@ -59,6 +60,11 @@ class Router:
 
         self._registry     = self._load_registry()
         self._routing      = self._load_routing()
+        # Temporary switch: keep routing.yaml on disk but ignore it unless explicitly enabled.
+        # Re-enable by setting NEXUS_ROUTER_ENABLE_ROUTING_POLICY=1.
+        self._use_routing_policy = os.getenv(
+            "NEXUS_ROUTER_ENABLE_ROUTING_POLICY", "0"
+        ).strip().lower() in {"1", "true", "yes", "on"}
 
         if self.persist:
             ensure_schema()
@@ -111,14 +117,19 @@ class Router:
         learned_stats   = load_model_stats()
 
         # Score all models
-        policy_weights = self._routing.get("scoring", {}).get("weights")
+        routing_policy = self._routing if self._use_routing_policy else None
+        policy_weights = (
+            self._routing.get("scoring", {}).get("weights")
+            if self._use_routing_policy
+            else None
+        )
         scored = score_models(
             classifier=effective_classifier,
             models=self._registry,
             provider_health=provider_health,
             learned_stats=learned_stats,
             policy_weights=policy_weights,
-            routing_policy=self._routing,
+            routing_policy=routing_policy,
             route_mode=effective_route_mode,
         )
 
@@ -302,6 +313,15 @@ def _build_reason(
         f"(task_fit={primary.task_fit:.2f}, health={primary.health:.2f}, "
         f"pref={primary.preference:.2f}, learned={primary.learned:.2f})"
     )
+
+    if primary.model_preference_bump > 0:
+        detail = (
+            f"feedback preference bump +{primary.model_preference_bump:.3f} "
+            f"from {primary.model_preference_samples} recent samples"
+        )
+        if primary.model_preference_reason_tag:
+            detail += f" ({primary.model_preference_reason_tag})"
+        reasons.append(detail)
 
     if classifier.cost_profile == "cheap":
         reasons.append("cost-sensitive routing applied")

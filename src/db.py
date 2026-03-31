@@ -14,7 +14,7 @@ import sqlite3
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 from .types import ClassifierOutput, PreSignals, ProviderHealth, RoutingDecision
 
@@ -39,7 +39,28 @@ def ensure_schema():
         sql = f.read()
     conn = _connect()
     conn.executescript(sql)
+    _ensure_feedback_table_compat(conn)
     conn.close()
+
+
+def _ensure_feedback_table_compat(conn: sqlite3.Connection) -> None:
+    columns = {row["name"] for row in conn.execute("PRAGMA table_info(route_feedback)").fetchall()}
+    if not columns:
+        return
+    expected = {
+        "corrected_task": "TEXT",
+        "model_verdict": "TEXT",
+        "preferred_model": "TEXT",
+        "reason_tag": "TEXT",
+        "source_surface": "TEXT",
+        "source_channel": "TEXT",
+        "source_message_id": "TEXT",
+        "source_user_id": "TEXT",
+        "metadata": "TEXT",
+    }
+    for column, column_type in expected.items():
+        if column not in columns:
+            conn.execute(f"ALTER TABLE route_feedback ADD COLUMN {column} {column_type}")
 
 
 def write_decision(
@@ -250,7 +271,10 @@ def load_model_stats() -> dict[str, dict]:
     conn = _connect()
     try:
         rows = conn.execute("SELECT * FROM model_stats").fetchall()
-        return {row["model"]: dict(row) for row in rows}
+        stats = {row["model"]: dict(row) for row in rows}
+        for model, feedback in _load_feedback_preferences(conn).items():
+            stats.setdefault(model, {"model": model})["feedback_preference"] = feedback
+        return stats
     finally:
         conn.close()
 
@@ -283,3 +307,86 @@ def log_provider_observation(
         conn.commit()
     finally:
         conn.close()
+
+
+def _load_feedback_preferences(conn: sqlite3.Connection) -> dict[str, dict[str, dict[str, Any]]]:
+    try:
+        rows = conn.execute(
+            """
+            SELECT
+              COALESCE(rf.preferred_model, rd.selected_model) AS model,
+              COALESCE(NULLIF(rf.corrected_task, ''), rd.task_type, '*') AS task_type,
+              COUNT(*) AS sample_count,
+              AVG(
+                CASE rf.model_verdict
+                  WHEN 'good' THEN 1.0
+                  WHEN 'neutral' THEN 0.4
+                  WHEN 'bad' THEN 0.0
+                  ELSE CASE rf.verdict WHEN 'correct' THEN 0.75 ELSE 0.0 END
+                END
+              ) AS preference_score,
+              MAX(rf.created_at) AS last_feedback_at,
+              MAX(COALESCE(rf.reason_tag, '')) AS top_reason_tag
+            FROM route_feedback rf
+            LEFT JOIN routing_decisions rd ON rd.id = rf.decision_id
+            WHERE COALESCE(rf.preferred_model, rd.selected_model) IS NOT NULL
+            GROUP BY COALESCE(rf.preferred_model, rd.selected_model), COALESCE(NULLIF(rf.corrected_task, ''), rd.task_type, '*')
+            """
+        ).fetchall()
+    except sqlite3.OperationalError:
+        return {}
+    grouped: dict[str, dict[str, dict[str, Any]]] = {}
+    for row in rows:
+        grouped.setdefault(row["model"], {})[row["task_type"]] = {
+            "samples": int(row["sample_count"] or 0),
+            "score": round(float(row["preference_score"] or 0.0), 4),
+            "last_feedback_at": row["last_feedback_at"],
+            "top_reason_tag": row["top_reason_tag"] or None,
+        }
+    return grouped
+
+
+def record_feedback(
+    decision_id: str,
+    verdict: str,
+    corrected_task: Optional[str] = None,
+    model_verdict: Optional[str] = None,
+    preferred_model: Optional[str] = None,
+    reason_tag: Optional[str] = None,
+    source_surface: Optional[str] = None,
+    source_channel: Optional[str] = None,
+    source_message_id: Optional[str] = None,
+    source_user_id: Optional[str] = None,
+    metadata: Optional[dict[str, Any]] = None,
+) -> str:
+    feedback_id = str(uuid.uuid4())
+    conn = _connect()
+    try:
+        conn.execute(
+            """
+            INSERT INTO route_feedback (
+              id, created_at, decision_id, verdict, corrected_task,
+              model_verdict, preferred_model, reason_tag,
+              source_surface, source_channel, source_message_id, source_user_id, metadata
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                feedback_id,
+                _now_iso(),
+                decision_id,
+                verdict,
+                corrected_task,
+                model_verdict,
+                preferred_model,
+                reason_tag,
+                source_surface,
+                source_channel,
+                source_message_id,
+                source_user_id,
+                json.dumps(metadata or {}),
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    return feedback_id

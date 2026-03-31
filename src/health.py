@@ -172,6 +172,8 @@ def record_observation(
                 pdata["quota"] = "healthy"
         except (TypeError, ValueError):
             pass
+    elif http_status == 429 and pdata.get("quota") == "low":
+        pdata["quota"] = "exhausted"
 
     pdata["lastCheckAt"]  = _now_iso()
 

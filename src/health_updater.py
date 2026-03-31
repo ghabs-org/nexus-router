@@ -28,6 +28,19 @@ MANAGED_PROVIDERS = [
 ]
 
 
+def _infer_probe_failure(stdout: str, stderr: str) -> tuple[str, Optional[str], Optional[str], Optional[int]]:
+    combined = f"{stdout}\n{stderr}".lower()
+
+    if "429" in combined or "rate limit" in combined or "quota" in combined or "capacity" in combined:
+        exhausted = any(token in combined for token in ["quota exhausted", "quota exceeded", "no capacity available", "capacity exhausted", "exhausted"])
+        return "ok", "exhausted" if exhausted else "low", "rate_limit", 429
+    if "401" in combined or "403" in combined or "unauthorized" in combined or "forbidden" in combined:
+        return "expired", None, "auth", 401
+    if "timeout" in combined:
+        return "unknown", None, "timeout", None
+    return "unknown", None, "unknown", None
+
+
 def observe_turn_outcome(
     provider: str,
     http_status: Optional[int],
@@ -55,11 +68,17 @@ def observe_turn_outcome(
     else:
         auth_status = "unknown"
 
+    normalized_hint = (quota_hint or "").strip().lower() or None
+
     # Determine quota state
-    if http_status == 429:
+    if normalized_hint in {"exhausted", "depleted", "empty"}:
+        quota_state = "exhausted"
+    elif normalized_hint in {"low", "limited", "throttled"}:
         quota_state = "low"
-    elif quota_hint:
-        quota_state = quota_hint
+    elif http_status == 429:
+        quota_state = "exhausted" if error_type in {"rate_limit_exhausted", "capacity", "capacity_exhausted"} else "low"
+    elif normalized_hint:
+        quota_state = normalized_hint
     else:
         quota_state = None
 
@@ -99,8 +118,26 @@ def probe_provider_auth(provider: str) -> dict:
             timeout=30,
         )
         if result.returncode != 0:
-            record_observation(provider=provider, auth_status="unknown")
-            return {"provider": provider, "auth": "unknown", "error": result.stderr.strip()}
+            auth_status, quota_state, error_type, http_status = _infer_probe_failure(result.stdout, result.stderr)
+            record_observation(
+                provider=provider,
+                auth_status=auth_status,
+                quota_state=quota_state,
+                error_type=error_type,
+                http_status=http_status,
+            )
+            log_provider_observation(
+                provider=provider,
+                auth_status=auth_status,
+                quota_state=quota_state or "unknown",
+                http_status=http_status,
+                error_type=error_type,
+                note=f"probe: returncode={result.returncode}",
+            )
+            summary = {"provider": provider, "auth": auth_status, "error": result.stderr.strip()}
+            if quota_state:
+                summary["quota"] = quota_state
+            return summary
 
         data = json.loads(result.stdout)
 

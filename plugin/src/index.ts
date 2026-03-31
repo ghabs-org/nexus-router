@@ -35,7 +35,7 @@ interface RouteResponse {
   fallbacks: string[];
   score: number;
   reason: string[];
-  classifier_source?: "explicit" | "heuristic" | "llm" | "fallback";
+  classifier_source?: "explicit" | "local" | "heuristic" | "llm" | "fallback";
   reply_context_used?: boolean;
 }
 
@@ -45,10 +45,11 @@ interface LastRouteDecision {
   requestedRouteMode: RouteMode;
   routeMode: RouteMode;
   source: "compiled-prompt" | "raw-user";
+  sourceTag: string;
   promptLen: number;
   promptText?: string;
   replyContextUsed: boolean;
-  classifierSource: "explicit" | "heuristic" | "llm" | "fallback";
+  classifierSource: "explicit" | "local" | "heuristic" | "llm" | "fallback";
   costProfile: "cheap" | "balanced" | "premium";
   taskType: string;
   effectiveTaskType?: string;
@@ -60,6 +61,9 @@ interface LastRouteDecision {
   actualModel?: string;
   actualProvider?: string;
   usage?: { input?: number; output?: number; total?: number };
+  runtimeSuccess?: boolean;
+  runtimeDurationMs?: number;
+  runtimeError?: string;
   fallbacks: string[];
   score: number;
   reason: string[];
@@ -71,6 +75,14 @@ interface PendingOutcome {
   selectedModel: string;
   selectedProvider: string;
   sessionKey?: string;
+}
+
+interface FailureInference {
+  httpStatus?: number;
+  errorType?: "rate_limit" | "auth" | "server" | "timeout" | "unknown";
+  quotaHint?: "low" | "exhausted";
+  quotaRemainingRatio?: number;
+  shouldCooldownOverride: boolean;
 }
 
 interface RouteRequestResult {
@@ -87,12 +99,15 @@ const DEFAULT_TIMEOUT_MS  = 10000;
 const DEFAULT_COST        = "balanced";
 const PLUGIN_VERSION      = "0.1.0";
 const RECENT_MESSAGE_TTL_MS = 5 * 60 * 1000;
-const AUTO_ESCALATE_CONFIDENCE = 0.76;
+const AUTO_ESCALATE_CONFIDENCE = 0.70;
 const ROUTE_MODES = new Set(["auto", "balanced", "fast", "reasoning", "off"]);
 const ROUTE_DEDUPE_WINDOW_MS = 20_000;
 const ROUTE_BURST_WINDOW_MS = 5_000;
 const ROUTE_BURST_MAX_CALLS = 4;
 const ROUTE_BURST_BLOCK_MS = 60_000;
+const STARTUP_BYPASS_WINDOW_MS = 30_000;
+const COMPILED_RETRY_BYPASS_WINDOW_MS = 15 * 60 * 1000;
+const FAILED_OVERRIDE_COOLDOWN_MS = 15 * 60 * 1000;
 
 function splitSelectedModelRef(selectedModel: string): {
   providerOverride?: string;
@@ -203,8 +218,12 @@ const recentLastDecisionByConversation = new Map<string, LastRouteDecision>();
 const recentLastDecisionByDecisionId = new Map<string, LastRouteDecision>();
 const pendingOutcomeQueueBySessionId = new Map<string, PendingOutcome[]>();
 const recentRouteCacheBySession = new Map<string, { text: string; mode: RouteMode; at: number; selectedModel?: string }>();
+const recentSenderBySession = new Map<string, { senderId: string; channelId?: string; at: number }>();
+const recentFeedbackPromptByDecisionId = new Map<string, { at: number }>();
 const routeBurstBySession = new Map<string, { windowStart: number; count: number; blockedUntil?: number }>();
 const recentSlashCommandBySession = new Map<string, { at: number; cmd: string }>();
+const recentStartupBySession = new Map<string, { at: number; reason: string }>();
+const recentFailedOverrides = new Map<string, { at: number; blockedUntil: number; reason: string }>();
 const RECENT_COMMAND_GUARD_MS = 15_000;
 let recentLastDecisionGlobal: LastRouteDecision | null = null;
 
@@ -214,8 +233,30 @@ function rememberRecentUserMessage(sessionKey: string, text: string): void {
   recentUserMessages.set(sessionKey, { text: trimmed, at: Date.now() });
 }
 
-// Modes that should never expire — set explicitly by the user.
-const STICKY_ROUTE_MODES = new Set<RouteMode>(["off"]);
+// Route mode is an explicit user preference. Keep it sticky for the life of the
+// session/conversation instead of silently expiring back to the default.
+const STICKY_ROUTE_MODES = new Set<RouteMode>(["auto", "balanced", "fast", "reasoning", "off"]);
+
+export function isShortFollowUpForContextualRouting(text?: string): boolean {
+  const trimmed = (text ?? "").trim();
+  if (!trimmed) return true;
+  const words = trimmed.split(/\s+/).filter(Boolean);
+  if (trimmed.length <= 24) return true;
+  if (words.length <= 5 && trimmed.length <= 48) return true;
+  return false;
+}
+
+export function shouldUseContextualLlmClassifier(
+  routeMode: RouteMode,
+  conversationContext?: string,
+  routingText?: string,
+): boolean {
+  if (!conversationContext?.trim()) return false;
+  if (!routingText?.trim()) return false;
+  if (routeMode === "auto" || routeMode === "fast") return false;
+  if (isShortFollowUpForContextualRouting(routingText)) return false;
+  return true;
+}
 
 function rememberRouteMode(sessionKey: string, mode: RouteMode): void {
   if (!sessionKey || !ROUTE_MODES.has(mode)) return;
@@ -245,6 +286,294 @@ function rememberConversationKeyForSession(sessionKey: string, conversationKey: 
 function rememberConversationContextForSession(sessionKey: string, context: string): void {
   if (!sessionKey || !context.trim()) return;
   recentConversationContextBySession.set(sessionKey, { context: context.trim(), at: Date.now() });
+}
+
+function rememberSenderForSession(sessionKey: string, senderId?: string, channelId?: string): void {
+  const trimmedSender = String(senderId ?? "").trim();
+  if (!sessionKey || !trimmedSender) return;
+  recentSenderBySession.set(sessionKey, { senderId: trimmedSender, channelId: channelId?.trim() || undefined, at: Date.now() });
+}
+
+function resolveSenderForSession(sessionKey?: string): { senderId: string; channelId?: string } | null {
+  if (!sessionKey) return null;
+  const entry = recentSenderBySession.get(sessionKey);
+  if (!entry) return null;
+  if (Date.now() - entry.at > RECENT_MESSAGE_TTL_MS) {
+    recentSenderBySession.delete(sessionKey);
+    return null;
+  }
+  return { senderId: entry.senderId, channelId: entry.channelId };
+}
+
+function rememberFeedbackPrompt(decisionId?: string): void {
+  const trimmed = String(decisionId ?? "").trim();
+  if (!trimmed) return;
+  recentFeedbackPromptByDecisionId.set(trimmed, { at: Date.now() });
+}
+
+function hasRecentFeedbackPrompt(decisionId?: string): boolean {
+  const trimmed = String(decisionId ?? "").trim();
+  if (!trimmed) return false;
+  const entry = recentFeedbackPromptByDecisionId.get(trimmed);
+  if (!entry) return false;
+  if (Date.now() - entry.at > RECENT_MESSAGE_TTL_MS) {
+    recentFeedbackPromptByDecisionId.delete(trimmed);
+    return false;
+  }
+  return true;
+}
+
+function buildFeedbackKeyboard(decisionId: string): Array<Array<{ text: string; callback_data: string }>> {
+  return [
+    [
+      { text: "✅ Correct", callback_data: `routefb:ok:${decisionId}` },
+      { text: "❌ Wrong", callback_data: `routefb:wrong:${decisionId}` },
+    ],
+    [
+      { text: "coding", callback_data: `routefb:fix:${decisionId}:coding` },
+      { text: "review", callback_data: `routefb:fix:${decisionId}:code_review` },
+    ],
+    [
+      { text: "reasoning", callback_data: `routefb:fix:${decisionId}:reasoning` },
+      { text: "chat", callback_data: `routefb:fix:${decisionId}:general_chat` },
+    ],
+  ];
+}
+
+async function sendTelegramFeedbackCard(
+  api: any,
+  targetSenderId: string,
+  decision: RouteResponse,
+  sourceTag: string,
+): Promise<boolean> {
+  const decisionId = String(decision.decision_id || "").trim();
+  if (!decisionId || hasRecentFeedbackPrompt(decisionId)) {
+    return false;
+  }
+
+  const task = String(decision.task_type || "unknown");
+  const model = String(decision.selected_model || "unknown");
+  const confidence = Number.isFinite(decision.confidence) ? decision.confidence.toFixed(2) : "?";
+  const lines = [
+    `🧭 ${task} · ${model} · ${confidence}`,
+    `Source: ${sourceTag}`,
+    `Feedback?`,
+  ];
+  const text = lines.join("\n");
+
+  try {
+    const telegram = api?.runtime?.telegram;
+    if (!telegram?.sendMessageTelegram) {
+      await debugLog(`[feedback-card] skipped decision=${decisionId} reason=no_telegram_runtime`);
+      return false;
+    }
+    const result = await telegram.sendMessageTelegram(targetSenderId, text, {
+      buttons: buildFeedbackKeyboard(decisionId),
+      textMode: "markdown",
+      cfg: api?.config?.loadConfig?.(),
+    });
+    rememberFeedbackPrompt(decisionId);
+    await debugLog(`[feedback-card] sent decision=${decisionId} to=${targetSenderId} message_id=${result?.messageId ?? "?"}`);
+    return true;
+  } catch (error: any) {
+    await debugLog(`[feedback-card] failed decision=${decisionId} to=${targetSenderId} error=${error?.message ?? String(error)}`);
+    return false;
+  }
+}
+
+function markRecentStartup(sessionKey?: string, reason = "startup"): void {
+  if (!sessionKey) return;
+  recentStartupBySession.set(sessionKey, { at: Date.now(), reason });
+}
+
+function takeRecentStartupReason(sessionKey?: string): string | null {
+  if (!sessionKey) return null;
+  const entry = recentStartupBySession.get(sessionKey);
+  if (!entry) return null;
+  if (Date.now() - entry.at > STARTUP_BYPASS_WINDOW_MS) {
+    recentStartupBySession.delete(sessionKey);
+    return null;
+  }
+  recentStartupBySession.delete(sessionKey);
+  return entry.reason;
+}
+
+function classifySessionKind(sessionKey?: string): "cron" | "subagent" | "direct" | "slash" | "main" | "other" {
+  const key = (sessionKey ?? "").toLowerCase();
+  if (!key) return "other";
+  if (key.startsWith("cron:") || key.includes(":cron:")) return "cron";
+  if (key.includes(":subagent:")) return "subagent";
+  if (key.includes(":direct:")) return "direct";
+  if (key.includes(":slash:")) return "slash";
+  if (key.endsWith(":main")) return "main";
+  return "other";
+}
+
+function shouldDefaultRouteOff(sessionKey?: string): boolean {
+  const kind = classifySessionKind(sessionKey);
+  return kind === "direct" || kind === "slash" || kind === "main";
+}
+
+function inferCronLabel(prompt: string): string {
+  const lowered = prompt.toLowerCase();
+  if (lowered.includes("self_heal_alerts.py") || lowered.includes("self-heal incident")) return "self-heal";
+  if (lowered.includes("morning-brief.sh") || lowered.includes("morning brief")) return "morning-brief";
+  if (lowered.includes("backup status")) return "backup-status";
+  return "job";
+}
+
+function buildSourceTag(ctx: any, source: "compiled-prompt" | "raw-user", prompt: string, startupReason?: string | null): string {
+  if (ctx?.trigger === "cron" || classifySessionKind(ctx?.sessionKey) === "cron") {
+    return `cron:${inferCronLabel(prompt)}`;
+  }
+  if (startupReason) {
+    return "startup";
+  }
+  if (source === "raw-user") {
+    return "user";
+  }
+  if (ctx?.trigger === "heartbeat") {
+    return "heartbeat";
+  }
+  if (ctx?.trigger === "memory") {
+    return "memory";
+  }
+  return "compiled";
+}
+
+function clearRecentRoutingState(sessionKey?: string): void {
+  if (!sessionKey) return;
+  recentUserMessages.delete(sessionKey);
+  recentConversationContextBySession.delete(sessionKey);
+  recentRouteCacheBySession.delete(sessionKey);
+  recentSlashCommandBySession.delete(sessionKey);
+  recentStartupBySession.delete(sessionKey);
+  recentLastDecisionBySession.delete(sessionKey);
+  recentSenderBySession.delete(sessionKey);
+}
+
+function resetInMemoryRoutingState(): void {
+  recentUserMessages.clear();
+  recentRouteModes.clear();
+  recentConversationRouteModes.clear();
+  recentConversationKeyBySession.clear();
+  recentSessionKeyByConversation.clear();
+  recentConversationContextBySession.clear();
+  recentLastDecisionBySession.clear();
+  recentLastDecisionByConversation.clear();
+  recentLastDecisionByDecisionId.clear();
+  pendingOutcomeQueueBySessionId.clear();
+  recentRouteCacheBySession.clear();
+  recentSenderBySession.clear();
+  recentFeedbackPromptByDecisionId.clear();
+  routeBurstBySession.clear();
+  recentSlashCommandBySession.clear();
+  recentStartupBySession.clear();
+  recentFailedOverrides.clear();
+  recentLastDecisionGlobal = null;
+}
+
+function buildFailedOverrideKeys(sessionKey: string | undefined, conversationKey: string | null, selectedModel: string, selectedProvider: string): string[] {
+  const keys = new Set<string>();
+  const model = selectedModel.trim();
+  const provider = selectedProvider.trim();
+  if (sessionKey) {
+    keys.add(`session:${sessionKey}:model:${model}`);
+    keys.add(`session:${sessionKey}:provider:${provider}`);
+  }
+  if (conversationKey) {
+    keys.add(`conversation:${conversationKey}:model:${model}`);
+    keys.add(`conversation:${conversationKey}:provider:${provider}`);
+  }
+  return Array.from(keys);
+}
+
+function rememberFailedOverride(sessionKey: string | undefined, conversationKey: string | null, selectedModel: string, selectedProvider: string, reason: string): void {
+  const now = Date.now();
+  const blockedUntil = now + FAILED_OVERRIDE_COOLDOWN_MS;
+  for (const key of buildFailedOverrideKeys(sessionKey, conversationKey, selectedModel, selectedProvider)) {
+    recentFailedOverrides.set(key, { at: now, blockedUntil, reason });
+  }
+}
+
+function getFailedOverrideBlock(sessionKey: string | undefined, conversationKey: string | null, selectedModel: string, selectedProvider: string): { at: number; blockedUntil: number; reason: string } | null {
+  const now = Date.now();
+  for (const key of buildFailedOverrideKeys(sessionKey, conversationKey, selectedModel, selectedProvider)) {
+    const entry = recentFailedOverrides.get(key);
+    if (!entry) continue;
+    if (now >= entry.blockedUntil) {
+      recentFailedOverrides.delete(key);
+      continue;
+    }
+    return entry;
+  }
+  return null;
+}
+
+function chooseUnblockedFallback(fallbacks: string[], sessionKey: string | undefined, conversationKey: string | null): string | null {
+  for (const fallback of fallbacks) {
+    const parsed = splitSelectedModelRef(fallback);
+    const provider = parsed.providerOverride;
+    if (!provider) {
+      return fallback;
+    }
+    if (!getFailedOverrideBlock(sessionKey, conversationKey, fallback, provider)) {
+      return fallback;
+    }
+  }
+  return null;
+}
+
+function inferFailureFromRuntime(event: any): FailureInference {
+  const errorText = typeof event?.error === "string" ? event.error.trim() : "";
+  const lowered = errorText.toLowerCase();
+
+  if (event?.success) {
+    return { shouldCooldownOverride: false };
+  }
+
+  if (lowered.includes("429") || lowered.includes("rate limit") || lowered.includes("too many requests") || lowered.includes("quota") || lowered.includes("capacity") || lowered.includes("no capacity available")) {
+    const exhausted = lowered.includes("quota exceeded")
+      || lowered.includes("quota exhausted")
+      || lowered.includes("exhausted")
+      || lowered.includes("no capacity available")
+      || lowered.includes("capacity exhausted");
+    return {
+      httpStatus: 429,
+      errorType: "rate_limit",
+      quotaHint: exhausted ? "exhausted" : "low",
+      quotaRemainingRatio: exhausted ? 0 : undefined,
+      shouldCooldownOverride: true,
+    };
+  }
+
+  if (lowered.includes("401") || lowered.includes("403") || lowered.includes("unauthorized") || lowered.includes("forbidden") || lowered.includes("auth")) {
+    return {
+      httpStatus: lowered.includes("403") || lowered.includes("forbidden") ? 403 : 401,
+      errorType: "auth",
+      shouldCooldownOverride: true,
+    };
+  }
+
+  if (lowered.includes("timeout") || lowered.includes("timed out")) {
+    return {
+      errorType: "timeout",
+      shouldCooldownOverride: true,
+    };
+  }
+
+  if (lowered.includes("500") || lowered.includes("502") || lowered.includes("503") || lowered.includes("server error") || lowered.includes("bad gateway") || lowered.includes("service unavailable")) {
+    return {
+      httpStatus: lowered.includes("503") || lowered.includes("service unavailable") ? 503 : lowered.includes("502") || lowered.includes("bad gateway") ? 502 : 500,
+      errorType: "server",
+      shouldCooldownOverride: true,
+    };
+  }
+
+  return {
+    errorType: "unknown",
+    shouldCooldownOverride: true,
+  };
 }
 
 function takeRecentConversationContext(sessionKey?: string): string | null {
@@ -278,6 +607,25 @@ function resolveSessionKeyForConversation(conversationKey: string): string | nul
     return null;
   }
   return entry.sessionKey;
+}
+
+function shouldBypassCompiledRetryRouting(
+  ctx: any,
+  source: "compiled-prompt" | "raw-user",
+  sessionKey?: string,
+): boolean {
+  if (source !== "compiled-prompt") return false;
+  if (ctx?.trigger !== "user") return false;
+  if (!sessionKey) return false;
+
+  const last = recentLastDecisionBySession.get(sessionKey);
+  if (!last) return false;
+  if (Date.now() - last.at > COMPILED_RETRY_BYPASS_WINDOW_MS) {
+    recentLastDecisionBySession.delete(sessionKey);
+    return false;
+  }
+
+  return true;
 }
 
 function shouldBlockRoutingForBurst(sessionRef: string): boolean {
@@ -426,7 +774,7 @@ function extractEffectiveTaskType(reason: string[]): string | undefined {
   return undefined;
 }
 
-function buildRouteDecisionText(last: LastRouteDecision | null, detailed: boolean): { text: string } {
+function buildRouteLastReply(last: LastRouteDecision | null): { text: string } {
   if (!last) {
     return {
       text: "No recent routing decision found yet for this conversation.",
@@ -434,17 +782,14 @@ function buildRouteDecisionText(last: LastRouteDecision | null, detailed: boolea
   }
 
   const fallbacks = last.fallbacks.length ? last.fallbacks.join(", ") : "none";
-  const reason = detailed ? last.reason.join("; ") : (last.reason.length ? last.reason.slice(0, 3).join("; ") : "n/a");
-  const actual = last.actualModel ? `${last.actualProvider ?? "unknown"}/${last.actualModel}` : "not recorded yet";
-  const usageBits = last.usage
-    ? ` in=${last.usage.input ?? "?"} out=${last.usage.output ?? "?"} total=${last.usage.total ?? "?"}`
-    : "";
+  const reason = last.reason.length ? last.reason.slice(0, 3).join("; ") : "n/a";
   const contextLabel = last.replyContextUsed ? "reply-context used: yes" : "reply-context used: no";
   const escalationLabel = last.autoEscalated ? `${last.requestedRouteMode} → ${last.routeMode}` : last.routeMode;
 
   const lines = [
     `Routing: ${escalationLabel}`,
     `Input: ${last.source}`,
+    `Source tag: ${last.sourceTag}`,
     `Context: ${contextLabel}`,
     `Classifier: ${last.classifierSource}`,
     `Classifier task: ${last.taskType}`,
@@ -452,8 +797,6 @@ function buildRouteDecisionText(last: LastRouteDecision | null, detailed: boolea
     `Confidence: ${last.confidence.toFixed(2)}`,
     `First pass: ${last.firstPassModel ?? last.selectedModel}`,
     `Selected: ${last.selectedModel}`,
-    `Actual: ${actual}${usageBits}`,
-    `Execution override detected: ${last.actualModel && last.actualModel !== last.selectedModel ? "yes" : "no"}`,
     `Fallbacks: ${fallbacks}`,
     `Reason: ${reason}`,
   ];
@@ -461,12 +804,52 @@ function buildRouteDecisionText(last: LastRouteDecision | null, detailed: boolea
   return { text: lines.join("\n") };
 }
 
-function buildRouteLastReply(last: LastRouteDecision | null): { text: string } {
-  return buildRouteDecisionText(last, false);
-}
-
 function buildRouteExplainReply(last: LastRouteDecision | null): { text: string } {
-  return buildRouteDecisionText(last, true);
+  if (!last) {
+    return {
+      text: "No recent routing decision found yet for this conversation.",
+    };
+  }
+
+  const fallbacks = last.fallbacks.length ? last.fallbacks.join(", ") : "none";
+  const reason = last.reason.length ? last.reason.join("; ") : "n/a";
+  const actual = last.actualModel ? `${last.actualProvider ?? "unknown"}/${last.actualModel}` : "not recorded yet";
+  const usageBits = last.usage
+    ? ` in=${last.usage.input ?? "?"} out=${last.usage.output ?? "?"} total=${last.usage.total ?? "?"}`
+    : "";
+  const contextLabel = last.replyContextUsed ? "reply-context used: yes" : "reply-context used: no";
+  const escalationLabel = last.autoEscalated ? `${last.requestedRouteMode} → ${last.routeMode}` : last.routeMode;
+  const overrideDetected = !!(last.actualModel && last.actualModel !== last.selectedModel);
+  const runtimeStatus = last.runtimeSuccess === undefined
+    ? "not recorded yet"
+    : (last.runtimeSuccess ? "success" : "error");
+  const runtimeDuration = last.runtimeDurationMs === undefined ? "" : ` (${last.runtimeDurationMs}ms)`;
+
+  const lines = [
+    `Routing: ${escalationLabel}`,
+    `Input: ${last.source}`,
+    `Source tag: ${last.sourceTag}`,
+    `Context: ${contextLabel}`,
+    `Classifier: ${last.classifierSource}`,
+    `Classifier task: ${last.taskType}`,
+    `Effective route task: ${last.effectiveTaskType ?? last.taskType}`,
+    `Confidence: ${last.confidence.toFixed(2)}`,
+    `First pass: ${last.firstPassModel ?? last.selectedModel}`,
+    `Selected: ${last.selectedModel}`,
+    `Inspected turn model: ${actual}${usageBits}`,
+    `Execution override detected: ${overrideDetected ? "yes" : "no"}`,
+    `Runtime status: ${runtimeStatus}${runtimeDuration}`,
+    `Fallbacks: ${fallbacks}`,
+    `Reason: ${reason}`,
+  ];
+
+  lines.push("Note: the message footer may still show the current session/base model for the /route command itself, not the inspected turn model above.");
+
+  if (last.runtimeError?.trim()) {
+    lines.push(`Runtime error: ${last.runtimeError.trim()}`);
+  }
+
+  return { text: lines.join("\n") };
 }
 
 async function buildRouteCompareReply(
@@ -694,6 +1077,25 @@ async function resolveRouteModeFromContext(api: any, ctx: any): Promise<RouteMod
   return (await resolveRouteModeDetailsFromContext(api, ctx)).mode;
 }
 
+function shouldAutoEscalate(confidence: number): boolean {
+  return confidence < AUTO_ESCALATE_CONFIDENCE;
+}
+
+export const __testHelpers = {
+  rememberRouteMode,
+  rememberLastDecision,
+  rememberFailedOverride,
+  resolveRouteModeDetailsFromContext,
+  shouldUseContextualLlmClassifier,
+  shouldBypassCompiledRetryRouting,
+  isShortFollowUpForContextualRouting,
+  inferFailureFromRuntime,
+  getFailedOverrideBlock,
+  chooseUnblockedFallback,
+  shouldAutoEscalate,
+  resetInMemoryRoutingState,
+};
+
 export default definePluginEntry({
   id: "nexus-router",
   name: "Nexus Router",
@@ -713,6 +1115,20 @@ export default definePluginEntry({
       if (debugMode) console.log("[nexus-router] disabled via config");
       return;
     }
+
+    api.on("session_start", (event: any, ctx: any) => {
+      markRecentStartup(event.sessionKey ?? ctx.sessionKey, event.resumedFrom ? "resume" : "session-start");
+    });
+
+    api.on("before_reset", async (event: any, ctx: any) => {
+      const sessionKey = ctx.sessionKey;
+      clearRecentRoutingState(sessionKey);
+      markRecentStartup(sessionKey, `reset:${event.reason ?? "unknown"}`);
+      if (shouldDefaultRouteOff(sessionKey)) {
+        rememberRouteMode(sessionKey ?? "", "off");
+        await debugLog(`[route-reset] session=${sessionKey ?? "unknown"} mode=off reason=${event.reason ?? "unknown"}`);
+      }
+    });
 
     api.registerCommand({
       name: "route",
@@ -798,6 +1214,9 @@ export default definePluginEntry({
       if (sessionKey && ctx.conversationId) {
         rememberConversationKeyForSession(sessionKey, conversationKey);
       }
+      if (sessionKey && (ctx.senderId || event?.senderId)) {
+        rememberSenderForSession(sessionKey, String(ctx.senderId ?? event.senderId ?? ""), String(ctx.channelId ?? event.channel ?? ""));
+      }
       if (debugMode && sessionKey && rawText) {
         console.log(`[nexus-router] captured inbound text for ${sessionKey} (${rawText.length} chars)`);
       }
@@ -849,24 +1268,46 @@ export default definePluginEntry({
       const conversationContext = takeRecentConversationContext(ctx.sessionKey) ?? "";
       const routingText = rawUserText || prompt;
       const source = rawUserText ? "raw-user" : "compiled-prompt";
+      const startupReason = source === "compiled-prompt" ? takeRecentStartupReason(ctx.sessionKey) : null;
+      const sourceTag = buildSourceTag(ctx, source, routingText, startupReason);
       const routeMode = await resolveRouteModeFromContext(api, ctx);
       const firstPassCostProfile = resolveCostProfileForRouteMode(routeMode, costProfile);
+      const sessionRef = String(ctx?.sessionKey ?? ctx?.sessionId ?? ctx?.conversationId ?? "");
+      const dedupeText = routingText.trim();
       await debugLog(
-        `[hook-enter] source=${source} route=${routeMode} prompt_len=${routingText.length} profile=${firstPassCostProfile}`,
+        `[hook-enter] source=${source} source_tag=${sourceTag} trigger=${ctx?.trigger ?? "unknown"} route=${routeMode} prompt_len=${routingText.length} profile=${firstPassCostProfile}`,
       );
 
+      if (ctx?.trigger === "cron" || classifySessionKind(ctx?.sessionKey) === "cron") {
+        if (sessionRef) {
+          recentRouteCacheBySession.set(sessionRef, { text: dedupeText, mode: routeMode, at: Date.now() });
+        }
+        await debugLog(`[hook-result] source=${source} source_tag=${sourceTag} route=${routeMode} bypassed reason=cron`);
+        return;
+      }
+
+      if (startupReason) {
+        if (sessionRef) {
+          recentRouteCacheBySession.set(sessionRef, { text: dedupeText, mode: routeMode, at: Date.now() });
+        }
+        await debugLog(`[hook-result] source=${source} source_tag=${sourceTag} route=${routeMode} bypassed reason=${startupReason}`);
+        return;
+      }
+
       if (routeMode === "off") {
-        await debugLog(`[hook-result] source=${source} route=${routeMode} bypassed`);
+        await debugLog(`[hook-result] source=${source} source_tag=${sourceTag} route=${routeMode} bypassed`);
         return;
       }
-
-      const sessionRef = String(ctx?.sessionKey ?? ctx?.sessionId ?? ctx?.conversationId ?? "");
+      if (shouldBypassCompiledRetryRouting(ctx, source, ctx.sessionKey ?? sessionRef)) {
+        await debugLog(`[hook-result] source=${source} source_tag=${sourceTag} route=${routeMode} bypassed reason=compiled-retry`);
+        return;
+      }
       if (sessionRef && shouldBlockRoutingForBurst(sessionRef)) {
-        await debugLog(`[hook-result] source=${source} route=blocked burst session=${sessionRef}`);
+        await debugLog(`[hook-result] source=${source} source_tag=${sourceTag} route=blocked burst session=${sessionRef}`);
         return;
       }
 
-      const dedupeText = routingText.trim();
+      const conversationKey = buildConversationKeyFromContext(ctx) ?? resolveConversationKeyForSession(ctx.sessionKey);
       const cached = sessionRef ? recentRouteCacheBySession.get(sessionRef) : undefined;
       if (
         sessionRef &&
@@ -876,11 +1317,19 @@ export default definePluginEntry({
         cached.text === dedupeText
       ) {
         if (cached.selectedModel) {
-          await debugLog(`[hook-result] source=${source} route=${routeMode} dedupe-hit model=${cached.selectedModel}`);
-          return splitSelectedModelRef(cached.selectedModel);
+          const cachedOverride = splitSelectedModelRef(cached.selectedModel);
+          const cachedProvider = cachedOverride.providerOverride;
+          if (cachedProvider && getFailedOverrideBlock(ctx.sessionKey ?? sessionRef, conversationKey, cached.selectedModel, cachedProvider)) {
+            recentRouteCacheBySession.delete(sessionRef);
+            await debugLog(`[hook-result] source=${source} source_tag=${sourceTag} route=${routeMode} dedupe-bypass blocked_model=${cached.selectedModel}`);
+          } else {
+            await debugLog(`[hook-result] source=${source} source_tag=${sourceTag} route=${routeMode} dedupe-hit model=${cached.selectedModel}`);
+            return cachedOverride;
+          }
+        } else {
+          await debugLog(`[hook-result] source=${source} source_tag=${sourceTag} route=${routeMode} dedupe-hit bypass`);
+          return;
         }
-        await debugLog(`[hook-result] source=${source} route=${routeMode} dedupe-hit bypass`);
-        return;
       }
 
       let decision: RouteResponse | null = null;
@@ -888,7 +1337,11 @@ export default definePluginEntry({
       let finalMode: RouteMode = routeMode;
       let finalCostProfile = firstPassCostProfile;
 
-      const shouldUseLlmClassifier = Boolean(conversationContext.trim());
+      const shouldUseLlmClassifier = shouldUseContextualLlmClassifier(
+        routeMode,
+        conversationContext,
+        routingText,
+      );
 
       if (routeMode === "auto") {
         const autoResult = await routeRequest(
@@ -903,12 +1356,12 @@ export default definePluginEntry({
         autoDecision = autoResult.decision;
         if (!autoDecision) {
           const failure = describeRouteRequestFailure(autoResult, timeoutMs);
-          await debugLog(`[hook-result] source=${source} route=${routeMode} ${failure}`);
+          await debugLog(`[hook-result] source=${source} source_tag=${sourceTag} route=${routeMode} ${failure}`);
           if (debugMode) console.warn(`[nexus-router] ${failure}, using default model`);
           return;
         }
 
-        if (autoDecision.confidence < AUTO_ESCALATE_CONFIDENCE) {
+        if (shouldAutoEscalate(autoDecision.confidence)) {
           const balancedCostProfile = resolveCostProfileForRouteMode("balanced", costProfile);
           const balancedResult = await routeRequest(
             routerUrl,
@@ -925,12 +1378,12 @@ export default definePluginEntry({
             finalMode = "balanced";
             finalCostProfile = balancedCostProfile;
             await debugLog(
-              `[hook-auto-escalate] source=${source} from=auto confidence=${autoDecision.confidence.toFixed(2)} to=balanced selected=${balancedDecision.selected_model}`,
+              `[hook-auto-escalate] source=${source} source_tag=${sourceTag} from=auto confidence=${autoDecision.confidence.toFixed(2)} to=balanced selected=${balancedDecision.selected_model}`,
             );
           } else {
             if (balancedResult.error) {
               const failure = describeRouteRequestFailure(balancedResult, timeoutMs);
-              await debugLog(`[hook-auto-escalate] source=${source} balanced_fallback_failed ${failure}`);
+              await debugLog(`[hook-auto-escalate] source=${source} source_tag=${sourceTag} balanced_fallback_failed ${failure}`);
             }
             decision = autoDecision;
           }
@@ -950,7 +1403,7 @@ export default definePluginEntry({
         decision = directResult.decision;
         if (!decision) {
           const failure = describeRouteRequestFailure(directResult, timeoutMs);
-          await debugLog(`[hook-result] source=${source} route=${routeMode} ${failure}`);
+          await debugLog(`[hook-result] source=${source} source_tag=${sourceTag} route=${routeMode} ${failure}`);
           if (debugMode) console.warn(`[nexus-router] ${failure}, using default model`);
           return;
         }
@@ -960,9 +1413,39 @@ export default definePluginEntry({
         if (sessionRef) {
           recentRouteCacheBySession.set(sessionRef, { text: dedupeText, mode: routeMode, at: Date.now() });
         }
-        await debugLog(`[hook-result] source=${source} route=${routeMode} router_unavailable`);
+        await debugLog(`[hook-result] source=${source} source_tag=${sourceTag} route=${routeMode} router_unavailable`);
         if (debugMode) console.warn("[nexus-router] router unavailable, using default model");
         return;
+      }
+
+      const blockedOverride = getFailedOverrideBlock(
+        ctx.sessionKey ?? sessionRef,
+        conversationKey,
+        decision.selected_model,
+        decision.selected_provider,
+      );
+      if (blockedOverride) {
+        const fallbackModel = chooseUnblockedFallback(decision.fallbacks, ctx.sessionKey ?? sessionRef, conversationKey);
+        if (fallbackModel) {
+          const fallbackOverride = splitSelectedModelRef(fallbackModel);
+          await debugLog(
+            `[hook-result] source=${source} source_tag=${sourceTag} route=${finalMode} blocked model=${decision.selected_model} fallback=${fallbackModel} reason=${blockedOverride.reason}`,
+          );
+          decision = {
+            ...decision,
+            selected_model: fallbackModel,
+            selected_provider: fallbackOverride.providerOverride ?? decision.selected_provider,
+            reason: [...decision.reason, `blocked recent failed override ${blockedOverride.reason}`],
+          };
+        } else {
+          if (sessionRef) {
+            recentRouteCacheBySession.set(sessionRef, { text: dedupeText, mode: routeMode, at: Date.now() });
+          }
+          await debugLog(
+            `[hook-result] source=${source} source_tag=${sourceTag} route=${finalMode} blocked model=${decision.selected_model} fallback=none reason=${blockedOverride.reason}`,
+          );
+          return;
+        }
       }
 
       if (sessionRef) {
@@ -974,9 +1457,20 @@ export default definePluginEntry({
         });
       }
 
+      const sender = resolveSenderForSession(ctx.sessionKey ?? sessionRef);
+      if (decision.decision_id) {
+        if (sender) {
+          await sendTelegramFeedbackCard(api, sender.senderId, decision, sourceTag);
+        } else {
+          await debugLog(
+            `[feedback-card] skipped decision=${decision.decision_id} reason=missing_sender session=${ctx.sessionKey ?? sessionRef ?? ""}`,
+          );
+        }
+      }
+
       if (decision.confidence < minConfidence) {
         await debugLog(
-          `[hook-result] source=${source} skipped confidence=${decision.confidence.toFixed(2)} threshold=${minConfidence}`,
+          `[hook-result] source=${source} source_tag=${sourceTag} skipped confidence=${decision.confidence.toFixed(2)} threshold=${minConfidence}`,
         );
         if (debugMode) {
           console.log(
@@ -992,6 +1486,7 @@ export default definePluginEntry({
         requestedRouteMode: routeMode,
         routeMode: finalMode,
         source,
+        sourceTag,
         promptLen: routingText.length,
         promptText: routingText,
         replyContextUsed: decision.reply_context_used ?? Boolean(conversationContext.trim()),
@@ -1021,7 +1516,7 @@ export default definePluginEntry({
       }
 
       await debugLog(
-        `[hook-result] source=${source} route=${finalMode} override model=${decision.selected_model} task=${decision.task_type} confidence=${decision.confidence.toFixed(2)} score=${decision.score.toFixed(3)}`,
+        `[hook-result] source=${source} source_tag=${sourceTag} route=${finalMode} override model=${decision.selected_model} task=${decision.task_type} confidence=${decision.confidence.toFixed(2)} score=${decision.score.toFixed(3)}`,
       );
 
       if (debugMode) {
@@ -1066,9 +1561,29 @@ export default definePluginEntry({
           ? recentLastDecisionBySession.get((pending.sessionKey ?? ctx.sessionKey) as string)
           : undefined;
         const last = byDecisionId ?? bySessionKey ?? recentLastDecisionGlobal;
+        if (last) {
+          last.runtimeSuccess = Boolean(event.success);
+          last.runtimeDurationMs = event.durationMs;
+          last.runtimeError = typeof event.error === "string" ? event.error : undefined;
+        }
         const actualModel = last?.actualModel;
         const actualProvider = last?.actualProvider;
         const fallbackUsed = !!actualModel && actualModel !== pending.selectedModel;
+        const failure = inferFailureFromRuntime(event);
+        const outcomeProvider = actualProvider ?? pending.selectedProvider;
+        const outcomeModel = actualModel ?? pending.selectedModel;
+        const failedConversationKey = resolveConversationKeyForSession(pending.sessionKey)
+          ?? (pending.sessionKey ? buildConversationKeyFromContext({ sessionKey: pending.sessionKey }) : null);
+
+        if (failure.shouldCooldownOverride && !event.success) {
+          rememberFailedOverride(
+            pending.sessionKey ?? ctx.sessionKey,
+            failedConversationKey,
+            outcomeModel,
+            outcomeProvider,
+            failure.errorType ?? "unknown",
+          );
+        }
 
         await fetch(`${routerUrl}/outcome`, {
           method: "POST",
@@ -1079,7 +1594,11 @@ export default definePluginEntry({
             latency_ms: event.durationMs,
             fallback_used: fallbackUsed,
             fallback_model: fallbackUsed ? actualModel : undefined,
-            provider: actualProvider ?? pending.selectedProvider,
+            provider: outcomeProvider,
+            http_status: failure.httpStatus,
+            error_type: failure.errorType,
+            quota_hint: failure.quotaHint,
+            quota_remaining_ratio: failure.quotaRemainingRatio,
           }),
         });
       } catch {

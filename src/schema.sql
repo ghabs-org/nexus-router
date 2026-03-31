@@ -117,7 +117,28 @@ CREATE TABLE IF NOT EXISTS schema_meta (
   value TEXT NOT NULL
 );
 
-INSERT OR IGNORE INTO schema_meta (key, value) VALUES ('schema_version', '1');
+CREATE TABLE IF NOT EXISTS route_feedback (
+  id                    TEXT PRIMARY KEY,
+  created_at            TEXT NOT NULL,
+  decision_id           TEXT NOT NULL,
+  verdict               TEXT NOT NULL,
+  corrected_task        TEXT,
+  model_verdict         TEXT,
+  preferred_model       TEXT,
+  reason_tag            TEXT,
+  source_surface        TEXT,
+  source_channel        TEXT,
+  source_message_id     TEXT,
+  source_user_id        TEXT,
+  metadata              TEXT,
+  FOREIGN KEY(decision_id) REFERENCES routing_decisions(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_route_feedback_decision_id ON route_feedback(decision_id);
+CREATE INDEX IF NOT EXISTS idx_route_feedback_created_at ON route_feedback(created_at);
+CREATE INDEX IF NOT EXISTS idx_route_feedback_preferred_model ON route_feedback(preferred_model);
+
+INSERT OR IGNORE INTO schema_meta (key, value) VALUES ('schema_version', '2');
 INSERT OR IGNORE INTO schema_meta (key, value) VALUES ('created_at', datetime('now'));
 
 -- ────────────────────────────────────────────────────────────────────────────

@@ -11,6 +11,7 @@ services:
     volumes:
       - ../catalog:/app/catalog
       - ../policies:/app/policies
+      - ../artifacts:/app/artifacts
       - /home/ubuntu/.local/state/nexus-router/state:/app/state
       - /home/ubuntu/.local/state/nexus-router/data:/app/data
       - /home/ubuntu/.openclaw:/root/.openclaw:ro
@@ -19,6 +20,7 @@ services:
       - PYTHONUNBUFFERED=1
       - NEXUS_ROUTER_DB_PATH=/app/data/routing-history.sqlite
       - NEXUS_ROUTER_HEALTH_FILE=/app/state/runtime-health.json
+      - NEXUS_ROUTER_LOCAL_CLASSIFIER_DIR=/app/artifacts/router-classifier/onnx
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:7771/health', timeout=3)"]
       interval: 30s

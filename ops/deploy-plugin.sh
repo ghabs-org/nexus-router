@@ -19,7 +19,11 @@ echo "[deploy] building plugin..."
 echo "[deploy] syncing plugin to $EXT_DIR"
 mkdir -p "$EXT_DIR"
 cp "$PLUGIN_DIR/src/index.ts" "$EXT_DIR/index.ts"
-cp "$PLUGIN_DIR/openclaw.plugin.json" "$EXT_DIR/openclaw.plugin.json"
+if [[ -f "$PLUGIN_DIR/openclaw.plugin.json" ]]; then
+  cp "$PLUGIN_DIR/openclaw.plugin.json" "$EXT_DIR/openclaw.plugin.json"
+else
+  echo "[deploy] manifest missing at $PLUGIN_DIR/openclaw.plugin.json; keeping existing installed manifest"
+fi
 cp "$PLUGIN_DIR/package.json" "$EXT_DIR/package.json"
 
 echo "[deploy] restarting nexus-router container"

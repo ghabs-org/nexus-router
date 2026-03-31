@@ -10,6 +10,7 @@ Endpoints:
   GET  /health        → server + provider health check
   GET  /stats         → model stats summary
   POST /probe         → probe all provider auth status
+  POST /feedback      → record routing feedback
 
 Usage:
   python -m src.server [--port 7771]
@@ -17,23 +18,46 @@ Usage:
 
 import argparse
 import json
+import os
 import traceback
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 from urllib.parse import urlparse
 
 from .router import Router
 from .classifier import extract_pre_signals, heuristic_classify, classify_with_model
 from .types import ClassifierOutput, PreSignals
+
+try:
+    from .local_classifier import classify_with_local_model, get_local_classifier
+except Exception:  # pragma: no cover - optional local ML deps
+    class _LocalClassifierUnavailable:
+        load_error = "import_failed"
+
+    def get_local_classifier():
+        return _LocalClassifierUnavailable()
+
+    def classify_with_local_model(*args, **kwargs):
+        return None
 from .health import load_provider_health
 from .health_updater import probe_all_providers, observe_turn_outcome
-from .db import ensure_schema, update_outcome, load_model_stats
+from .db import ensure_schema, update_outcome, load_model_stats, record_feedback
+
+
+def _is_tiny_prompt(message: str) -> bool:
+    text = (message or "").strip()
+    if len(text) <= 24:
+        return True
+    if len(text.split()) <= 5 and len(text) <= 48:
+        return True
+    return False
 
 
 def should_reclassify_with_llm(
     classifier: ClassifierOutput | None,
     use_llm: bool,
     conversation_context: str | None,
+    message: str | None = None,
 ) -> bool:
     return bool(
         use_llm
@@ -41,9 +65,11 @@ def should_reclassify_with_llm(
         and classifier.task_type in {"general_chat", "fast_utility"}
         and conversation_context
         and conversation_context.strip()
+        and (message is None or not _is_tiny_prompt(message))
     )
 
 DEFAULT_PORT = 7771
+DEFAULT_CLASSIFIER_TIMEOUT_SECONDS = int(os.environ.get("NEXUS_ROUTER_CLASSIFIER_TIMEOUT_SECONDS", "6"))
 
 # Lazy-init router
 _router: Router | None = None
@@ -140,6 +166,8 @@ class RouterHandler(BaseHTTPRequestHandler):
             self._handle_outcome(body)
         elif path == "/probe":
             self._handle_probe(body)
+        elif path == "/feedback":
+            self._handle_feedback(body)
         else:
             _json_response(self, 404, {"error": "not_found"})
 
@@ -166,10 +194,12 @@ class RouterHandler(BaseHTTPRequestHandler):
             provider_health = load_provider_health()
             registry = _get_router()._registry
 
-            # Classify — explicit classifier hint (e.g. from Nexus) always wins over heuristic
+            # Classify — explicit classifier hint always wins. Otherwise prefer the
+            # local classifier when available, then fall back through heuristic/LLM.
             raw_cls = body.get("classifier")
             classifier = None
             classifier_source = "fallback"
+            classifier_debug: dict[str, Any] = {}
 
             if raw_cls:
                 classifier = ClassifierOutput(
@@ -186,11 +216,32 @@ class RouterHandler(BaseHTTPRequestHandler):
                 classifier_source = "explicit"
 
             if classifier is None:
+                local_result = classify_with_local_model(
+                    message,
+                    pre_signals,
+                    conversation_context=classifier_context,
+                )
+                if local_result is not None:
+                    classifier = local_result.classifier
+                    classifier_source = "local"
+                    classifier_debug["local_confidence"] = round(local_result.confidence, 4)
+                    classifier_debug["local_margin"] = round(local_result.margin, 4)
+                    classifier_debug["local_top2"] = [
+                        {"label": label, "confidence": round(score, 4)}
+                        for label, score in local_result.top2
+                    ]
+                    classifier_debug["local_artifact_dir"] = local_result.artifact_dir
+                else:
+                    local_classifier = get_local_classifier()
+                    if local_classifier.load_error:
+                        classifier_debug["local_unavailable"] = local_classifier.load_error
+
+            if classifier is None:
                 classifier = heuristic_classify(message, pre_signals)
                 if classifier is not None:
                     classifier_source = "heuristic"
 
-            if should_reclassify_with_llm(classifier, use_llm, classifier_context):
+            if should_reclassify_with_llm(classifier, use_llm, classifier_context, message):
                 classifier = None
                 classifier_source = "fallback"
 
@@ -202,6 +253,7 @@ class RouterHandler(BaseHTTPRequestHandler):
                     model=classifier_model,
                     registry=registry,
                     provider_health=provider_health,
+                    timeout_seconds=DEFAULT_CLASSIFIER_TIMEOUT_SECONDS,
                 )
                 if classifier is not None:
                     classifier_source = "llm"
@@ -228,8 +280,20 @@ class RouterHandler(BaseHTTPRequestHandler):
                 route_mode=route_mode,
             )
 
+            local_bits = ""
+            if classifier_debug.get("local_confidence") is not None:
+                local_bits += (
+                    f" local_confidence={classifier_debug['local_confidence']:.4f}"
+                    f" local_margin={classifier_debug['local_margin']:.4f}"
+                )
+            elif classifier_debug.get("local_unavailable"):
+                local_bits += f" local_unavailable={classifier_debug['local_unavailable']}"
+
             print(
                 "route"
+                f" mode={route_mode or 'balanced'}"
+                f" profile={cost_profile}"
+                f" classifier={classifier_source}"
                 f" task={decision.task_type}"
                 f" complexity={classifier.complexity}"
                 f" confidence={decision.confidence:.2f}"
@@ -237,7 +301,8 @@ class RouterHandler(BaseHTTPRequestHandler):
                 f" provider={decision.selected_provider}"
                 f" score={decision.score:.3f}"
                 f" prompt_len={len(message)}"
-                f" est_tokens={pre_signals.estimated_tokens}",
+                f" est_tokens={pre_signals.estimated_tokens}"
+                f"{local_bits}",
                 flush=True,
             )
 
@@ -254,6 +319,7 @@ class RouterHandler(BaseHTTPRequestHandler):
                 "reply_context_used": reply_context_used,
                 "classifier_provider": getattr(classifier, "classifier_provider", None),
                 "classifier_model": getattr(classifier, "classifier_model", None),
+                "classifier_debug": classifier_debug,
                 "pre_signals": {
                     "has_image": pre_signals.has_image,
                     "has_code": pre_signals.has_code,
@@ -307,13 +373,41 @@ class RouterHandler(BaseHTTPRequestHandler):
         except Exception as e:
             _json_response(self, 500, {"error": str(e)})
 
+    def _handle_feedback(self, body: dict):
+        try:
+            decision_id = body.get("decision_id")
+            if not decision_id:
+                _json_response(self, 400, {"error": "decision_id required"})
+                return
+            verdict = str(body.get("verdict") or "").strip().lower()
+            if verdict not in {"correct", "wrong"}:
+                _json_response(self, 400, {"error": "verdict must be correct|wrong"})
+                return
+
+            feedback_id = record_feedback(
+                decision_id=decision_id,
+                verdict=verdict,
+                corrected_task=body.get("corrected_task"),
+                model_verdict=body.get("model_verdict"),
+                preferred_model=body.get("preferred_model"),
+                reason_tag=body.get("reason_tag"),
+                source_surface=body.get("source_surface"),
+                source_channel=body.get("source_channel"),
+                source_message_id=body.get("source_message_id"),
+                source_user_id=body.get("source_user_id"),
+                metadata=body.get("metadata") if isinstance(body.get("metadata"), dict) else None,
+            )
+            _json_response(self, 200, {"ok": True, "feedback_id": feedback_id})
+        except Exception as e:
+            _json_response(self, 500, {"error": str(e)})
+
 
 def run(port: int = DEFAULT_PORT):
     ensure_schema()
     # Bind to all interfaces inside Docker — external access is restricted
     # by the port mapping in docker-compose.yml (127.0.0.1:7771->7771)
     bind_addr = "0.0.0.0"
-    server = HTTPServer((bind_addr, port), RouterHandler)
+    server = ThreadingHTTPServer((bind_addr, port), RouterHandler)
     print(f"Nexus Router server listening on http://127.0.0.1:{port}")
     print("Endpoints: POST /route  POST /outcome  POST /probe  GET /health  GET /stats")
     try:

@@ -135,3 +135,26 @@ python src/generate_registry.py
 openclaw models list --all --json > catalog/raw/openclaw-models.json
 python src/generate_registry.py
 ```
+
+## Local ModernBERT classifier
+
+A local ModernBERT classifier path is now wired into `/route` as the primary
+classifier path when a usable ONNX artifact exists at
+`artifacts/router-classifier/onnx/` (mounted in the container at
+`/app/artifacts/router-classifier/onnx`).
+
+Routing order is now:
+
+1. explicit classifier hint
+2. local ONNX classifier
+3. heuristic classifier
+4. LLM classifier fallback
+5. generic fallback
+
+The router response and logs now surface classifier provenance via:
+- `classifier_source` (`explicit`, `local`, `heuristic`, `llm`, `fallback`)
+- `classifier_provider`
+- `classifier_model`
+- `classifier_debug` (local confidence / margin / artifact availability)
+
+See `docs/local-classifier-modernbert.md` for build/export details.

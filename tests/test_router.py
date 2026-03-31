@@ -12,7 +12,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.types import ClassifierOutput, PreSignals, ProviderHealth
-from src.scorer import score_models, _preference_score, _learned_score, _fast_mode_correction, _reasoning_mode_correction
+from src.scorer import score_models, _preference_score, _learned_score, _fast_mode_correction, _reasoning_mode_correction, _build_preference_order
 from src.router import Router, _adapt_classifier_for_light_chat
 from src.classifier import extract_pre_signals, heuristic_classify, parse_classifier_response, classify_with_model, select_classifier_models, _call_direct_provider_classifier
 from src.server import should_reclassify_with_llm, RouterHandler
@@ -159,6 +159,77 @@ class TestScorer:
         high_override = {"m": {"total_selected": 100, "total_success": 80, "success_rate": 0.80, "total_override": 40}}
         assert _learned_score("m", "coding", low_override) > _learned_score("m", "coding", high_override)
 
+
+    def test_model_preference_bump_is_bounded(self):
+        classifier = ClassifierOutput(task_type="reasoning", confidence=0.82)
+        provider_health = {"p": ProviderHealth(provider="p", auth="ok", quota="healthy", health_score=0.95)}
+        models = [{
+            "id": "p/one", "provider": "p",
+            "scores": {"coding": 0.8, "review": 0.8, "reasoning": 0.9, "summarize": 0.8, "fast": 0.7, "cost": 0.7, "context": 0.8, "vision": 0.7},
+            "features": {"contextWindow": 300000}, "availability": {"authed": True},
+        }]
+        learned = {
+            "p/one": {
+                "total_selected": 10,
+                "success_rate": 0.8,
+                "total_override": 0,
+                "feedback_preference": {
+                    "reasoning": {"samples": 12, "score": 1.0, "last_feedback_at": "2099-01-01T00:00:00+00:00", "top_reason_tag": "quality"}
+                },
+            }
+        }
+        policy = {"feedback": {"model_preference": {"enabled": True, "max_bump": 0.04, "min_samples": 3, "decay_window_days": 30}}}
+        scored = score_models(classifier, models, provider_health, learned, routing_policy=policy)
+        assert scored[0].model_preference_bump <= 0.04
+        assert scored[0].model_preference_bump > 0
+
+    def test_model_preference_bump_not_applied_below_min_samples(self):
+        classifier = ClassifierOutput(task_type="reasoning", confidence=0.82)
+        provider_health = {"p": ProviderHealth(provider="p", auth="ok", quota="healthy", health_score=0.95)}
+        models = [{
+            "id": "p/one", "provider": "p",
+            "scores": {"coding": 0.8, "review": 0.8, "reasoning": 0.9, "summarize": 0.8, "fast": 0.7, "cost": 0.7, "context": 0.8, "vision": 0.7},
+            "features": {"contextWindow": 300000}, "availability": {"authed": True},
+        }]
+        learned = {
+            "p/one": {
+                "total_selected": 10,
+                "success_rate": 0.8,
+                "total_override": 0,
+                "feedback_preference": {
+                    "reasoning": {"samples": 2, "score": 1.0, "last_feedback_at": "2099-01-01T00:00:00+00:00", "top_reason_tag": "quality"}
+                },
+            }
+        }
+        policy = {"feedback": {"model_preference": {"enabled": True, "max_bump": 0.04, "min_samples": 3, "decay_window_days": 30}}}
+        scored = score_models(classifier, models, provider_health, learned, routing_policy=policy)
+        assert scored[0].model_preference_bump == 0
+
+    def test_model_preference_never_overrides_hard_health_constraints(self):
+        classifier = ClassifierOutput(task_type="reasoning", confidence=0.82)
+        provider_health = {
+            "bad": ProviderHealth(provider="bad", auth="ok", quota="healthy", health_score=0.1),
+            "good": ProviderHealth(provider="good", auth="ok", quota="healthy", health_score=0.95),
+        }
+        models = [
+            {
+                "id": "bad/model", "provider": "bad",
+                "scores": {"coding": 0.9, "review": 0.9, "reasoning": 0.95, "summarize": 0.8, "fast": 0.7, "cost": 0.7, "context": 0.8, "vision": 0.7},
+                "features": {"contextWindow": 300000}, "availability": {"authed": True},
+            },
+            {
+                "id": "good/model", "provider": "good",
+                "scores": {"coding": 0.8, "review": 0.8, "reasoning": 0.8, "summarize": 0.8, "fast": 0.7, "cost": 0.7, "context": 0.8, "vision": 0.7},
+                "features": {"contextWindow": 300000}, "availability": {"authed": True},
+            },
+        ]
+        learned = {"bad/model": {"total_selected": 10, "success_rate": 0.9, "total_override": 0, "feedback_preference": {"reasoning": {"samples": 20, "score": 1.0, "last_feedback_at": "2099-01-01T00:00:00+00:00"}}}}
+        policy = {"feedback": {"model_preference": {"enabled": True, "max_bump": 0.04, "min_samples": 3, "decay_window_days": 30}}}
+        scored = score_models(classifier, models, provider_health, learned, routing_policy=policy)
+        bad = next(s for s in scored if s.model_id == "bad/model")
+        assert bad.excluded is True
+        assert "health_too_low" in (bad.exclusion_reason or "")
+
     def test_fast_mode_correction_prefers_lower_cost_and_higher_speed(self):
         cheap_fast = _fast_mode_correction(task_fit=0.80, cost_score=0.90, speed_score=0.90)
         expensive_slow = _fast_mode_correction(task_fit=0.80, cost_score=0.55, speed_score=0.55)
@@ -168,6 +239,15 @@ class TestScorer:
         strong = _reasoning_mode_correction(task_fit=0.93, reasoning_score=0.95, health=0.95, learned=0.92)
         weak = _reasoning_mode_correction(task_fit=0.75, reasoning_score=0.80, health=0.80, learned=0.78)
         assert strong > weak
+
+    def test_fast_utility_preference_order_prefers_gemini_3_flash_preview_over_2_5_flash(self):
+        import yaml
+        policy_path = Path(__file__).parent.parent / "policies" / "routing.yaml"
+        with open(policy_path) as f:
+            routing_policy = yaml.safe_load(f)
+
+        order = _build_preference_order("fast_utility", routing_policy)
+        assert order.index("google-gemini-cli/gemini-3-flash-preview") < order.index("google-gemini-cli/gemini-2.5-flash")
 
     def test_fast_route_mode_changes_ranking_bias(self):
         classifier = ClassifierOutput(task_type="coding", complexity="medium", confidence=0.80)
@@ -808,3 +888,35 @@ class TestRouteProvenance:
         })
         assert status == 400
         assert body.get("error") == "invalid_conversation_context_type"
+
+
+
+def test_load_model_stats_includes_feedback_preferences(tmp_path, monkeypatch):
+    import importlib
+    import os
+
+    monkeypatch.setenv("NEXUS_ROUTER_DB_PATH", str(tmp_path / "routing.sqlite"))
+    import src.db as db
+    importlib.reload(db)
+
+    db.ensure_schema()
+    conn = db._connect()
+    try:
+        conn.execute(
+            "INSERT INTO routing_decisions (id, created_at, task_type, selected_model, selected_provider) VALUES (?,?,?,?,?)",
+            ("dec-1", db._now_iso(), "reasoning", "model/a", "provider-a"),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    db.record_feedback(
+        decision_id="dec-1",
+        verdict="wrong",
+        preferred_model="model/a",
+        model_verdict="good",
+        reason_tag="quality",
+        source_surface="telegram",
+    )
+    stats = db.load_model_stats()
+    assert stats["model/a"]["feedback_preference"]["reasoning"]["samples"] == 1
