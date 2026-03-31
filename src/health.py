@@ -8,6 +8,7 @@ Computes a composite health score (0.0–1.0) per provider.
 import json
 import math
 import os
+from datetime import timedelta
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -21,10 +22,37 @@ AUTH_STATUSES_OK       = {"ok"}
 AUTH_STATUSES_BLOCKED  = {"expired", "missing"}
 QUOTA_BLOCKED          = {"exhausted"}
 QUOTA_PENALIZED        = {"low"}
+RATE_LIMIT_SOFT_BAN_WINDOWS = {
+    1: timedelta(minutes=5),
+    2: timedelta(minutes=15),
+}
+RATE_LIMIT_SOFT_BAN_MAX = timedelta(hours=1)
 
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _now_dt() -> datetime:
+    parsed = _parse_iso8601(_now_iso())
+    if parsed is not None:
+        return parsed
+    return datetime.now(timezone.utc)
+
+
+def _parse_iso8601(value: Optional[str]) -> Optional[datetime]:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value)
+    except Exception:
+        return None
+
+
+def _soft_ban_window_for_streak(streak: int) -> timedelta:
+    if streak <= 0:
+        return timedelta(0)
+    return RATE_LIMIT_SOFT_BAN_WINDOWS.get(streak, RATE_LIMIT_SOFT_BAN_MAX)
 
 
 def load_provider_health(providers: Optional[list[str]] = None) -> dict[str, ProviderHealth]:
@@ -49,6 +77,8 @@ def load_provider_health(providers: Optional[list[str]] = None) -> dict[str, Pro
             quota_remaining_ratio=data.get("quotaRemainingRatio"),
             recent_error_rate=data.get("recentErrorRate", 0.0),
             rate_limit_risk=data.get("rateLimitRisk", 0.0),
+            consecutive_rate_limits=int(data.get("consecutiveRateLimits", 0) or 0),
+            rate_limit_cooldown_until=data.get("rateLimitCooldownUntil"),
             latency_ms_p50=data.get("latencyMsP50"),
             last_failure_at=data.get("lastFailureAt"),
             last_check_at=data.get("lastCheckAt"),
@@ -78,11 +108,14 @@ def _compute_health_score(data: dict) -> float:
     latency   = data.get("latencyMsP50")
     quota_ratio = data.get("quotaRemainingRatio")
     last_check_at = data.get("lastCheckAt")
+    cooldown_until = _parse_iso8601(data.get("rateLimitCooldownUntil"))
 
     # Hard blocks
     if auth in AUTH_STATUSES_BLOCKED:
         return 0.0
     if quota in QUOTA_BLOCKED:
+        return 0.0
+    if cooldown_until and cooldown_until > _now_dt():
         return 0.0
 
     score = 1.0
@@ -122,7 +155,7 @@ def _compute_health_score(data: dict) -> float:
     # Staleness penalty: old health snapshots should carry less confidence.
     if last_check_at:
         try:
-            age_seconds = (datetime.now(timezone.utc) - datetime.fromisoformat(last_check_at)).total_seconds()
+            age_seconds = (_now_dt() - datetime.fromisoformat(last_check_at)).total_seconds()
             if age_seconds > 1800:
                 score -= min((age_seconds - 1800) / 21600, 0.15)
         except Exception:
@@ -187,9 +220,15 @@ def record_observation(
         pdata["recentErrorRate"] = round(0.3 * 0.0 + 0.7 * prev, 4)
 
     if http_status == 429:
+        streak = int(pdata.get("consecutiveRateLimits", 0) or 0) + 1
+        pdata["consecutiveRateLimits"] = streak
+        cooldown_until = _now_dt() + _soft_ban_window_for_streak(streak)
+        pdata["rateLimitCooldownUntil"] = cooldown_until.isoformat()
         prev = pdata.get("rateLimitRisk", 0.0)
         pdata["rateLimitRisk"] = round(0.3 * 1.0 + 0.7 * prev, 4)
     else:
+        pdata["consecutiveRateLimits"] = 0
+        pdata["rateLimitCooldownUntil"] = None
         prev = pdata.get("rateLimitRisk", 0.0)
         pdata["rateLimitRisk"] = round(0.3 * 0.0 + 0.7 * prev, 4)
 

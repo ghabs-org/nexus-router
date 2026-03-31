@@ -16,8 +16,29 @@
 #       vision:       0.0-1.0   # VQA / MMMU benchmark score (0 if text-only)
 #       tools:        0.0-1.0   # BFCL (Berkeley Function Calling Leaderboard)
 #       multilingual: 0.0-1.0   # MGSM or multilingual reasoning benchmark
-#       _source:      string    # source label, e.g. "livebench-2026-03"
+#       _confidence:
+#         coding:     0.0-1.0   # confidence in the merged dimension score
+#         reasoning:  0.0-1.0   # higher with more trusted agreeing sources
+#       _source:      string    # merged source labels, e.g. "artificialanalysis+livebench"
+#       _sources:     [string]  # optional explicit contributing source list
 #       _updated_at:  string    # ISO date of last update
+#
+# Cross-source merge rule:
+#   final_dim = sum(weight(source) * value(source)) / sum(weight(source))
+#   using only sources that actually provide that dimension.
+#
+# Per-dimension confidence metadata (_confidence.<dim>) is computed from:
+#   base_count_conf  = min(1.0, contributors / 3)
+#   base_weight_conf = min(1.0, total_weight / 2.0)
+#   agreement_conf   = 0.65 for a single source, otherwise
+#                      1.0 - min(1.0, stddev(values) / 0.25)
+#   final_conf       = 0.4*base_count_conf + 0.3*base_weight_conf + 0.3*agreement_conf
+# This keeps single-source confidence moderate, rewards multi-source agreement,
+# and penalizes strong disagreement without changing the underlying score values.
+#
+# Default trust weights used by src/fetch_benchmarks.py:
+#   artificialanalysis=1.0, livebench=1.0, helm=0.9, inspect_ai=0.9,
+#   openllm=0.9, vellum=0.9, bfcl=1.0, mgsm=1.0, unknown=1.0
 #
 # Score normalization rules:
 #   coding:       HumanEval pass@1 / 100
@@ -31,6 +52,9 @@
 # Sources:
 #   artificialanalysis.ai — speed, cost, quality composite
 #   livebench.ai          — reasoning, coding, instruction following
+#   crfm.stanford.edu/helm — reasoning / review proxies when available
+#   inspect.aisi.org.uk / inspect_evals — best-effort public Inspect AI results feed
+#   huggingface.co/datasets/open-llm-leaderboard/contents — open-model reasoning / review proxies
 #   vellum.ai/llm-leaderboard — multi-task quality
 #   scale.com/leaderboard — coding, reasoning
 #   berkeley-nest/gorilla (BFCL) — tool use / function calling
@@ -50,6 +74,18 @@ _meta:
       url: "https://livebench.ai"
       dimensions: [reasoning, coding]
       update_cadence: monthly
+    - id: helm
+      url: "https://crfm.stanford.edu/helm/classic/latest/"
+      dimensions: [reasoning, review]
+      update_cadence: occasional
+    - id: inspect_ai
+      url: "https://inspect.aisi.org.uk/"
+      dimensions: [reasoning]
+      update_cadence: best-effort
+    - id: openllm
+      url: "https://huggingface.co/datasets/open-llm-leaderboard/contents"
+      dimensions: [reasoning, review, summarize]
+      update_cadence: occasional
     - id: vellum
       url: "https://vellum.ai/llm-leaderboard"
       dimensions: [coding, reasoning, review]
@@ -96,89 +132,1154 @@ _meta:
 #     _updated_at: "2026-03-27"
 
 models:
-  github-copilot/claude-opus-4.5:
+  amazon-bedrock/amazon.nova-lite-v1:0:
+    _confidence:
+      reasoning: 0.4783
     _source: artificialanalysis
-    _updated_at: '2026-03-27'
+    _sources:
+    - artificialanalysis
+    _updated_at: '2026-03-31'
+    reasoning: 0.433
+  amazon-bedrock/amazon.nova-micro-v1:0:
+    _confidence:
+      reasoning: 0.4783
+    _source: artificialanalysis
+    _sources:
+    - artificialanalysis
+    _updated_at: '2026-03-31'
+    reasoning: 0.358
+  amazon-bedrock/amazon.nova-premier-v1:0:
+    _confidence:
+      reasoning: 0.4783
+    _source: artificialanalysis
+    _sources:
+    - artificialanalysis
+    _updated_at: '2026-03-31'
+    reasoning: 0.569
+  amazon-bedrock/amazon.nova-pro-v1:0:
+    _confidence:
+      reasoning: 0.4783
+    _source: artificialanalysis
+    _sources:
+    - artificialanalysis
+    _updated_at: '2026-03-31'
+    reasoning: 0.499
+  amazon-bedrock/deepseek.r1-v1:0:
+    _confidence:
+      reasoning: 0.4783
+    _source: artificialanalysis
+    _sources:
+    - artificialanalysis
+    _updated_at: '2026-03-31'
+    reasoning: 0.813
+  amazon-bedrock/deepseek.v3-v1:0:
+    _confidence:
+      reasoning: 0.4783
+    _source: artificialanalysis
+    _sources:
+    - artificialanalysis
+    _updated_at: '2026-03-31'
+    reasoning: 0.735
+  amazon-bedrock/deepseek.v3.2:
+    _confidence:
+      reasoning: 0.4783
+    _source: artificialanalysis
+    _sources:
+    - artificialanalysis
+    _updated_at: '2026-03-31'
+    reasoning: 0.751
+  amazon-bedrock/mistral.ministral-3-3b-instruct:
+    _confidence:
+      reasoning: 0.4783
+    _source: artificialanalysis
+    _sources:
+    - artificialanalysis
+    _updated_at: '2026-03-31'
+    reasoning: 0.358
+  amazon-bedrock/mistral.ministral-3-8b-instruct:
+    _confidence:
+      reasoning: 0.4783
+    _source: artificialanalysis
+    _sources:
+    - artificialanalysis
+    _updated_at: '2026-03-31'
+    reasoning: 0.471
+  amazon-bedrock/qwen.qwen3-235b-a22b-2507-v1:0:
+    _confidence:
+      reasoning: 0.4783
+    _source: artificialanalysis
+    _sources:
+    - artificialanalysis
+    _updated_at: '2026-03-31'
+    reasoning: 0.753
+  amazon-bedrock/qwen.qwen3-coder-30b-a3b-v1:0:
+    _confidence:
+      reasoning: 0.4783
+    _source: artificialanalysis
+    _sources:
+    - artificialanalysis
+    _updated_at: '2026-03-31'
+    reasoning: 0.516
+  cerebras/gpt-oss-120b:
+    _confidence:
+      reasoning: 0.4783
+    _source: artificialanalysis
+    _sources:
+    - artificialanalysis
+    _updated_at: '2026-03-31'
+    reasoning: 0.782
+  cerebras/llama3.1-8b:
+    _confidence:
+      reasoning: 0.4783
+    _source: artificialanalysis
+    _sources:
+    - artificialanalysis
+    _updated_at: '2026-03-31'
+    reasoning: 0.259
+  github-copilot/claude-opus-4.5:
+    _confidence:
+      reasoning: 0.4783
+    _source: artificialanalysis
+    _sources:
+    - artificialanalysis
+    _updated_at: '2026-03-31'
     coding: 0.7772
     cost: 0.3333
     multilingual: 0.9128
-    reasoning: 0.7882
+    reasoning: 0.81
     tools: 0.7455
   github-copilot/claude-opus-4.6:
+    _confidence:
+      reasoning: 0.4783
     _source: artificialanalysis
-    _updated_at: '2026-03-27'
+    _sources:
+    - artificialanalysis
+    _updated_at: '2026-03-31'
     coding: 0.6794
     cost: 0.3333
     multilingual: 0.9064
-    reasoning: 0.7518
+    reasoning: 0.84
     tools: 0.8027
   github-copilot/claude-sonnet-4.6:
+    _confidence:
+      reasoning: 0.4783
     _source: artificialanalysis
-    _updated_at: '2026-03-27'
+    _sources:
+    - artificialanalysis
+    _updated_at: '2026-03-31'
     coding: 0.6633
     cost: 0.6
     multilingual: 0.8924
-    reasoning: 0.7165
+    reasoning: 0.799
     tools: 0.7702
-  github-copilot/gemini-3.1-pro-preview:
+  github-copilot/gemini-3-flash-preview:
+    _confidence:
+      reasoning: 0.4783
     _source: artificialanalysis
-    _updated_at: '2026-03-27'
+    _sources:
+    - artificialanalysis
+    _updated_at: '2026-03-31'
+    reasoning: 0.812
+  github-copilot/gemini-3.1-pro-preview:
+    _confidence:
+      reasoning: 0.4783
+    _source: artificialanalysis
+    _sources:
+    - artificialanalysis
+    _updated_at: '2026-03-31'
     coding: 0.7929
     cost: 0.7
     multilingual: 0.9317
-    reasoning: 0.8789
+    reasoning: 0.941
     tools: 0.7386
-  google-gemini-cli/gemini-2.0-flash:
+  github-copilot/gpt-4.1:
+    _confidence:
+      reasoning: 0.4783
     _source: artificialanalysis
-    _updated_at: '2026-03-27'
+    _sources:
+    - artificialanalysis
+    _updated_at: '2026-03-31'
+    reasoning: 0.666
+  github-copilot/gpt-4o:
+    _confidence:
+      reasoning: 0.4783
+    _source: artificialanalysis
+    _sources:
+    - artificialanalysis
+    _updated_at: '2026-03-31'
+    reasoning: 0.543
+  github-copilot/gpt-5:
+    _confidence:
+      reasoning: 0.4783
+    _source: artificialanalysis
+    _sources:
+    - artificialanalysis
+    _updated_at: '2026-03-31'
+    reasoning: 0.854
+  github-copilot/gpt-5-mini:
+    _confidence:
+      reasoning: 0.4783
+    _source: artificialanalysis
+    _sources:
+    - artificialanalysis
+    _updated_at: '2026-03-31'
+    reasoning: 0.828
+  github-copilot/gpt-5.1:
+    _confidence:
+      reasoning: 0.4783
+    _source: artificialanalysis
+    _sources:
+    - artificialanalysis
+    _updated_at: '2026-03-31'
+    reasoning: 0.873
+  github-copilot/gpt-5.1-codex:
+    _confidence:
+      reasoning: 0.4783
+    _source: artificialanalysis
+    _sources:
+    - artificialanalysis
+    _updated_at: '2026-03-31'
+    reasoning: 0.86
+  github-copilot/gpt-5.1-codex-mini:
+    _confidence:
+      reasoning: 0.4783
+    _source: artificialanalysis
+    _sources:
+    - artificialanalysis
+    _updated_at: '2026-03-31'
+    reasoning: 0.813
+  github-copilot/gpt-5.2:
+    _confidence:
+      reasoning: 0.4783
+    _source: artificialanalysis
+    _sources:
+    - artificialanalysis
+    _updated_at: '2026-03-31'
+    reasoning: 0.903
+  github-copilot/grok-code-fast-1:
+    _confidence:
+      reasoning: 0.4783
+    _source: artificialanalysis
+    _sources:
+    - artificialanalysis
+    _updated_at: '2026-03-31'
+    reasoning: 0.727
+  google-gemini-cli/gemini-2.0-flash:
+    _confidence:
+      reasoning: 0.4783
+    _source: artificialanalysis
+    _sources:
+    - artificialanalysis
+    _updated_at: '2026-03-31'
     coding: 0.2645
     cost: 0.9825
-    reasoning: 0.4437
+    reasoning: 0.636
     tools: 0.1971
   google-gemini-cli/gemini-2.5-flash:
+    _confidence:
+      reasoning: 0.4783
     _source: artificialanalysis
-    _updated_at: '2026-03-27'
+    _sources:
+    - artificialanalysis
+    _updated_at: '2026-03-31'
     coding: 0.406
-    reasoning: 0.4244
+    reasoning: 0.594
   google-gemini-cli/gemini-2.5-pro:
+    _confidence:
+      reasoning: 0.4783
     _source: artificialanalysis
-    _updated_at: '2026-03-27'
+    _sources:
+    - artificialanalysis
+    _updated_at: '2026-03-31'
     coding: 0.7228
-    reasoning: 0.6344
+    reasoning: 0.822
   google-gemini-cli/gemini-3.1-pro-preview:
+    _confidence:
+      reasoning: 0.4783
     _source: artificialanalysis
-    _updated_at: '2026-03-27'
+    _sources:
+    - artificialanalysis
+    _updated_at: '2026-03-31'
     coding: 0.7929
     cost: 0.7
     multilingual: 0.9317
-    reasoning: 0.8789
+    reasoning: 0.941
     tools: 0.7386
-  openai-codex/gpt-5.2-codex:
+  google/gemini-1.5-flash:
+    _confidence:
+      reasoning: 0.4783
     _source: artificialanalysis
-    _updated_at: '2026-03-27'
+    _sources:
+    - artificialanalysis
+    _updated_at: '2026-03-31'
+    reasoning: 0.463
+  google/gemini-1.5-flash-8b:
+    _confidence:
+      reasoning: 0.4783
+    _source: artificialanalysis
+    _sources:
+    - artificialanalysis
+    _updated_at: '2026-03-31'
+    reasoning: 0.359
+  google/gemini-1.5-pro:
+    _confidence:
+      reasoning: 0.4783
+    _source: artificialanalysis
+    _sources:
+    - artificialanalysis
+    _updated_at: '2026-03-31'
+    reasoning: 0.589
+  google/gemini-2.0-flash-lite:
+    _confidence:
+      reasoning: 0.4783
+    _source: artificialanalysis
+    _sources:
+    - artificialanalysis
+    _updated_at: '2026-03-31'
+    reasoning: 0.542
+  google/gemini-2.5-flash-lite:
+    _confidence:
+      reasoning: 0.4783
+    _source: artificialanalysis
+    _sources:
+    - artificialanalysis
+    _updated_at: '2026-03-31'
+    reasoning: 0.474
+  google/gemini-2.5-flash-lite-preview-09-2025:
+    _confidence:
+      reasoning: 0.4783
+    _source: artificialanalysis
+    _sources:
+    - artificialanalysis
+    _updated_at: '2026-03-31'
+    reasoning: 0.651
+  google/gemini-2.5-flash-preview-09-2025:
+    _confidence:
+      reasoning: 0.4783
+    _source: artificialanalysis
+    _sources:
+    - artificialanalysis
+    _updated_at: '2026-03-31'
+    reasoning: 0.766
+  google/gemini-3.1-flash-lite-preview:
+    _confidence:
+      reasoning: 0.4783
+    _source: artificialanalysis
+    _sources:
+    - artificialanalysis
+    _updated_at: '2026-03-31'
+    reasoning: 0.822
+  groq/deepseek-r1-distill-llama-70b:
+    _confidence:
+      reasoning: 0.4783
+    _source: artificialanalysis
+    _sources:
+    - artificialanalysis
+    _updated_at: '2026-03-31'
+    reasoning: 0.402
+  groq/gemma2-9b-it:
+    _confidence:
+      reasoning: 0.4633
+      review: 0.4633
+      summarize: 0.4633
+    _source: openllm
+    _sources:
+    - openllm
+    _updated_at: '2026-03-31'
+    reasoning: 0.2137
+    review: 0.204
+    summarize: 0.1979
+  groq/llama3-70b-8192:
+    _confidence:
+      reasoning: 0.4783
+    _source: artificialanalysis
+    _sources:
+    - artificialanalysis
+    _updated_at: '2026-03-31'
+    reasoning: 0.379
+  groq/llama3-8b-8192:
+    _confidence:
+      reasoning: 0.4783
+    _source: artificialanalysis
+    _sources:
+    - artificialanalysis
+    _updated_at: '2026-03-31'
+    reasoning: 0.296
+  groq/openai/gpt-oss-20b:
+    _confidence:
+      reasoning: 0.4783
+    _source: artificialanalysis
+    _sources:
+    - artificialanalysis
+    _updated_at: '2026-03-31'
+    reasoning: 0.688
+  groq/qwen-qwq-32b:
+    _confidence:
+      reasoning: 0.4633
+      review: 0.4633
+      summarize: 0.4633
+    _source: openllm
+    _sources:
+    - openllm
+    _updated_at: '2026-03-31'
+    reasoning: 0.3287
+    review: 0.4035
+    summarize: 0.3914
+  groq/qwen/qwen3-32b:
+    _confidence:
+      reasoning: 0.4783
+    _source: artificialanalysis
+    _sources:
+    - artificialanalysis
+    _updated_at: '2026-03-31'
+    reasoning: 0.535
+  huggingface/Qwen/Qwen3-Coder-Next:
+    _confidence:
+      reasoning: 0.4783
+    _source: artificialanalysis
+    _sources:
+    - artificialanalysis
+    _updated_at: '2026-03-31'
+    reasoning: 0.737
+  huggingface/Qwen/Qwen3-Next-80B-A3B-Instruct:
+    _confidence:
+      reasoning: 0.4783
+    _source: artificialanalysis
+    _sources:
+    - artificialanalysis
+    _updated_at: '2026-03-31'
+    reasoning: 0.738
+  huggingface/Qwen/Qwen3.5-397B-A17B:
+    _confidence:
+      reasoning: 0.4783
+    _source: artificialanalysis
+    _sources:
+    - artificialanalysis
+    _updated_at: '2026-03-31'
+    reasoning: 0.893
+  huggingface/XiaomiMiMo/MiMo-V2-Flash:
+    _confidence:
+      reasoning: 0.4783
+    _source: artificialanalysis
+    _sources:
+    - artificialanalysis
+    _updated_at: '2026-03-31'
+    reasoning: 0.656
+  kimi-coding/k2p5:
+    _confidence:
+      reasoning: 0.4783
+    _source: artificialanalysis
+    _sources:
+    - artificialanalysis
+    _updated_at: '2026-03-31'
+    reasoning: 0.879
+  kimi-coding/kimi-k2-thinking:
+    _confidence:
+      reasoning: 0.4783
+    _source: artificialanalysis
+    _sources:
+    - artificialanalysis
+    _updated_at: '2026-03-31'
+    reasoning: 0.838
+  minimax/MiniMax-M2:
+    _confidence:
+      reasoning: 0.4783
+    _source: artificialanalysis
+    _sources:
+    - artificialanalysis
+    _updated_at: '2026-03-31'
+    reasoning: 0.777
+  minimax/MiniMax-M2.1:
+    _confidence:
+      reasoning: 0.4783
+    _source: artificialanalysis
+    _sources:
+    - artificialanalysis
+    _updated_at: '2026-03-31'
+    reasoning: 0.83
+  minimax/MiniMax-M2.5:
+    _confidence:
+      reasoning: 0.4783
+    _source: artificialanalysis
+    _sources:
+    - artificialanalysis
+    _updated_at: '2026-03-31'
+    reasoning: 0.848
+  minimax/MiniMax-M2.7:
+    _confidence:
+      reasoning: 0.4783
+    _source: artificialanalysis
+    _sources:
+    - artificialanalysis
+    _updated_at: '2026-03-31'
+    reasoning: 0.874
+  mistral/devstral-2512:
+    _confidence:
+      reasoning: 0.4783
+    _source: artificialanalysis
+    _sources:
+    - artificialanalysis
+    _updated_at: '2026-03-31'
+    reasoning: 0.594
+  mistral/devstral-medium-2507:
+    _confidence:
+      reasoning: 0.4783
+    _source: artificialanalysis
+    _sources:
+    - artificialanalysis
+    _updated_at: '2026-03-31'
+    reasoning: 0.492
+  mistral/devstral-small-2505:
+    _confidence:
+      reasoning: 0.4783
+    _source: artificialanalysis
+    _sources:
+    - artificialanalysis
+    _updated_at: '2026-03-31'
+    reasoning: 0.434
+  mistral/devstral-small-2507:
+    _confidence:
+      reasoning: 0.4783
+    _source: artificialanalysis
+    _sources:
+    - artificialanalysis
+    _updated_at: '2026-03-31'
+    reasoning: 0.414
+  mistral/labs-devstral-small-2512:
+    _confidence:
+      reasoning: 0.4783
+    _source: artificialanalysis
+    _sources:
+    - artificialanalysis
+    _updated_at: '2026-03-31'
+    reasoning: 0.532
+  mistral/magistral-small:
+    _confidence:
+      reasoning: 0.4783
+    _source: artificialanalysis
+    _sources:
+    - artificialanalysis
+    _updated_at: '2026-03-31'
+    reasoning: 0.641
+  mistral/mistral-large-2512:
+    _confidence:
+      reasoning: 0.4783
+    _source: artificialanalysis
+    _sources:
+    - artificialanalysis
+    _updated_at: '2026-03-31'
+    reasoning: 0.68
+  mistral/mistral-medium-2505:
+    _confidence:
+      reasoning: 0.4783
+    _source: artificialanalysis
+    _sources:
+    - artificialanalysis
+    _updated_at: '2026-03-31'
+    reasoning: 0.578
+  mistral/mistral-medium-2508:
+    _confidence:
+      reasoning: 0.4783
+    _source: artificialanalysis
+    _sources:
+    - artificialanalysis
+    _updated_at: '2026-03-31'
+    reasoning: 0.588
+  mistral/mistral-small-2506:
+    _confidence:
+      reasoning: 0.4783
+    _source: artificialanalysis
+    _sources:
+    - artificialanalysis
+    _updated_at: '2026-03-31'
+    reasoning: 0.505
+  mistral/open-mistral-7b:
+    _confidence:
+      reasoning: 0.4783
+    _source: artificialanalysis
+    _sources:
+    - artificialanalysis
+    _updated_at: '2026-03-31'
+    reasoning: 0.177
+  mistral/open-mixtral-8x7b:
+    _confidence:
+      reasoning: 0.4783
+    _source: artificialanalysis
+    _sources:
+    - artificialanalysis
+    _updated_at: '2026-03-31'
+    reasoning: 0.292
+  openai-codex/gpt-5.2-codex:
+    _confidence:
+      reasoning: 0.4783
+    _source: artificialanalysis
+    _sources:
+    - artificialanalysis
+    _updated_at: '2026-03-31'
     coding: 0.6137
     cost: 0.6792
-    reasoning: 0.7997
+    reasoning: 0.899
     tools: 0.7065
   openai-codex/gpt-5.3-codex:
+    _confidence:
+      reasoning: 0.4783
     _source: artificialanalysis
-    _updated_at: '2026-03-27'
+    _sources:
+    - artificialanalysis
+    _updated_at: '2026-03-31'
     coding: 0.7586
     cost: 0.6792
-    reasoning: 0.843
+    reasoning: 0.915
     tools: 0.7774
   openai-codex/gpt-5.4:
+    _confidence:
+      reasoning: 0.4783
     _source: artificialanalysis
-    _updated_at: '2026-03-27'
+    _sources:
+    - artificialanalysis
+    _updated_at: '2026-03-31'
     coding: 0.8179
     cost: 0.625
-    reasoning: 0.8683
+    reasoning: 0.92
     tools: 0.8678
   openai-codex/gpt-5.4-mini:
+    _confidence:
+      reasoning: 0.4783
     _source: artificialanalysis
-    _updated_at: '2026-03-27'
+    _sources:
+    - artificialanalysis
+    _updated_at: '2026-03-31'
     coding: 0.7354
     cost: 0.8875
     multilingual: 0.8941
-    reasoning: 0.7811
+    reasoning: 0.875
     tools: 0.6957
+  openai/gpt-4.1-mini:
+    _confidence:
+      reasoning: 0.4783
+    _source: artificialanalysis
+    _sources:
+    - artificialanalysis
+    _updated_at: '2026-03-31'
+    reasoning: 0.664
+  openai/gpt-4.1-nano:
+    _confidence:
+      reasoning: 0.4783
+    _source: artificialanalysis
+    _sources:
+    - artificialanalysis
+    _updated_at: '2026-03-31'
+    reasoning: 0.512
+  openai/gpt-4o-2024-05-13:
+    _confidence:
+      reasoning: 0.4783
+    _source: artificialanalysis
+    _sources:
+    - artificialanalysis
+    _updated_at: '2026-03-31'
+    reasoning: 0.526
+  openai/gpt-4o-2024-08-06:
+    _confidence:
+      reasoning: 0.4783
+    _source: artificialanalysis
+    _sources:
+    - artificialanalysis
+    _updated_at: '2026-03-31'
+    reasoning: 0.521
+  openai/gpt-4o-mini:
+    _confidence:
+      reasoning: 0.4783
+    _source: artificialanalysis
+    _sources:
+    - artificialanalysis
+    _updated_at: '2026-03-31'
+    reasoning: 0.426
+  openai/gpt-5-codex:
+    _confidence:
+      reasoning: 0.4783
+    _source: artificialanalysis
+    _sources:
+    - artificialanalysis
+    _updated_at: '2026-03-31'
+    reasoning: 0.837
+  openai/gpt-5-nano:
+    _confidence:
+      reasoning: 0.4783
+    _source: artificialanalysis
+    _sources:
+    - artificialanalysis
+    _updated_at: '2026-03-31'
+    reasoning: 0.676
+  openai/gpt-5.4-nano:
+    _confidence:
+      reasoning: 0.4783
+    _source: artificialanalysis
+    _sources:
+    - artificialanalysis
+    _updated_at: '2026-03-31'
+    reasoning: 0.817
+  openai/o1:
+    _confidence:
+      reasoning: 0.4783
+    _source: artificialanalysis
+    _sources:
+    - artificialanalysis
+    _updated_at: '2026-03-31'
+    reasoning: 0.747
+  openai/o3:
+    _confidence:
+      reasoning: 0.4783
+    _source: artificialanalysis
+    _sources:
+    - artificialanalysis
+    _updated_at: '2026-03-31'
+    reasoning: 0.827
+  openai/o3-mini:
+    _confidence:
+      reasoning: 0.4783
+    _source: artificialanalysis
+    _sources:
+    - artificialanalysis
+    _updated_at: '2026-03-31'
+    reasoning: 0.748
+  openai/o3-pro:
+    _confidence:
+      reasoning: 0.4783
+    _source: artificialanalysis
+    _sources:
+    - artificialanalysis
+    _updated_at: '2026-03-31'
+    reasoning: 0.845
+  openai/o4-mini:
+    _confidence:
+      reasoning: 0.4783
+    _source: artificialanalysis
+    _sources:
+    - artificialanalysis
+    _updated_at: '2026-03-31'
+    reasoning: 0.784
+  opencode/claude-3-5-haiku:
+    _confidence:
+      reasoning: 0.4783
+    _source: artificialanalysis
+    _sources:
+    - artificialanalysis
+    _updated_at: '2026-03-31'
+    reasoning: 0.408
+  openrouter/meta-llama/llama-3.1-70b-instruct:
+    _confidence:
+      reasoning: 0.4633
+      review: 0.4633
+      summarize: 0.4633
+    _source: openllm
+    _sources:
+    - openllm
+    _updated_at: '2026-03-31'
+    reasoning: 0.3476
+    review: 0.8669
+    summarize: 0.8409
+  openrouter/meta-llama/llama-3.1-8b-instruct:
+    _confidence:
+      reasoning: 0.4633
+      review: 0.4633
+      summarize: 0.4633
+    _source: openllm
+    _sources:
+    - openllm
+    _updated_at: '2026-03-31'
+    reasoning: 0.1867
+    review: 0.4922
+    summarize: 0.4774
+  openrouter/meta-llama/llama-3.3-70b-instruct:
+    _confidence:
+      reasoning: 0.4633
+      review: 0.4633
+      summarize: 0.4633
+    _source: openllm
+    _sources:
+    - openllm
+    _updated_at: '2026-03-31'
+    reasoning: 0.3582
+    review: 0.8998
+    summarize: 0.8728
+  openrouter/mistralai/mistral-large:
+    _confidence:
+      reasoning: 0.4783
+    _source: artificialanalysis
+    _sources:
+    - artificialanalysis
+    _updated_at: '2026-03-31'
+    reasoning: 0.351
+  openrouter/mistralai/mistral-large-2407:
+    _confidence:
+      reasoning: 0.4783
+    _source: artificialanalysis
+    _sources:
+    - artificialanalysis
+    _updated_at: '2026-03-31'
+    reasoning: 0.472
+  openrouter/mistralai/mistral-large-2411:
+    _confidence:
+      reasoning: 0.4633
+      review: 0.4633
+      summarize: 0.4633
+    _source: openllm
+    _sources:
+    - openllm
+    _updated_at: '2026-03-31'
+    reasoning: 0.3903
+    review: 0.8401
+    summarize: 0.8149
+  openrouter/mistralai/mistral-saba:
+    _confidence:
+      reasoning: 0.4783
+    _source: artificialanalysis
+    _sources:
+    - artificialanalysis
+    _updated_at: '2026-03-31'
+    reasoning: 0.424
+  openrouter/nvidia/nemotron-3-nano-30b-a3b:
+    _confidence:
+      reasoning: 0.4783
+    _source: artificialanalysis
+    _sources:
+    - artificialanalysis
+    _updated_at: '2026-03-31'
+    reasoning: 0.399
+  openrouter/nvidia/nemotron-3-super-120b-a12b:
+    _confidence:
+      reasoning: 0.4783
+    _source: artificialanalysis
+    _sources:
+    - artificialanalysis
+    _updated_at: '2026-03-31'
+    reasoning: 0.8
+  openrouter/nvidia/nemotron-nano-9b-v2:
+    _confidence:
+      reasoning: 0.4783
+    _source: artificialanalysis
+    _sources:
+    - artificialanalysis
+    _updated_at: '2026-03-31'
+    reasoning: 0.557
+  openrouter/qwen/qwen-2.5-72b-instruct:
+    _confidence:
+      reasoning: 0.7989
+      review: 0.4633
+      summarize: 0.4633
+    _source: artificialanalysis+openllm
+    _sources:
+    - artificialanalysis
+    - openllm
+    _updated_at: '2026-03-31'
+    reasoning: 0.4493
+    review: 0.8638
+    summarize: 0.8379
+  openrouter/qwen/qwen-2.5-7b-instruct:
+    _confidence:
+      reasoning: 0.4633
+      review: 0.4633
+      summarize: 0.4633
+    _source: openllm
+    _sources:
+    - openllm
+    _updated_at: '2026-03-31'
+    reasoning: 0.2707
+    review: 0.7585
+    summarize: 0.7357
+  vercel-ai-gateway/alibaba/qwen-3-14b:
+    _confidence:
+      reasoning: 0.4783
+    _source: artificialanalysis
+    _sources:
+    - artificialanalysis
+    _updated_at: '2026-03-31'
+    reasoning: 0.47
+  vercel-ai-gateway/alibaba/qwen-3-235b:
+    _confidence:
+      reasoning: 0.4783
+    _source: artificialanalysis
+    _sources:
+    - artificialanalysis
+    _updated_at: '2026-03-31'
+    reasoning: 0.613
+  vercel-ai-gateway/alibaba/qwen-3-30b:
+    _confidence:
+      reasoning: 0.4783
+    _source: artificialanalysis
+    _sources:
+    - artificialanalysis
+    _updated_at: '2026-03-31'
+    reasoning: 0.515
+  vercel-ai-gateway/alibaba/qwen3-coder:
+    _confidence:
+      reasoning: 0.4783
+    _source: artificialanalysis
+    _sources:
+    - artificialanalysis
+    _updated_at: '2026-03-31'
+    reasoning: 0.618
+  vercel-ai-gateway/alibaba/qwen3-max:
+    _confidence:
+      reasoning: 0.4783
+    _source: artificialanalysis
+    _sources:
+    - artificialanalysis
+    _updated_at: '2026-03-31'
+    reasoning: 0.764
+  vercel-ai-gateway/alibaba/qwen3-max-preview:
+    _confidence:
+      reasoning: 0.4783
+    _source: artificialanalysis
+    _sources:
+    - artificialanalysis
+    _updated_at: '2026-03-31'
+    reasoning: 0.764
+  vercel-ai-gateway/anthropic/claude-3-haiku:
+    _confidence:
+      reasoning: 0.4783
+    _source: artificialanalysis
+    _sources:
+    - artificialanalysis
+    _updated_at: '2026-03-31'
+    reasoning: 0.374
+  vercel-ai-gateway/anthropic/claude-3.7-sonnet:
+    _confidence:
+      reasoning: 0.4783
+    _source: artificialanalysis
+    _sources:
+    - artificialanalysis
+    _updated_at: '2026-03-31'
+    reasoning: 0.656
+  vercel-ai-gateway/cohere/command-a:
+    _confidence:
+      reasoning: 0.4783
+    _source: artificialanalysis
+    _sources:
+    - artificialanalysis
+    _updated_at: '2026-03-31'
+    reasoning: 0.527
+  vercel-ai-gateway/deepseek/deepseek-v3:
+    _confidence:
+      reasoning: 0.4783
+    _source: artificialanalysis
+    _sources:
+    - artificialanalysis
+    _updated_at: '2026-03-31'
+    reasoning: 0.655
+  vercel-ai-gateway/deepseek/deepseek-v3.1-terminus:
+    _confidence:
+      reasoning: 0.4783
+    _source: artificialanalysis
+    _sources:
+    - artificialanalysis
+    _updated_at: '2026-03-31'
+    reasoning: 0.751
+  vercel-ai-gateway/inception/mercury-2:
+    _confidence:
+      reasoning: 0.4783
+    _source: artificialanalysis
+    _sources:
+    - artificialanalysis
+    _updated_at: '2026-03-31'
+    reasoning: 0.77
+  vercel-ai-gateway/mistral/mistral-small:
+    _confidence:
+      reasoning: 0.4783
+    _source: artificialanalysis
+    _sources:
+    - artificialanalysis
+    _updated_at: '2026-03-31'
+    reasoning: 0.381
+  vercel-ai-gateway/moonshotai/kimi-k2:
+    _confidence:
+      reasoning: 0.4783
+    _source: artificialanalysis
+    _sources:
+    - artificialanalysis
+    _updated_at: '2026-03-31'
+    reasoning: 0.766
+  vercel-ai-gateway/moonshotai/kimi-k2-0905:
+    _confidence:
+      reasoning: 0.4783
+    _source: artificialanalysis
+    _sources:
+    - artificialanalysis
+    _updated_at: '2026-03-31'
+    reasoning: 0.767
+  vercel-ai-gateway/nvidia/nemotron-nano-12b-v2-vl:
+    _confidence:
+      reasoning: 0.4783
+    _source: artificialanalysis
+    _sources:
+    - artificialanalysis
+    _updated_at: '2026-03-31'
+    reasoning: 0.439
+  vercel-ai-gateway/perplexity/sonar:
+    _confidence:
+      reasoning: 0.4783
+    _source: artificialanalysis
+    _sources:
+    - artificialanalysis
+    _updated_at: '2026-03-31'
+    reasoning: 0.471
+  vercel-ai-gateway/perplexity/sonar-pro:
+    _confidence:
+      reasoning: 0.4783
+    _source: artificialanalysis
+    _sources:
+    - artificialanalysis
+    _updated_at: '2026-03-31'
+    reasoning: 0.578
+  vercel-ai-gateway/prime-intellect/intellect-3:
+    _confidence:
+      reasoning: 0.4783
+    _source: artificialanalysis
+    _sources:
+    - artificialanalysis
+    _updated_at: '2026-03-31'
+    reasoning: 0.761
+  vercel-ai-gateway/xai/grok-4-fast-reasoning:
+    _confidence:
+      reasoning: 0.4783
+    _source: artificialanalysis
+    _sources:
+    - artificialanalysis
+    _updated_at: '2026-03-31'
+    reasoning: 0.847
+  vercel-ai-gateway/xai/grok-4.1-fast-reasoning:
+    _confidence:
+      reasoning: 0.4783
+    _source: artificialanalysis
+    _sources:
+    - artificialanalysis
+    _updated_at: '2026-03-31'
+    reasoning: 0.853
+  vercel-ai-gateway/xiaomi/mimo-v2-pro:
+    _confidence:
+      reasoning: 0.4783
+    _source: artificialanalysis
+    _sources:
+    - artificialanalysis
+    _updated_at: '2026-03-31'
+    reasoning: 0.87
+  xai/grok-2-1212:
+    _confidence:
+      reasoning: 0.4783
+    _source: artificialanalysis
+    _sources:
+    - artificialanalysis
+    _updated_at: '2026-03-31'
+    reasoning: 0.51
+  xai/grok-3:
+    _confidence:
+      reasoning: 0.4783
+    _source: artificialanalysis
+    _sources:
+    - artificialanalysis
+    _updated_at: '2026-03-31'
+    reasoning: 0.693
+  xai/grok-4:
+    _confidence:
+      reasoning: 0.4783
+    _source: artificialanalysis
+    _sources:
+    - artificialanalysis
+    _updated_at: '2026-03-31'
+    reasoning: 0.877
+  xai/grok-4-1-fast:
+    _confidence:
+      reasoning: 0.4783
+    _source: artificialanalysis
+    _sources:
+    - artificialanalysis
+    _updated_at: '2026-03-31'
+    reasoning: 0.637
+  xai/grok-4-fast:
+    _confidence:
+      reasoning: 0.4783
+    _source: artificialanalysis
+    _sources:
+    - artificialanalysis
+    _updated_at: '2026-03-31'
+    reasoning: 0.606
+  xai/grok-beta:
+    _confidence:
+      reasoning: 0.4783
+    _source: artificialanalysis
+    _sources:
+    - artificialanalysis
+    _updated_at: '2026-03-31'
+    reasoning: 0.471
+  zai/glm-4.5:
+    _confidence:
+      reasoning: 0.4783
+    _source: artificialanalysis
+    _sources:
+    - artificialanalysis
+    _updated_at: '2026-03-31'
+    reasoning: 0.782
+  zai/glm-4.5-air:
+    _confidence:
+      reasoning: 0.4783
+    _source: artificialanalysis
+    _sources:
+    - artificialanalysis
+    _updated_at: '2026-03-31'
+    reasoning: 0.733
+  zai/glm-4.5v:
+    _confidence:
+      reasoning: 0.4783
+    _source: artificialanalysis
+    _sources:
+    - artificialanalysis
+    _updated_at: '2026-03-31'
+    reasoning: 0.573
+  zai/glm-4.6:
+    _confidence:
+      reasoning: 0.4783
+    _source: artificialanalysis
+    _sources:
+    - artificialanalysis
+    _updated_at: '2026-03-31'
+    reasoning: 0.632
+  zai/glm-4.6v:
+    _confidence:
+      reasoning: 0.4783
+    _source: artificialanalysis
+    _sources:
+    - artificialanalysis
+    _updated_at: '2026-03-31'
+    reasoning: 0.566
+  zai/glm-4.7:
+    _confidence:
+      reasoning: 0.4783
+    _source: artificialanalysis
+    _sources:
+    - artificialanalysis
+    _updated_at: '2026-03-31'
+    reasoning: 0.859
+  zai/glm-4.7-flash:
+    _confidence:
+      reasoning: 0.4783
+    _source: artificialanalysis
+    _sources:
+    - artificialanalysis
+    _updated_at: '2026-03-31'
+    reasoning: 0.581
+  zai/glm-5:
+    _confidence:
+      reasoning: 0.4783
+    _source: artificialanalysis
+    _sources:
+    - artificialanalysis
+    _updated_at: '2026-03-31'
+    reasoning: 0.82
+  zai/glm-5-turbo:
+    _confidence:
+      reasoning: 0.4783
+    _source: artificialanalysis
+    _sources:
+    - artificialanalysis
+    _updated_at: '2026-03-31'
+    reasoning: 0.847

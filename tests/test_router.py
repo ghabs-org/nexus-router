@@ -111,6 +111,25 @@ class TestScorer:
         codex_eligible = [s for s in eligible if s.provider == "openai-codex"]
         assert not codex_eligible, "Degraded provider should have no eligible models"
 
+    def test_rate_limited_provider_is_excluded_during_soft_ban(self, authed_models):
+        degraded_health = {
+            "openai-codex": ProviderHealth(provider="openai-codex", auth="ok", quota="healthy", health_score=0.95),
+            "github-copilot": ProviderHealth(provider="github-copilot", auth="ok", quota="healthy", health_score=0.95),
+            "google-gemini-cli": ProviderHealth(
+                provider="google-gemini-cli",
+                auth="unknown",
+                quota="low",
+                consecutive_rate_limits=1,
+                rate_limit_cooldown_until="2099-01-01T00:05:00+00:00",
+                health_score=0.0,
+            ),
+        }
+        classifier = ClassifierOutput(task_type="general_chat", confidence=0.85)
+        scored = score_models(classifier, authed_models, degraded_health, {})
+        eligible = [s for s in scored if not s.excluded]
+        gemini_eligible = [s for s in eligible if s.provider == "google-gemini-cli"]
+        assert not gemini_eligible, "Soft-banned provider should have no eligible models"
+
     def test_fast_utility_cheap_profile(self, authed_models, provider_health_ok):
         classifier = ClassifierOutput(
             task_type="fast_utility", cost_profile="cheap", complexity="low", confidence=0.80

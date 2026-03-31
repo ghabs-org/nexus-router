@@ -50,6 +50,8 @@ class ProviderHealth:
     quota_remaining_ratio: Optional[float] = None  # 0.0–1.0 when known
     recent_error_rate: float = 0.0    # 0.0–1.0
     rate_limit_risk: float = 0.0      # 0.0–1.0
+    consecutive_rate_limits: int = 0
+    rate_limit_cooldown_until: Optional[str] = None
     latency_ms_p50: Optional[float] = None
     last_failure_at: Optional[str] = None
     last_check_at: Optional[str] = None

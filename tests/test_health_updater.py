@@ -2,9 +2,11 @@
 
 from pathlib import Path
 import sys
+from datetime import datetime, timedelta, timezone
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+from src import health
 from src import health_updater
 
 
@@ -59,3 +61,87 @@ def test_observe_turn_outcome_escalates_repeated_429s_to_exhausted(monkeypatch):
     assert calls["record"][-1]["quota_state"] == "exhausted"
     assert calls["record"][-1]["http_status"] == 429
     assert calls["log"][-1]["quota_state"] == "exhausted"
+
+
+def test_record_observation_soft_bans_provider_after_rate_limit(tmp_path, monkeypatch):
+    health_file = tmp_path / "runtime-health.json"
+    monkeypatch.setattr(health, "HEALTH_FILE", health_file)
+
+    health.record_observation(
+        provider="google-gemini-cli",
+        auth_status="unknown",
+        quota_state="low",
+        error_type="rate_limit",
+        http_status=429,
+    )
+
+    providers = health.load_provider_health(["google-gemini-cli"])
+    provider = providers["google-gemini-cli"]
+
+    assert provider.consecutive_rate_limits == 1
+    assert provider.rate_limit_cooldown_until is not None
+    assert provider.health_score == 0.0
+
+
+def test_record_observation_escalates_soft_ban_window_with_repeat_429s(tmp_path, monkeypatch):
+    health_file = tmp_path / "runtime-health.json"
+    monkeypatch.setattr(health, "HEALTH_FILE", health_file)
+
+    base = datetime(2026, 3, 31, 13, 0, tzinfo=timezone.utc)
+    moments = [
+        base,
+        base,
+        (base + timedelta(minutes=1)),
+        (base + timedelta(minutes=1)),
+    ]
+
+    monkeypatch.setattr(health, "_now_dt", lambda: moments.pop(0))
+
+    health.record_observation(
+        provider="google-gemini-cli",
+        auth_status="unknown",
+        quota_state="low",
+        error_type="rate_limit",
+        http_status=429,
+    )
+    health.record_observation(
+        provider="google-gemini-cli",
+        auth_status="unknown",
+        quota_state="low",
+        error_type="rate_limit",
+        http_status=429,
+    )
+
+    providers = health.load_provider_health(["google-gemini-cli"])
+    provider = providers["google-gemini-cli"]
+    cooldown_until = datetime.fromisoformat(provider.rate_limit_cooldown_until)
+
+    assert provider.consecutive_rate_limits == 2
+    assert cooldown_until == base + timedelta(minutes=15)
+
+
+def test_record_observation_clears_rate_limit_soft_ban_after_success(tmp_path, monkeypatch):
+    health_file = tmp_path / "runtime-health.json"
+    monkeypatch.setattr(health, "HEALTH_FILE", health_file)
+
+    health.record_observation(
+        provider="google-gemini-cli",
+        auth_status="unknown",
+        quota_state="low",
+        error_type="rate_limit",
+        http_status=429,
+    )
+    health.record_observation(
+        provider="google-gemini-cli",
+        auth_status="ok",
+        quota_state="healthy",
+        error_type=None,
+        http_status=200,
+    )
+
+    providers = health.load_provider_health(["google-gemini-cli"])
+    provider = providers["google-gemini-cli"]
+
+    assert provider.consecutive_rate_limits == 0
+    assert provider.rate_limit_cooldown_until is None
+    assert provider.health_score > 0.0

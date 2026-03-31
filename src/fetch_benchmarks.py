@@ -2,9 +2,12 @@
 """
 fetch_benchmarks.py — Fetch benchmark data and generate benchmark-scores.yaml.
 
-Sources (configurable in policies/benchmark-sources.yaml):
-  - artificialanalysis.ai  → speed, cost, context
+Sources:
+  - artificialanalysis.ai  → speed, cost, context, quality proxies
   - livebench.ai           → reasoning, coding
+  - HELM                   → reasoning / coding proxies when available
+  - Inspect AI             → instruction-following / reasoning proxies when public results are available
+  - Open LLM Leaderboard   → reasoning / review proxies for open models when public rows are available
   - vellum.ai              → multi-task quality
   - BFCL                   → tool use
   - MGSM                   → multilingual
@@ -12,27 +15,35 @@ Sources (configurable in policies/benchmark-sources.yaml):
 This script:
 1. Fetches structured data from each source
 2. Normalizes scores to 0.0–1.0 per router dimension
-3. Merges scores across sources (later sources don't override earlier ones
-   unless --force is passed)
+3. Merges per-dimension contributions across sources with a weighted average:
+      final_dim = sum(weight(source) * value(source)) / sum(weight(source))
+   Only sources that actually provide a value for a dimension participate in
+   that dimension's denominator.
 4. Writes/updates policies/benchmark-scores.yaml
+
+Default source trust weights are defined in SOURCE_WEIGHTS below. Unknown
+sources fall back to 1.0.
 
 Usage:
   python src/fetch_benchmarks.py                    # fetch all configured sources
   python src/fetch_benchmarks.py --sources aa,lb    # only artificialanalysis + livebench
+  python src/fetch_benchmarks.py --sources aa,helm  # include HELM if available
+  python src/fetch_benchmarks.py --sources aa,inspect,openllm
   python src/fetch_benchmarks.py --dry-run          # print without writing
   python src/fetch_benchmarks.py --force            # overwrite existing scores
-
-Note: This script currently implements the fetch framework and normalization
-logic. Individual source parsers are stubs — implement them as each source
-provides structured data access (API, CSV download, or scraping).
 """
 
 import argparse
+import hashlib
 import json
 import re
+import statistics
 import sys
+import time
+import urllib.error
 import urllib.request
 from datetime import datetime, timezone
+from html import unescape
 from pathlib import Path
 from typing import Optional
 
@@ -45,8 +56,29 @@ except ImportError:
 ROOT           = Path(__file__).parent.parent
 BENCHMARKS_OUT = ROOT / "policies/benchmark-scores.yaml"
 SOURCES_FILE   = ROOT / "policies/benchmark-sources.yaml"
+CACHE_DIR      = ROOT / "state/benchmark-cache"
+MODEL_CATALOG_FILE = ROOT / "catalog/raw/openclaw-models.json"
 
 TODAY = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+SOURCE_WEIGHTS: dict[str, float] = {
+    "artificialanalysis": 1.0,
+    "livebench": 1.0,
+    "helm": 0.9,
+    "inspect_ai": 0.9,
+    "openllm": 0.9,
+    "vellum": 0.9,
+    "bfcl": 1.0,
+    "mgsm": 1.0,
+}
+
+FETCH_RETRY_DELAYS = (1.0, 2.0, 4.0)
+MAX_RETRY_AFTER_SECONDS = 15.0
+PREFERRED_MODEL_PROVIDERS = (
+    "google-gemini-cli/",
+    "github-copilot/",
+    "openai-codex/",
+)
 
 # ── Normalization helpers ─────────────────────────────────────────────────────
 
@@ -115,12 +147,14 @@ def fetch_artificialanalysis() -> dict[str, dict]:
     ARRAY_MARKER = '"critpt"'
 
     try:
-        req = urllib.request.Request(
+        raw = _fetch_with_cache(
             PAGE_URL,
+            cache_key="text:artificialanalysis:leaderboard",
+            timeout=30,
             headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"},
+            loader=lambda s: s,
+            suffix=".txt",
         )
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            raw = resp.read().decode("utf-8", errors="replace")
     except Exception as e:
         print(f"    artificialanalysis fetch error: {e}")
         return {}
@@ -235,7 +269,7 @@ def fetch_artificialanalysis() -> dict[str, dict]:
     result: dict[str, dict] = {}
     for m in models_raw:
         slug = m.get("slug", "")
-        oc_model = SLUG_MAP.get(slug)
+        oc_model = SLUG_MAP.get(slug) or _map_public_model_name(slug.replace("-", " ")) or _map_public_model_name(slug)
         if not oc_model:
             continue
 
@@ -324,15 +358,17 @@ def fetch_livebench() -> dict[str, dict]:
     try:
         while offset < MAX_ROWS:
             url = f"{BASE}&offset={offset}&length={PAGE}"
-            req = urllib.request.Request(
+            data = _fetch_with_cache(
                 url,
+                cache_key=f"json:livebench:{offset}",
+                timeout=30,
                 headers={
                     "User-Agent": "nexus-router/1.0",
                     "Accept": "application/json",
-                }
+                },
+                loader=lambda s: json.loads(s),
+                suffix=".json",
             )
-            with urllib.request.urlopen(req, timeout=30) as resp:
-                data = json.loads(resp.read())
 
             rows = data.get("rows", [])
             if not rows:
@@ -406,6 +442,448 @@ def fetch_livebench() -> dict[str, dict]:
     return result
 
 
+def _cache_file_path(cache_key: str, suffix: str = ".json") -> Path:
+    digest = hashlib.sha256(cache_key.encode("utf-8")).hexdigest()[:20]
+    return CACHE_DIR / f"{digest}{suffix}"
+
+
+def _load_cached_payload(cache_key: str, loader, suffix: str):
+    path = _cache_file_path(cache_key, suffix)
+    if not path.exists():
+        return None
+    try:
+        return loader(path.read_text())
+    except Exception as e:
+        print(f"    cache read failed for {cache_key}: {e}")
+        return None
+
+
+def _write_cached_payload(cache_key: str, raw_text: str, suffix: str):
+    path = _cache_file_path(cache_key, suffix)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(raw_text)
+    except Exception as e:
+        print(f"    cache write failed for {cache_key}: {e}")
+
+
+def _parse_retry_after(value: Optional[str]) -> Optional[float]:
+    if not value:
+        return None
+    value = str(value).strip()
+    try:
+        return max(0.0, min(MAX_RETRY_AFTER_SECONDS, float(value)))
+    except ValueError:
+        return None
+
+
+def _fetch_with_cache(url: str, *, cache_key: Optional[str] = None, timeout: int = 30,
+                      headers: Optional[dict[str, str]] = None,
+                      loader=lambda s: s, suffix: str = ".txt"):
+    cache_key = cache_key or url
+    last_error = None
+    req_headers = headers or {"User-Agent": "Mozilla/5.0"}
+
+    for attempt, base_delay in enumerate((0.0,) + FETCH_RETRY_DELAYS, start=1):
+        if attempt > 1:
+            time.sleep(base_delay)
+        try:
+            req = urllib.request.Request(url, headers=req_headers)
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                raw_text = resp.read().decode("utf-8", errors="replace")
+            payload = loader(raw_text)
+            _write_cached_payload(cache_key, raw_text, suffix)
+            return payload
+        except urllib.error.HTTPError as e:
+            last_error = e
+            retry_after = _parse_retry_after(getattr(e, "headers", {}).get("Retry-After"))
+            status = getattr(e, "code", None)
+            if status == 429:
+                cached = _load_cached_payload(cache_key, loader=loader, suffix=suffix)
+                if cached is not None:
+                    print(f"    using stale cache for {url} after 429 rate limit")
+                    return cached
+                if retry_after is not None and attempt <= len(FETCH_RETRY_DELAYS):
+                    print(f"    rate limited for {url} (429); retrying after {retry_after:.1f}s")
+                    time.sleep(retry_after)
+                    continue
+            if status not in (429, 500, 502, 503, 504) or attempt > len(FETCH_RETRY_DELAYS):
+                break
+            print(f"    transient HTTP {status} for {url}; retry {attempt}/{len(FETCH_RETRY_DELAYS)}")
+        except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, ValueError) as e:
+            last_error = e
+            if attempt > len(FETCH_RETRY_DELAYS):
+                break
+            print(f"    transient fetch error for {url}: {e} (retry {attempt}/{len(FETCH_RETRY_DELAYS)})")
+
+    cached = _load_cached_payload(cache_key, loader=loader, suffix=suffix)
+    if cached is not None:
+        print(f"    using stale cache for {url} after fetch failure: {last_error}")
+        return cached
+    raise last_error
+
+
+def _fetch_json(url: str, timeout: int = 30):
+    return _fetch_with_cache(
+        url,
+        cache_key=f"json:{url}",
+        timeout=timeout,
+        headers={
+            "User-Agent": "nexus-router/1.0",
+            "Accept": "application/json,text/html;q=0.9,*/*;q=0.8",
+        },
+        loader=lambda s: json.loads(s),
+        suffix=".json",
+    )
+
+
+def _fetch_text(url: str, timeout: int = 30) -> str:
+    return _fetch_with_cache(
+        url,
+        cache_key=f"text:{url}",
+        timeout=timeout,
+        headers={"User-Agent": "Mozilla/5.0"},
+        loader=lambda s: s,
+        suffix=".txt",
+    )
+
+
+def _slugify_model_name(model_name: str) -> str:
+    model_name = unescape(model_name or "")
+    model_name = re.sub(r"<[^>]+>", " ", model_name)
+    model_name = model_name.strip().lower()
+    model_name = re.sub(r"\s+", " ", model_name)
+    model_name = model_name.replace("_", "-")
+    return model_name
+
+
+def _normalize_model_alias(text: str) -> str:
+    text = _slugify_model_name(text)
+    text = text.replace(".", "-")
+    text = re.sub(r"[^a-z0-9]+", "-", text)
+    text = re.sub(r"-+", "-", text).strip("-")
+    return text
+
+
+def _model_alias_candidates(text: str) -> list[str]:
+    base = _normalize_model_alias(text)
+    if not base:
+        return []
+    candidates = [base]
+    trimmed = re.sub(r"-(preview|experimental|exp|latest|instruct|turbo|base|thinking|adaptive|chat)(-|$)", "-", base)
+    trimmed = re.sub(r"-(20\d{2}(?:-?\d{2}(?:-?\d{2})?)?)(-|$)", "-", trimmed)
+    trimmed = re.sub(r"-(\d{2}(?:-\d{2}){1,2})(-|$)", "-", trimmed)
+    trimmed = re.sub(r"-+", "-", trimmed).strip("-")
+    if trimmed and trimmed not in candidates:
+        candidates.append(trimmed)
+    return candidates
+
+
+def _build_catalog_alias_index() -> dict[str, list[str]]:
+    index: dict[str, list[str]] = {}
+    try:
+        data = json.loads(MODEL_CATALOG_FILE.read_text())
+    except Exception:
+        return index
+
+    for row in data.get("models") or []:
+        model_id = str(row.get("key") or "")
+        if not model_id or "/" not in model_id:
+            continue
+        provider, model_key = model_id.split("/", 1)
+        display_name = str(row.get("name") or "")
+        candidates = {
+            _normalize_model_alias(model_id),
+            _normalize_model_alias(model_key),
+            _normalize_model_alias(display_name),
+        }
+        if provider in {"github-copilot", "google-gemini-cli", "openai-codex"}:
+            candidates.add(_normalize_model_alias(model_key.replace(".", "-")))
+        for candidate in {c for c in candidates if c}:
+            index.setdefault(candidate, []).append(model_id)
+    return index
+
+
+CATALOG_ALIAS_INDEX = _build_catalog_alias_index()
+
+
+def _pick_preferred_model_id(candidates: list[str]) -> Optional[str]:
+    if not candidates:
+        return None
+    unique = sorted(set(candidates), key=lambda model_id: (
+        next((i for i, prefix in enumerate(PREFERRED_MODEL_PROVIDERS) if model_id.startswith(prefix)), len(PREFERRED_MODEL_PROVIDERS)),
+        len(model_id),
+        model_id,
+    ))
+    return unique[0]
+
+
+def _map_public_model_name(model_name: str) -> Optional[str]:
+    """Map public leaderboard model names to Nexus/OpenClaw model IDs conservatively."""
+    key = _slugify_model_name(model_name)
+    alias_map = {
+        "gpt-4o": "github-copilot/gpt-4o",
+        "gpt-4 omni": "github-copilot/gpt-4o",
+        "gpt-4-turbo": "github-copilot/gpt-4-turbo",
+        "claude-3.5-sonnet": "github-copilot/claude-sonnet-4",
+        "claude 3.5 sonnet": "github-copilot/claude-sonnet-4",
+        "claude-3.7-sonnet": "github-copilot/claude-sonnet-4.5",
+        "claude 3.7 sonnet": "github-copilot/claude-sonnet-4.5",
+        "claude-sonnet-4": "github-copilot/claude-sonnet-4",
+        "claude sonnet 4": "github-copilot/claude-sonnet-4",
+        "claude-sonnet-4.5": "github-copilot/claude-sonnet-4.5",
+        "claude sonnet 4.5": "github-copilot/claude-sonnet-4.5",
+        "claude-sonnet-4.6": "github-copilot/claude-sonnet-4.6",
+        "claude sonnet 4.6": "github-copilot/claude-sonnet-4.6",
+        "claude-opus-4": "github-copilot/claude-opus-4.5",
+        "claude opus 4": "github-copilot/claude-opus-4.5",
+        "claude-opus-4.5": "github-copilot/claude-opus-4.5",
+        "claude opus 4.5": "github-copilot/claude-opus-4.5",
+        "claude-opus-4.6": "github-copilot/claude-opus-4.6",
+        "claude opus 4.6": "github-copilot/claude-opus-4.6",
+        "gemini-1.5-pro": "google-gemini-cli/gemini-1.5-pro",
+        "gemini 1.5 pro": "google-gemini-cli/gemini-1.5-pro",
+        "gemini-1.5-flash": "google-gemini-cli/gemini-1.5-flash",
+        "gemini 1.5 flash": "google-gemini-cli/gemini-1.5-flash",
+        "gemini-2.0-flash": "google-gemini-cli/gemini-2.0-flash",
+        "gemini 2.0 flash": "google-gemini-cli/gemini-2.0-flash",
+        "gemini-2.5-flash": "google-gemini-cli/gemini-2.5-flash",
+        "gemini 2.5 flash": "google-gemini-cli/gemini-2.5-flash",
+        "gemini-2.5-pro": "google-gemini-cli/gemini-2.5-pro",
+        "gemini 2.5 pro": "google-gemini-cli/gemini-2.5-pro",
+        "gemini-3.1-pro-preview": "google-gemini-cli/gemini-3.1-pro-preview",
+        "gemini 3.1 pro preview": "google-gemini-cli/gemini-3.1-pro-preview",
+        "gpt-5.2-codex": "openai-codex/gpt-5.2-codex",
+        "gpt 5.2 codex": "openai-codex/gpt-5.2-codex",
+        "gpt-5.3-codex": "openai-codex/gpt-5.3-codex",
+        "gpt 5.3 codex": "openai-codex/gpt-5.3-codex",
+        "gpt-5.4": "openai-codex/gpt-5.4",
+        "gpt 5.4": "openai-codex/gpt-5.4",
+        "gpt-5.4-mini": "openai-codex/gpt-5.4-mini",
+        "gpt 5.4 mini": "openai-codex/gpt-5.4-mini",
+    }
+    if key in alias_map:
+        return alias_map[key]
+
+    key_no_prefix = re.sub(r"^(openai|anthropic|google|meta|mistral|deepseek|qwen|xai|microsoft|alibaba)[/ :-]+", "", key)
+    if key_no_prefix in alias_map:
+        return alias_map[key_no_prefix]
+
+    candidates = []
+    for value in (model_name, key, key_no_prefix):
+        candidates.extend(_model_alias_candidates(value))
+    for candidate in candidates:
+        picked = _pick_preferred_model_id(CATALOG_ALIAS_INDEX.get(candidate, []))
+        if picked:
+            return picked
+    return None
+
+
+def _map_helm_model_name(model_name: str) -> Optional[str]:
+    """Map HELM display names / adapter names to OpenClaw model IDs conservatively."""
+    return _map_public_model_name(model_name)
+
+
+def fetch_inspect_ai() -> dict[str, dict]:
+    """
+    Best-effort Inspect AI adapter.
+
+    Inspect AI's public docs do not currently expose a single stable leaderboard API.
+    We therefore probe a small set of likely public feeds and only emit scores when we
+    can parse them confidently. If nothing stable is available, we warn and skip.
+    """
+    candidate_urls = [
+        "https://ukgovernmentbeis.github.io/inspect_evals/search.json",
+        "https://inspect.aisi.org.uk/search.json",
+    ]
+    for url in candidate_urls:
+        try:
+            payload = _fetch_json(url)
+        except Exception as e:
+            print(f"    inspect_ai: unable to read candidate feed {url}: {e}")
+            continue
+
+        if not isinstance(payload, list):
+            print(f"    inspect_ai: unsupported payload shape at {url} — skipping")
+            continue
+
+        result: dict[str, dict] = {}
+        for row in payload:
+            if not isinstance(row, dict):
+                continue
+            model_name = row.get("model") or row.get("model_name") or row.get("name")
+            score = row.get("score") or row.get("accuracy")
+            if not model_name or score is None:
+                continue
+            oc_model = _map_public_model_name(str(model_name))
+            if not oc_model:
+                continue
+            try:
+                value = float(score)
+            except (TypeError, ValueError):
+                continue
+            if value > 1.0:
+                value = value / 100.0
+            if not (0.0 <= value <= 1.0):
+                continue
+            result.setdefault(oc_model, {"_source": "inspect_ai", "_updated_at": TODAY})["reasoning"] = round(value, 4)
+
+        if result:
+            print(f"    {len(result)} models mapped from Inspect AI public feed")
+            return result
+
+    print("    inspect_ai: no stable public model-score feed found — skipping")
+    return {}
+
+
+def fetch_openllm() -> dict[str, dict]:
+    """
+    Fetch reasoning/review proxies from the public Open LLM Leaderboard dataset.
+
+    Public dataset:
+      https://huggingface.co/datasets/open-llm-leaderboard/contents
+    """
+    base = (
+        "https://datasets-server.huggingface.co/rows"
+        "?dataset=open-llm-leaderboard%2Fcontents"
+        "&config=default&split=train"
+    )
+    page = 100
+    max_rows = 5000
+    offset = 0
+    result: dict[str, dict] = {}
+    seen_rows = 0
+
+    try:
+        while offset < max_rows:
+            data = _fetch_json(f"{base}&offset={offset}&length={page}")
+            rows = data.get("rows") or []
+            if not rows:
+                break
+
+            for wrapped in rows:
+                row = wrapped.get("row") or {}
+                seen_rows += 1
+                if row.get("Flagged") or row.get("Merged"):
+                    continue
+                model_name = row.get("fullname") or row.get("Model") or row.get("eval_name")
+                oc_model = _map_public_model_name(str(model_name or ""))
+                if not oc_model:
+                    continue
+
+                entry: dict[str, object] = {"_source": "openllm", "_updated_at": TODAY}
+                if row.get("IFEval") is not None:
+                    entry["review"] = normalize_reasoning(float(row["IFEval"]))
+                reasoning_parts = []
+                for key in ("BBH", "MATH Lvl 5", "GPQA", "MUSR", "MMLU-PRO"):
+                    value = row.get(key)
+                    if value is None:
+                        continue
+                    reasoning_parts.append(normalize_reasoning(float(value)))
+                if reasoning_parts:
+                    entry["reasoning"] = round(sum(reasoning_parts) / len(reasoning_parts), 4)
+                if "review" in entry:
+                    entry["summarize"] = round(max(0.0, min(1.0, float(entry["review"]) * 0.97)), 4)
+
+                if len(entry) > 2:
+                    result[oc_model] = entry
+
+            offset += page
+            if len(rows) < page:
+                break
+    except Exception as e:
+        print(f"    openllm: dataset fetch failed: {e}")
+        return {}
+
+    if result:
+        print(f"    {seen_rows} Open LLM Leaderboard rows scanned, {len(result)} models mapped to OpenClaw IDs")
+    else:
+        print(f"    openllm: scanned {seen_rows} rows but found no confidently mappable models")
+    return result
+
+
+def _extract_helm_table_scores(group_name: str, dim: str) -> dict[str, dict]:
+    """Read a HELM group table and extract the first score-like mean column per model."""
+    base = "https://storage.googleapis.com/crfm-helm-public/benchmark_output/releases/v0.4.0"
+    try:
+        tables = _fetch_json(f"{base}/groups/{group_name}.json")
+    except Exception as e:
+        print(f"    helm: structured group fetch failed for {group_name}: {e}")
+        return {}
+
+    result: dict[str, dict] = {}
+    for table in tables:
+        header = table.get("header") or []
+        rows = table.get("rows") or []
+        if len(header) < 2 or not rows:
+            continue
+        header_values = [str(col.get("value", "")) for col in header]
+        if not any("mean" in h.lower() for h in header_values[1:3]):
+            continue
+
+        for row in rows:
+            if len(row) < 2:
+                continue
+            model_name = str(row[0].get("value", "")).strip()
+            score = row[1].get("value")
+            if not model_name or score is None:
+                continue
+            oc_model = _map_helm_model_name(model_name)
+            if not oc_model:
+                continue
+            try:
+                val = max(0.0, min(1.0, float(score)))
+            except (TypeError, ValueError):
+                continue
+            result.setdefault(oc_model, {"_source": "helm", "_updated_at": TODAY})[dim] = round(val, 4)
+
+        if result:
+            break
+
+    return result
+
+
+def fetch_helm() -> dict[str, dict]:
+    """
+    Fetch HELM leaderboard proxies.
+
+    Primary path: structured JSON files published by HELM.
+    Fallback path: lightweight HTML/text scrape of the public leaderboard page.
+
+    This fetcher is intentionally conservative:
+    - if HELM changes shape, warn and skip
+    - only dimensions we can identify confidently are returned
+    - exit path never raises to the caller unless something very unexpected happens
+    """
+    combined: dict[str, dict] = {}
+
+    for group_name, dim in (("reasoning", "reasoning"), ("summarization", "review")):
+        group_scores = _extract_helm_table_scores(group_name, dim)
+        for model_id, payload in group_scores.items():
+            combined.setdefault(model_id, {"_source": "helm", "_updated_at": TODAY}).update(payload)
+
+    if combined:
+        print(f"    {len(combined)} models mapped from HELM structured JSON")
+        return combined
+
+    try:
+        html = _fetch_text("https://crfm.stanford.edu/helm/classic/latest/")
+        html = unescape(html)
+        for model_name, score in re.findall(r">([^<>]{2,80})</a></td>\s*<td[^>]*>(0?\.\d+)</td>", html):
+            oc_model = _map_helm_model_name(model_name)
+            if not oc_model:
+                continue
+            combined.setdefault(oc_model, {"_source": "helm", "_updated_at": TODAY})["reasoning"] = round(float(score), 4)
+    except Exception as e:
+        print(f"    helm: fallback leaderboard scrape failed: {e}")
+
+    if combined:
+        print(f"    {len(combined)} models mapped from HELM fallback HTML")
+    else:
+        print("    helm: no confidently mappable model scores found — skipping")
+    return combined
+
+
 def fetch_vellum() -> dict[str, dict]:
     """
     Fetch quality scores from vellum.ai leaderboard.
@@ -452,11 +930,19 @@ def fetch_mgsm() -> dict[str, dict]:
 # ── Source registry ───────────────────────────────────────────────────────────
 
 SOURCES = {
-    "aa":    ("artificialanalysis", fetch_artificialanalysis),
-    "lb":    ("livebench",          fetch_livebench),
-    "vl":    ("vellum",             fetch_vellum),
-    "bfcl":  ("bfcl",              fetch_bfcl),
-    "mgsm":  ("mgsm",              fetch_mgsm),
+    "aa":        ("artificialanalysis", fetch_artificialanalysis),
+    "lb":        ("livebench",          fetch_livebench),
+    "helm":      ("helm",               fetch_helm),
+    "hl":        ("helm",               fetch_helm),
+    "inspect":   ("inspect_ai",         fetch_inspect_ai),
+    "inspect_ai":("inspect_ai",         fetch_inspect_ai),
+    "ia":        ("inspect_ai",         fetch_inspect_ai),
+    "openllm":   ("openllm",            fetch_openllm),
+    "open-llm":  ("openllm",            fetch_openllm),
+    "ollm":      ("openllm",            fetch_openllm),
+    "vl":        ("vellum",             fetch_vellum),
+    "bfcl":      ("bfcl",               fetch_bfcl),
+    "mgsm":      ("mgsm",               fetch_mgsm),
 }
 
 ALL_SOURCES = list(SOURCES.keys())
@@ -468,25 +954,109 @@ SCORE_DIMS = ["coding", "review", "reasoning", "summarize", "fast", "cost",
               "context", "vision", "tools", "multilingual"]
 
 
+CONFIDENCE_COUNT_CAP = 3.0
+CONFIDENCE_WEIGHT_CAP = 2.0
+CONFIDENCE_STDDEV_CAP = 0.25
+SINGLE_SOURCE_AGREEMENT_CONF = 0.65
+
+
+def _source_weight(source_name: str) -> float:
+    return float(SOURCE_WEIGHTS.get(source_name, 1.0))
+
+
+def _canonical_source_name(source_name: str) -> str:
+    if "+" in source_name:
+        return source_name.split("+")[0]
+    return source_name
+
+
+def _compute_dimension_confidence(values: list[float], total_weight: float) -> float:
+    """Return a moderate-to-high confidence score for one merged dimension."""
+    contributors = len(values)
+    if contributors == 0 or total_weight <= 0:
+        return 0.0
+
+    base_count_conf = min(1.0, contributors / CONFIDENCE_COUNT_CAP)
+    base_weight_conf = min(1.0, total_weight / CONFIDENCE_WEIGHT_CAP)
+    if contributors == 1:
+        agreement_conf = SINGLE_SOURCE_AGREEMENT_CONF
+    else:
+        stddev = statistics.pstdev(values)
+        agreement_conf = 1.0 - min(1.0, stddev / CONFIDENCE_STDDEV_CAP)
+
+    final_conf = (
+        0.4 * base_count_conf
+        + 0.3 * base_weight_conf
+        + 0.3 * agreement_conf
+    )
+    return round(max(0.0, min(1.0, final_conf)), 4)
+
+
+def aggregate_source_entries(entries: list[dict]) -> dict:
+    """Combine multiple source payloads for one model using per-dimension weights."""
+    aggregated: dict = {}
+    confidence: dict[str, float] = {}
+    contributing_sources: set[str] = set()
+
+    for dim in SCORE_DIMS:
+        numerator = 0.0
+        denominator = 0.0
+        dim_sources: set[str] = set()
+        dim_values: list[float] = []
+        for entry in entries:
+            if dim not in entry or entry[dim] is None:
+                continue
+            source_name = _canonical_source_name(entry.get("_source", ""))
+            weight = _source_weight(source_name)
+            value = float(entry[dim])
+            numerator += weight * value
+            denominator += weight
+            dim_values.append(value)
+            if source_name:
+                dim_sources.add(source_name)
+        if denominator > 0:
+            aggregated[dim] = round(numerator / denominator, 4)
+            confidence[dim] = _compute_dimension_confidence(dim_values, denominator)
+            contributing_sources.update(dim_sources)
+
+    if confidence:
+        aggregated["_confidence"] = confidence
+    if contributing_sources:
+        aggregated["_sources"] = sorted(contributing_sources)
+        aggregated["_source"] = "+".join(sorted(contributing_sources))
+    elif entries:
+        aggregated["_source"] = entries[-1].get("_source", "")
+    aggregated["_updated_at"] = TODAY
+    return aggregated
+
+
 def merge_scores(existing: dict, new_scores: dict, force: bool) -> dict:
     """
-    Merge new benchmark scores into existing model entry.
-    If force=False, existing non-null scores are not overwritten.
+    Merge aggregated benchmark scores into an existing model entry.
+    If force=False, existing non-null scores are preserved.
     """
     merged = dict(existing)
     for dim in SCORE_DIMS:
-        if dim in new_scores:
-            if force or dim not in merged:
-                merged[dim] = new_scores[dim]
-    # Always update source and date
-    if "_source" in new_scores:
-        prev_src = merged.get("_source", "")
-        new_src = new_scores["_source"]
-        # Deduplicate sources
-        existing_parts = set(prev_src.split("+")) if prev_src else set()
-        new_parts = set(new_src.split("+")) if new_src else set()
-        all_parts = existing_parts | new_parts
-        merged["_source"] = "+".join(sorted(all_parts)) if all_parts else new_src
+        if dim in new_scores and (force or dim not in merged):
+            merged[dim] = new_scores[dim]
+
+    existing_confidence = existing.get("_confidence") or {}
+    new_confidence = new_scores.get("_confidence") or {}
+    merged_confidence = dict(existing_confidence)
+    for dim, score in new_confidence.items():
+        if force or dim not in merged_confidence:
+            merged_confidence[dim] = score
+    if merged_confidence:
+        merged["_confidence"] = merged_confidence
+
+    prev_sources = set(existing.get("_sources") or [])
+    prev_sources |= {s for s in str(existing.get("_source", "")).split("+") if s}
+    new_sources = set(new_scores.get("_sources") or [])
+    new_sources |= {s for s in str(new_scores.get("_source", "")).split("+") if s}
+    all_sources = sorted(prev_sources | new_sources)
+    if all_sources:
+        merged["_sources"] = all_sources
+        merged["_source"] = "+".join(all_sources)
     merged["_updated_at"] = TODAY
     return merged
 
@@ -496,7 +1066,7 @@ def merge_scores(existing: dict, new_scores: dict, force: bool) -> dict:
 def main():
     parser = argparse.ArgumentParser(description="Fetch benchmark data for Nexus Router")
     parser.add_argument("--sources", type=str, default=",".join(ALL_SOURCES),
-                        help=f"Comma-separated source ids: {', '.join(ALL_SOURCES)}")
+                        help=f"Comma-separated source ids / aliases: {', '.join(ALL_SOURCES)}")
     parser.add_argument("--dry-run", action="store_true",
                         help="Print results without writing to file")
     parser.add_argument("--force", action="store_true",
@@ -520,27 +1090,35 @@ def main():
     else:
         print(f"No existing file at {args.output} — starting fresh")
 
-    # Fetch and merge
-    all_new: dict[str, dict] = {}
+    # Fetch and aggregate per source
+    all_new: dict[str, list[dict]] = {}
+    seen_labels: set[str] = set()
     for src_id in requested:
         label, fetcher = SOURCES[src_id]
+        if label in seen_labels:
+            continue
+        seen_labels.add(label)
         print(f"Fetching {label}...")
         try:
             results = fetcher()
             for model_id, scores in results.items():
-                all_new.setdefault(model_id, {})
-                all_new[model_id].update(scores)
+                all_new.setdefault(model_id, []).append(scores)
             if results:
                 print(f"  → {len(results)} model entries")
         except Exception as e:
             print(f"  [warning] {label} fetch failed: {e}", file=sys.stderr)
 
+    aggregated_new = {
+        model_id: aggregate_source_entries(entries)
+        for model_id, entries in all_new.items()
+    }
+
     # Merge into existing
     merged = dict(existing)
-    for model_id, new_scores in all_new.items():
+    for model_id, new_scores in aggregated_new.items():
         merged[model_id] = merge_scores(merged.get(model_id, {}), new_scores, args.force)
 
-    new_count = len(all_new)
+    new_count = len(aggregated_new)
     print(f"\nTotal benchmark entries: {len(merged)} ({new_count} new/updated)")
 
     if args.dry_run:

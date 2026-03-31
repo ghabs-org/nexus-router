@@ -96,17 +96,30 @@ class Router:
         effective_classifier = _adapt_classifier_for_light_chat(classifier, pre_signals)
         effective_route_mode = (route_mode or "auto").strip().lower()
         if effective_route_mode == "reasoning":
-            if effective_classifier.task_type in {"general_chat", "fast_utility", "summarization"}:
-                effective_classifier = replace(
-                    effective_classifier,
-                    task_type="reasoning",
-                    cost_profile="premium",
-                )
-            else:
+            # Explicit mode should dominate: force reasoning-first routing behavior.
+            effective_classifier = replace(
+                effective_classifier,
+                task_type="reasoning",
+                cost_profile="premium",
+            )
+        elif effective_route_mode == "fast":
+            # Explicit mode should dominate: force fast/cheap routing behavior.
+            effective_classifier = replace(
+                effective_classifier,
+                task_type="fast_utility",
+                cost_profile="cheap",
+            )
+        elif effective_route_mode == "auto":
+            # Task-aware auto defaults:
+            # - reasoning/planning should bias toward stronger models
+            # - quick/utility/chat should bias toward cheap+fast
+            # - coding/review stay balanced unless caller pins a mode
+            if effective_classifier.task_type in {"reasoning", "code_review", "long_context"}:
                 effective_classifier = replace(effective_classifier, cost_profile="premium")
-        elif effective_route_mode in {"fast", "auto"}:
-            # auto is cheap-first in plugin flow; keep parity if server is called directly
-            effective_classifier = replace(effective_classifier, cost_profile="cheap")
+            elif effective_classifier.task_type in {"fast_utility", "general_chat", "summarization"}:
+                effective_classifier = replace(effective_classifier, cost_profile="cheap")
+            else:
+                effective_classifier = replace(effective_classifier, cost_profile="balanced")
         elif effective_route_mode == "balanced":
             # balanced preserves classifier cost_profile as provided by caller
             pass
