@@ -12,3 +12,5 @@ build/
 venv/
 plugin/node_modules/
 artifacts/
+
+.test-state/
