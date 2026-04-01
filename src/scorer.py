@@ -418,10 +418,9 @@ def _model_preference_bump(
         return 0.0, {"samples": samples}
 
     score = float(task_feedback.get("score") or 0.0)
-    if score <= 0:
-        return 0.0, {"samples": samples, "top_reason_tag": task_feedback.get("top_reason_tag")}
 
     max_bump = float(preference_cfg.get("max_bump", 0.04) or 0.04)
+    max_penalty = float(preference_cfg.get("max_penalty", max_bump) or max_bump)
     decay_days = max(1, int(preference_cfg.get("decay_window_days", 30) or 30))
     last_feedback_at = _parse_iso_utc(task_feedback.get("last_feedback_at"))
     if last_feedback_at is None:
@@ -431,11 +430,20 @@ def _model_preference_bump(
         decay_factor = max(0.0, 1.0 - min(age_days / decay_days, 1.0))
 
     sample_factor = min(1.0, samples / max(min_samples * 3, 1))
-    bump = min(max_bump, max_bump * score * decay_factor * sample_factor)
-    return round(max(0.0, bump), 4), {
+
+    # Convert [0,1] feedback score into centered signal [-1,+1].
+    # < 0 means preference penalty, > 0 means preference boost.
+    centered = max(-1.0, min(1.0, (score - 0.5) * 2.0))
+    if centered >= 0:
+        bump = min(max_bump, max_bump * centered * decay_factor * sample_factor)
+    else:
+        bump = max(-max_penalty, -max_penalty * abs(centered) * decay_factor * sample_factor)
+
+    return round(bump, 4), {
         "samples": samples,
         "top_reason_tag": task_feedback.get("top_reason_tag"),
         "decay_factor": round(decay_factor, 4),
+        "centered_score": round(centered, 4),
     }
 
 

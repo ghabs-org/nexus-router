@@ -131,6 +131,7 @@ feedback:
   model_preference:
     enabled: true
     max_bump: 0.04
+    max_penalty: 0.06
     min_samples: 3
     decay_window_days: 30
   adapters:
