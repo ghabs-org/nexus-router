@@ -12,9 +12,9 @@ import numpy as np
 from .local_classifier_labels import ID_TO_LABEL
 from .types import ClassifierOutput, PreSignals
 
-DEFAULT_LOCAL_CLASSIFIER_DIR = Path(
-    os.environ.get("NEXUS_ROUTER_LOCAL_CLASSIFIER_DIR", "/app/artifacts/router-classifier/onnx")
-)
+from .paths import LOCAL_CLASSIFIER_DIR
+
+DEFAULT_LOCAL_CLASSIFIER_DIR = LOCAL_CLASSIFIER_DIR
 DEFAULT_LOCAL_CLASSIFIER_MODEL_FILE = os.environ.get(
     "NEXUS_ROUTER_LOCAL_CLASSIFIER_MODEL_FILE", "model.onnx"
 )

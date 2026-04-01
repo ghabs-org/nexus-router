@@ -25,11 +25,11 @@ from .types import ClassifierOutput, PreSignals, RoutingDecision
 from .health import load_provider_health
 from .scorer import score_models
 from .db import ensure_schema, load_model_stats, write_decision
+from .paths import REGISTRY_FILE, POLICIES_ROOT
 
 ROOT = Path(__file__).parent.parent
 
-REGISTRY_FILE = ROOT / "catalog/normalized/models.json"
-ROUTING_FILE  = ROOT / "policies/routing.yaml"
+ROUTING_FILE  = POLICIES_ROOT / "routing.yaml"
 
 
 class Router:

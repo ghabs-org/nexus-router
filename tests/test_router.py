@@ -4,8 +4,11 @@ Run with: python -m pytest tests/ -v
 """
 
 import json
+import os
 import pytest
 from pathlib import Path
+
+os.environ.setdefault("NEXUS_ROUTER_STATE_ROOT", str(Path(__file__).parent.parent / ".test-state"))
 
 # Add src to path
 import sys
@@ -20,17 +23,29 @@ from src.server import should_reclassify_with_llm, RouterHandler
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
 
-REGISTRY_FILE = Path(__file__).parent.parent / "catalog/normalized/models.json"
+from src.paths import REGISTRY_FILE
 
 
 @pytest.fixture(autouse=True, scope="session")
 def ensure_full_registry():
     """Regenerate registry with all configured providers before running tests."""
     import subprocess
+    repo_root = Path(__file__).parent.parent
+    state_root = repo_root / ".test-state"
+    generated_root = state_root / "generated"
+    generated_root.mkdir(parents=True, exist_ok=True)
+
+    src_catalog = repo_root / "catalog" / "raw" / "openclaw-models.json"
+    if src_catalog.exists():
+        (generated_root / "openclaw-models.json").write_text(src_catalog.read_text())
+
+    env = dict(**__import__("os").environ)
+    env.setdefault("NEXUS_ROUTER_STATE_ROOT", str(state_root))
     subprocess.run(
         [sys.executable, "src/generate_registry.py", "--only-configured"],
-        cwd=str(Path(__file__).parent.parent),
+        cwd=str(repo_root),
         capture_output=True,
+        env=env,
     )
 
 
@@ -85,10 +100,19 @@ class TestScorer:
     def test_vision_excludes_text_only_models(self, authed_models, provider_health_ok):
         classifier = ClassifierOutput(task_type="vision", needs_vision=True, confidence=0.90)
         scored = score_models(classifier, authed_models, provider_health_ok, {})
-        # grok-code-fast-1 is text-only — should be excluded
-        grok = next((s for s in scored if "grok" in s.model_id), None)
-        if grok:
-            assert grok.excluded, "Text-only model should be excluded from vision task"
+        text_only_grok = [
+            s for s in scored
+            if s.model_id in {
+                "github-copilot/grok-code-fast-1",
+                "openrouter/x-ai/grok-3",
+                "openrouter/x-ai/grok-3-beta",
+                "openrouter/x-ai/grok-3-mini",
+                "openrouter/x-ai/grok-3-mini-beta",
+                "openrouter/x-ai/grok-code-fast-1",
+            }
+        ]
+        assert text_only_grok, "Expected text-only Grok variants in scored models"
+        assert all(s.excluded for s in text_only_grok), "Text-only models should be excluded from vision task"
 
     def test_long_context_excludes_small_context_models(self, authed_models, provider_health_ok):
         classifier = ClassifierOutput(

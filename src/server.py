@@ -41,7 +41,7 @@ except Exception:  # pragma: no cover - optional local ML deps
         return None
 from .health import load_provider_health
 from .health_updater import probe_all_providers, observe_turn_outcome
-from .db import ensure_schema, update_outcome, load_model_stats, record_feedback
+from .db import ensure_schema, update_outcome, load_model_stats, record_feedback, set_route_mode_preference, get_route_mode_preference
 
 
 def _is_tiny_prompt(message: str) -> bool:
@@ -143,6 +143,17 @@ class RouterHandler(BaseHTTPRequestHandler):
                     ],
                 })
 
+            elif path == "/route-mode":
+                from urllib.parse import parse_qs
+                query = parse_qs(urlparse(self.path).query or "")
+                key = str((query.get("key") or [""])[0]).strip()
+                scope = str((query.get("scope") or ["conversation"])[0]).strip().lower()
+                if not key:
+                    _json_response(self, 400, {"error": "key required"})
+                    return
+                pref = get_route_mode_preference(key, scope)
+                _json_response(self, 200, {"preference": pref})
+
             else:
                 _json_response(self, 404, {"error": "not_found"})
 
@@ -168,6 +179,8 @@ class RouterHandler(BaseHTTPRequestHandler):
             self._handle_probe(body)
         elif path == "/feedback":
             self._handle_feedback(body)
+        elif path == "/route-mode":
+            self._handle_route_mode(body)
         else:
             _json_response(self, 404, {"error": "not_found"})
 
@@ -398,6 +411,23 @@ class RouterHandler(BaseHTTPRequestHandler):
                 metadata=body.get("metadata") if isinstance(body.get("metadata"), dict) else None,
             )
             _json_response(self, 200, {"ok": True, "feedback_id": feedback_id})
+        except Exception as e:
+            _json_response(self, 500, {"error": str(e)})
+
+    def _handle_route_mode(self, body: dict):
+        try:
+            key = str(body.get("key") or "").strip()
+            mode = str(body.get("mode") or "").strip().lower()
+            scope = str(body.get("scope") or "conversation").strip().lower()
+            if not key:
+                _json_response(self, 400, {"error": "key required"})
+                return
+            if mode not in {"auto", "balanced", "fast", "reasoning", "off"}:
+                _json_response(self, 400, {"error": "mode must be auto|balanced|fast|reasoning|off"})
+                return
+            set_route_mode_preference(key, mode, scope)
+            pref = get_route_mode_preference(key, scope)
+            _json_response(self, 200, {"ok": True, "preference": pref})
         except Exception as e:
             _json_response(self, 500, {"error": str(e)})
 

@@ -12,14 +12,22 @@ services:
       - ../catalog:/app/catalog
       - ../policies:/app/policies
       - ../artifacts:/app/artifacts
-      - /home/ubuntu/.local/state/nexus-router/state:/app/state
       - /home/ubuntu/.local/state/nexus-router/data:/app/data
+      - /home/ubuntu/.local/state/nexus-router/generated:/app/generated
+      - /home/ubuntu/.local/state/nexus-router/cache:/app/cache
+      - /home/ubuntu/.local/state/nexus-router/artifacts:/app/artifacts
       - /home/ubuntu/.openclaw:/root/.openclaw:ro
       - /home/ubuntu/.codex:/root/.codex:ro
     environment:
       - PYTHONUNBUFFERED=1
-      - NEXUS_ROUTER_DB_PATH=/app/data/routing-history.sqlite
-      - NEXUS_ROUTER_HEALTH_FILE=/app/state/runtime-health.json
+      - NEXUS_ROUTER_STATE_ROOT=/app
+      - NEXUS_ROUTER_DB_PATH=/app/data/router.sqlite
+      - NEXUS_ROUTER_GENERATED_ROOT=/app/generated
+      - NEXUS_ROUTER_CACHE_ROOT=/app/cache
+      - NEXUS_ROUTER_ARTIFACTS_ROOT=/app/artifacts
+      - NEXUS_ROUTER_RAW_CATALOG_FILE=/app/generated/openclaw-models.json
+      - NEXUS_ROUTER_REGISTRY_FILE=/app/generated/models.json
+      - NEXUS_ROUTER_BENCHMARK_CACHE_DIR=/app/cache/benchmark
       - NEXUS_ROUTER_LOCAL_CLASSIFIER_DIR=/app/artifacts/router-classifier/onnx
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:7771/health', timeout=3)"]

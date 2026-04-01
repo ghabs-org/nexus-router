@@ -99,6 +99,6 @@ Run after `openclaw update` or when providers change:
 
 ```bash
 cd /home/ubuntu/git/ghabs/nexus-router
-openclaw models list --all --json > catalog/raw/openclaw-models.json
+openclaw models list --all --json > ~/.local/state/nexus-router/generated/openclaw-models.json
 venv/bin/python src/generate_registry.py
 ```

@@ -2,7 +2,7 @@
 health_updater.py — Provider health updater for Nexus Router.
 
 Reads health signals from OpenClaw (via model probe or response observation)
-and writes them to state/runtime-health.json and provider_health_log in SQLite.
+and writes them to provider health state + provider_health_log in SQLite.
 
 Integration points:
 1. Passive: called after each router turn with actual response outcome
@@ -141,10 +141,26 @@ def probe_provider_auth(provider: str) -> dict:
 
         data = json.loads(result.stdout)
 
-        # Extract auth status from OpenClaw output
-        auth_providers = data.get("auth", {}).get("providers", {})
-        pauth = auth_providers.get(provider, {})
-        auth_ok = pauth.get("ok", False)
+        # Extract auth status from OpenClaw output.
+        # Newer OpenClaw returns auth.providers as a list of provider objects,
+        # older versions may expose a dict-like structure.
+        auth_block = data.get("auth", {}) if isinstance(data, dict) else {}
+        auth_providers = auth_block.get("providers", [])
+        pauth = None
+        if isinstance(auth_providers, list):
+            for item in auth_providers:
+                if isinstance(item, dict) and item.get("provider") == provider:
+                    pauth = item
+                    break
+        elif isinstance(auth_providers, dict):
+            pauth = auth_providers.get(provider, {})
+        if pauth is None:
+            pauth = {}
+
+        profiles = pauth.get("profiles") if isinstance(pauth, dict) else None
+        effective = pauth.get("effective") if isinstance(pauth, dict) else None
+        has_profiles = isinstance(profiles, dict) and int(profiles.get("count", 0) or 0) > 0
+        auth_ok = bool(has_profiles or effective)
         auth_status = "ok" if auth_ok else "expired"
 
         record_observation(

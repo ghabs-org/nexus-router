@@ -9,16 +9,32 @@ Handles:
 """
 
 import json
-import os
 import sqlite3
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
-from .types import ClassifierOutput, PreSignals, ProviderHealth, RoutingDecision
+try:
+    from .types import ClassifierOutput, PreSignals, ProviderHealth, RoutingDecision
+    from .paths import ROUTER_DB_PATH, ensure_parent
+except ImportError:
+    import sys
+    from pathlib import Path as _Path
+    sys.path.insert(0, str(_Path(__file__).parent))
+    from types import SimpleNamespace as _ignore  # noqa: F401
+    from paths import ROUTER_DB_PATH, ensure_parent  # type: ignore
+    from importlib import util as _importlib_util
+    _types_spec = _importlib_util.spec_from_file_location("nexus_router_local_types", _Path(__file__).parent / "types.py")
+    _types_mod = _importlib_util.module_from_spec(_types_spec)
+    assert _types_spec and _types_spec.loader
+    _types_spec.loader.exec_module(_types_mod)
+    ClassifierOutput = _types_mod.ClassifierOutput
+    PreSignals = _types_mod.PreSignals
+    ProviderHealth = _types_mod.ProviderHealth
+    RoutingDecision = _types_mod.RoutingDecision
 
-DB_PATH     = Path(os.environ.get("NEXUS_ROUTER_DB_PATH") or (Path(__file__).parent.parent / "data" / "routing-history.sqlite"))
+DB_PATH     = ROUTER_DB_PATH
 SCHEMA_PATH = Path(__file__).parent / "schema.sql"
 
 
@@ -27,7 +43,7 @@ def _now_iso() -> str:
 
 
 def _connect() -> sqlite3.Connection:
-    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    ensure_parent(DB_PATH)
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     return conn
@@ -270,7 +286,10 @@ def load_model_stats() -> dict[str, dict]:
         return {}
     conn = _connect()
     try:
-        rows = conn.execute("SELECT * FROM model_stats").fetchall()
+        try:
+            rows = conn.execute("SELECT * FROM model_stats").fetchall()
+        except sqlite3.OperationalError:
+            return {}
         stats = {row["model"]: dict(row) for row in rows}
         for model, feedback in _load_feedback_preferences(conn).items():
             stats.setdefault(model, {"model": model})["feedback_preference"] = feedback
@@ -344,6 +363,180 @@ def _load_feedback_preferences(conn: sqlite3.Connection) -> dict[str, dict[str, 
             "top_reason_tag": row["top_reason_tag"] or None,
         }
     return grouped
+
+
+def set_route_mode_preference(pref_key: str, mode: str, scope: str = "conversation") -> None:
+    pref_key = str(pref_key or "").strip()
+    mode = str(mode or "").strip().lower()
+    scope = str(scope or "conversation").strip().lower()
+    if not pref_key:
+        raise ValueError("pref_key required")
+    if mode not in {"auto", "balanced", "fast", "reasoning", "off"}:
+        raise ValueError("mode must be auto|balanced|fast|reasoning|off")
+    if scope not in {"conversation", "session", "channel"}:
+        raise ValueError("scope must be conversation|session|channel")
+
+    conn = _connect()
+    try:
+        conn.execute(
+            """
+            INSERT INTO route_mode_preferences (pref_key, scope, mode, updated_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(scope, pref_key)
+            DO UPDATE SET mode=excluded.mode, updated_at=excluded.updated_at
+            """,
+            (pref_key, scope, mode, _now_iso()),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_route_mode_preference(pref_key: str, scope: str = "conversation") -> Optional[dict[str, str]]:
+    pref_key = str(pref_key or "").strip()
+    scope = str(scope or "conversation").strip().lower()
+    if not pref_key:
+        return None
+    conn = _connect()
+    try:
+        row = conn.execute(
+            "SELECT pref_key, scope, mode, updated_at FROM route_mode_preferences WHERE pref_key=? AND scope=?",
+            (pref_key, scope),
+        ).fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def load_benchmark_scores() -> dict[str, dict[str, Any]]:
+    conn = _connect()
+    try:
+        try:
+            rows = conn.execute("SELECT * FROM benchmark_model_scores").fetchall()
+        except sqlite3.OperationalError:
+            return {}
+        result: dict[str, dict[str, Any]] = {}
+        for row in rows:
+            payload = dict(row)
+            model_id = str(payload.pop("model_id"))
+            source = payload.pop("source", None)
+            updated_at = payload.pop("updated_at", None)
+            metadata_json = payload.pop("metadata_json", None)
+            entry = {k: v for k, v in payload.items() if v is not None}
+            if source is not None:
+                entry["_source"] = source
+            if updated_at is not None:
+                entry["_updated_at"] = updated_at
+            if metadata_json:
+                try:
+                    entry["_metadata"] = json.loads(metadata_json)
+                except Exception:
+                    entry["_metadata"] = metadata_json
+            result[model_id] = entry
+        return result
+    finally:
+        conn.close()
+
+
+def replace_benchmark_scores(models: dict[str, dict[str, Any]]) -> None:
+    conn = _connect()
+    try:
+        conn.execute("DELETE FROM benchmark_model_scores")
+        for model_id, scores in models.items():
+            conn.execute(
+                """
+                INSERT INTO benchmark_model_scores (
+                  model_id, source, updated_at,
+                  coding, review, reasoning, summarize, fast,
+                  cost, speed, context, vision, tools, multilingual,
+                  metadata_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    model_id,
+                    scores.get("_source"),
+                    scores.get("_updated_at"),
+                    scores.get("coding"),
+                    scores.get("review"),
+                    scores.get("reasoning"),
+                    scores.get("summarize"),
+                    scores.get("fast"),
+                    scores.get("cost"),
+                    scores.get("speed"),
+                    scores.get("context"),
+                    scores.get("vision"),
+                    scores.get("tools"),
+                    scores.get("multilingual"),
+                    json.dumps(scores.get("_metadata")) if scores.get("_metadata") is not None else None,
+                ),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def upsert_provider_health_state(provider: str, state: dict[str, Any]) -> None:
+    conn = _connect()
+    try:
+        conn.execute(
+            """
+            INSERT INTO provider_health_state (
+              provider, auth, quota, quota_remaining_ratio,
+              recent_error_rate, rate_limit_risk, consecutive_rate_limits,
+              rate_limit_cooldown_until, latency_ms_p50, last_failure_at,
+              last_check_at, health_score
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(provider)
+            DO UPDATE SET
+              auth=excluded.auth,
+              quota=excluded.quota,
+              quota_remaining_ratio=excluded.quota_remaining_ratio,
+              recent_error_rate=excluded.recent_error_rate,
+              rate_limit_risk=excluded.rate_limit_risk,
+              consecutive_rate_limits=excluded.consecutive_rate_limits,
+              rate_limit_cooldown_until=excluded.rate_limit_cooldown_until,
+              latency_ms_p50=excluded.latency_ms_p50,
+              last_failure_at=excluded.last_failure_at,
+              last_check_at=excluded.last_check_at,
+              health_score=excluded.health_score
+            """,
+            (
+                provider,
+                state.get("auth", "unknown"),
+                state.get("quota", "unknown"),
+                state.get("quota_remaining_ratio"),
+                state.get("recent_error_rate", 0.0),
+                state.get("rate_limit_risk", 0.0),
+                state.get("consecutive_rate_limits", 0),
+                state.get("rate_limit_cooldown_until"),
+                state.get("latency_ms_p50"),
+                state.get("last_failure_at"),
+                state.get("last_check_at"),
+                state.get("health_score", 1.0),
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def load_provider_health_state(providers: Optional[list[str]] = None) -> dict[str, dict[str, Any]]:
+    conn = _connect()
+    try:
+        try:
+            if providers:
+                placeholders = ",".join("?" for _ in providers)
+                rows = conn.execute(
+                    f"SELECT * FROM provider_health_state WHERE provider IN ({placeholders})",
+                    tuple(providers),
+                ).fetchall()
+            else:
+                rows = conn.execute("SELECT * FROM provider_health_state").fetchall()
+        except sqlite3.OperationalError:
+            return {}
+        return {row["provider"]: dict(row) for row in rows}
+    finally:
+        conn.close()
 
 
 def record_feedback(

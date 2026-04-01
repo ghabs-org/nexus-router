@@ -1,6 +1,6 @@
 -- Nexus Router — SQLite schema
--- Version: 1
--- Location: data/routing-history.sqlite
+-- Version: 3
+-- Location: data/router.sqlite
 
 PRAGMA journal_mode = WAL;
 PRAGMA foreign_keys = ON;
@@ -134,11 +134,53 @@ CREATE TABLE IF NOT EXISTS route_feedback (
   FOREIGN KEY(decision_id) REFERENCES routing_decisions(id)
 );
 
+CREATE TABLE IF NOT EXISTS route_mode_preferences (
+  pref_key              TEXT NOT NULL,
+  scope                 TEXT NOT NULL DEFAULT 'conversation',
+  mode                  TEXT NOT NULL,
+  updated_at            TEXT NOT NULL,
+  PRIMARY KEY (scope, pref_key)
+);
+
+CREATE TABLE IF NOT EXISTS provider_health_state (
+  provider                   TEXT PRIMARY KEY,
+  auth                       TEXT,
+  quota                      TEXT,
+  quota_remaining_ratio      REAL,
+  recent_error_rate          REAL DEFAULT 0,
+  rate_limit_risk            REAL DEFAULT 0,
+  consecutive_rate_limits    INTEGER DEFAULT 0,
+  rate_limit_cooldown_until  TEXT,
+  latency_ms_p50             REAL,
+  last_failure_at            TEXT,
+  last_check_at              TEXT,
+  health_score               REAL DEFAULT 1
+);
+
+CREATE TABLE IF NOT EXISTS benchmark_model_scores (
+  model_id               TEXT PRIMARY KEY,
+  source                 TEXT,
+  updated_at             TEXT,
+  coding                 REAL,
+  review                 REAL,
+  reasoning              REAL,
+  summarize              REAL,
+  fast                   REAL,
+  cost                   REAL,
+  speed                  REAL,
+  context                REAL,
+  vision                 REAL,
+  tools                  REAL,
+  multilingual           REAL,
+  metadata_json          TEXT
+);
+
 CREATE INDEX IF NOT EXISTS idx_route_feedback_decision_id ON route_feedback(decision_id);
 CREATE INDEX IF NOT EXISTS idx_route_feedback_created_at ON route_feedback(created_at);
 CREATE INDEX IF NOT EXISTS idx_route_feedback_preferred_model ON route_feedback(preferred_model);
+CREATE INDEX IF NOT EXISTS idx_route_mode_preferences_updated_at ON route_mode_preferences(updated_at);
 
-INSERT OR IGNORE INTO schema_meta (key, value) VALUES ('schema_version', '2');
+INSERT OR IGNORE INTO schema_meta (key, value) VALUES ('schema_version', '3');
 INSERT OR IGNORE INTO schema_meta (key, value) VALUES ('created_at', datetime('now'));
 
 -- ────────────────────────────────────────────────────────────────────────────

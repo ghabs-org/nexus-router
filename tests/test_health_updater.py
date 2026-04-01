@@ -63,9 +63,11 @@ def test_observe_turn_outcome_escalates_repeated_429s_to_exhausted(monkeypatch):
     assert calls["log"][-1]["quota_state"] == "exhausted"
 
 
-def test_record_observation_soft_bans_provider_after_rate_limit(tmp_path, monkeypatch):
-    health_file = tmp_path / "runtime-health.json"
-    monkeypatch.setattr(health, "HEALTH_FILE", health_file)
+def test_record_observation_soft_bans_provider_after_rate_limit(monkeypatch):
+    state = {}
+
+    monkeypatch.setattr(health, "load_provider_health_state", lambda providers=None: state)
+    monkeypatch.setattr(health, "upsert_provider_health_state", lambda provider, payload: state.__setitem__(provider, {"provider": provider, **payload}))
 
     health.record_observation(
         provider="google-gemini-cli",
@@ -83,9 +85,11 @@ def test_record_observation_soft_bans_provider_after_rate_limit(tmp_path, monkey
     assert provider.health_score == 0.0
 
 
-def test_record_observation_escalates_soft_ban_window_with_repeat_429s(tmp_path, monkeypatch):
-    health_file = tmp_path / "runtime-health.json"
-    monkeypatch.setattr(health, "HEALTH_FILE", health_file)
+def test_record_observation_escalates_soft_ban_window_with_repeat_429s(monkeypatch):
+    state = {}
+
+    monkeypatch.setattr(health, "load_provider_health_state", lambda providers=None: state)
+    monkeypatch.setattr(health, "upsert_provider_health_state", lambda provider, payload: state.__setitem__(provider, {"provider": provider, **payload}))
 
     base = datetime(2026, 3, 31, 13, 0, tzinfo=timezone.utc)
     moments = [
@@ -120,9 +124,11 @@ def test_record_observation_escalates_soft_ban_window_with_repeat_429s(tmp_path,
     assert cooldown_until == base + timedelta(minutes=15)
 
 
-def test_record_observation_clears_rate_limit_soft_ban_after_success(tmp_path, monkeypatch):
-    health_file = tmp_path / "runtime-health.json"
-    monkeypatch.setattr(health, "HEALTH_FILE", health_file)
+def test_record_observation_clears_rate_limit_soft_ban_after_success(monkeypatch):
+    state = {}
+
+    monkeypatch.setattr(health, "load_provider_health_state", lambda providers=None: state)
+    monkeypatch.setattr(health, "upsert_provider_health_state", lambda provider, payload: state.__setitem__(provider, {"provider": provider, **payload}))
 
     health.record_observation(
         provider="google-gemini-cli",

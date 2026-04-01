@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-fetch_benchmarks.py — Fetch benchmark data and generate benchmark-scores.yaml.
+fetch_benchmarks.py — Fetch benchmark data and write benchmark scores into router SQLite.
 
 Sources:
   - artificialanalysis.ai  → speed, cost, context, quality proxies
@@ -19,7 +19,7 @@ This script:
       final_dim = sum(weight(source) * value(source)) / sum(weight(source))
    Only sources that actually provide a value for a dimension participate in
    that dimension's denominator.
-4. Writes/updates policies/benchmark-scores.yaml
+4. Writes/updates benchmark_model_scores in router.sqlite
 
 Default source trust weights are defined in SOURCE_WEIGHTS below. Unknown
 sources fall back to 1.0.
@@ -54,10 +54,13 @@ except ImportError:
     sys.exit(1)
 
 ROOT           = Path(__file__).parent.parent
-BENCHMARKS_OUT = ROOT / "policies/benchmark-scores.yaml"
-SOURCES_FILE   = ROOT / "policies/benchmark-sources.yaml"
-CACHE_DIR      = ROOT / "state/benchmark-cache"
-MODEL_CATALOG_FILE = ROOT / "catalog/raw/openclaw-models.json"
+try:
+    from .paths import POLICIES_ROOT, BENCHMARK_CACHE_DIR as CACHE_DIR, RAW_CATALOG_FILE as MODEL_CATALOG_FILE, ensure_dir
+    from .db import load_benchmark_scores, replace_benchmark_scores
+except ImportError:
+    from paths import POLICIES_ROOT, BENCHMARK_CACHE_DIR as CACHE_DIR, RAW_CATALOG_FILE as MODEL_CATALOG_FILE, ensure_dir
+    from db import load_benchmark_scores, replace_benchmark_scores
+SOURCES_FILE   = POLICIES_ROOT / "benchmark-sources.yaml"
 
 TODAY = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
@@ -347,8 +350,8 @@ def fetch_livebench() -> dict[str, dict]:
         "?dataset=livebench%2Fmodel_judgment"
         "&config=default&split=leaderboard"
     )
-    PAGE = 500  # rows per request
-    MAX_ROWS = 60_500
+    PAGE = 100  # smaller pages; HF datasets-server appears to reject deeper/larger pagination intermittently
+    MAX_ROWS = 5_000
 
     # Aggregate: {model -> {category -> (sum, count)}}
     agg: dict[str, dict[str, list]] = {}
@@ -358,17 +361,21 @@ def fetch_livebench() -> dict[str, dict]:
     try:
         while offset < MAX_ROWS:
             url = f"{BASE}&offset={offset}&length={PAGE}"
-            data = _fetch_with_cache(
-                url,
-                cache_key=f"json:livebench:{offset}",
-                timeout=30,
-                headers={
-                    "User-Agent": "nexus-router/1.0",
-                    "Accept": "application/json",
-                },
-                loader=lambda s: json.loads(s),
-                suffix=".json",
-            )
+            try:
+                data = _fetch_with_cache(
+                    url,
+                    cache_key=f"json:livebench:{offset}",
+                    timeout=30,
+                    headers={
+                        "User-Agent": "nexus-router/1.0",
+                        "Accept": "application/json",
+                    },
+                    loader=lambda s: json.loads(s),
+                    suffix=".json",
+                )
+            except Exception as e:
+                print(f"    LiveBench page fetch stopped at offset={offset}: {e}")
+                break
 
             rows = data.get("rows", [])
             if not rows:
@@ -1071,8 +1078,6 @@ def main():
                         help="Print results without writing to file")
     parser.add_argument("--force", action="store_true",
                         help="Overwrite existing scores (default: skip existing)")
-    parser.add_argument("--output", type=Path, default=BENCHMARKS_OUT,
-                        help=f"Output file (default: {BENCHMARKS_OUT})")
     args = parser.parse_args()
 
     requested = {s.strip() for s in args.sources.split(",")}
@@ -1081,14 +1086,11 @@ def main():
         print(f"Unknown sources: {invalid}. Valid: {set(SOURCES.keys())}", file=sys.stderr)
         sys.exit(1)
 
-    # Load existing benchmarks
-    existing: dict[str, dict] = {}
-    if args.output.exists():
-        data = yaml.safe_load(args.output.read_text()) or {}
-        existing = data.get("models") or {}
-        print(f"Loaded {len(existing)} existing model entries from {args.output}")
+    existing: dict[str, dict] = load_benchmark_scores()
+    if existing:
+        print(f"Loaded {len(existing)} existing model entries from router DB")
     else:
-        print(f"No existing file at {args.output} — starting fresh")
+        print("No existing benchmark entries in router DB — starting fresh")
 
     # Fetch and aggregate per source
     all_new: dict[str, list[dict]] = {}
@@ -1129,26 +1131,8 @@ def main():
             print(f"  ... and {len(merged) - 5} more")
         return
 
-    # Write output (preserve header comments by loading and re-writing cleanly)
-    _write_benchmarks(args.output, merged)
-    print(f"Written → {args.output}")
-
-
-def _write_benchmarks(path: Path, models: dict[str, dict]):
-    # Load existing file to preserve _meta block
-    header = ""
-    if path.exists():
-        raw = path.read_text()
-        # Keep everything up to the 'models:' key
-        m = re.search(r"^models:", raw, re.MULTILINE)
-        if m:
-            header = raw[:m.start()]
-    else:
-        header = "# benchmark-scores.yaml — generated by fetch_benchmarks.py\n\n"
-
-    models_yaml = yaml.dump({"models": models}, default_flow_style=False, allow_unicode=True, sort_keys=True)
-    # strip the 'models:' top-level key (already in header context)
-    path.write_text(header + models_yaml)
+    replace_benchmark_scores(merged)
+    print("Written benchmark scores → router DB")
 
 
 if __name__ == "__main__":

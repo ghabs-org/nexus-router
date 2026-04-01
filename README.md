@@ -9,6 +9,7 @@ provider health, and usage history.
 - **Score everything** — capability priors + runtime health + learned history
 - **Explain decisions** — every routing decision is logged with a reason
 - **Override-friendly** — user can always override; router is advisory by default
+- **Persistent mode state** — explicit route mode is saved in router state until changed
 
 ## Architecture
 
@@ -43,13 +44,13 @@ inbound message
 
 | Layer | File | Description |
 |---|---|---|
-| Raw catalog | `catalog/raw/openclaw-models.json` | Fetched from OpenClaw |
-| Normalized registry | `catalog/normalized/models.json` | Generated, with scores |
+| Raw catalog | `~/.local/state/nexus-router/generated/openclaw-models.json` (host) / `/app/generated/openclaw-models.json` (container) | Fetched from OpenClaw |
+| Normalized registry | `~/.local/state/nexus-router/generated/models.json` (host) / `/app/generated/models.json` (container) | Generated, with scores |
 | Family priors | `policies/families.yaml` | Provider/pattern scoring |
 | Routing policy | `policies/routing.yaml` | Task → preferred models |
 | Overrides | `policies/overrides.yaml` | Per-model manual scores |
-| Runtime health | `~/.local/state/nexus-router/state/runtime-health.json` (host) / `/app/state/runtime-health.json` (container) | Auth/quota/error state |
-| Routing history | `~/.local/state/nexus-router/data/routing-history.sqlite` (host) / `/app/data/routing-history.sqlite` (container) | Outcomes and feedback |
+| Benchmark cache | `~/.local/state/nexus-router/cache/benchmark/` (host) / `/app/cache/benchmark/` (container) | Raw fetched benchmark cache |
+| Router state | `~/.local/state/nexus-router/data/router.sqlite` (host) / `/app/data/router.sqlite` (container) | Outcomes, feedback, persisted route-mode preferences, provider health state, and benchmark scores (DB-only, no YAML fallback) |
 
 ## Classifier output schema
 
@@ -123,7 +124,7 @@ Models below `health_hard_cutoff` (default: 0.30) are excluded.
 pip install pyyaml
 
 # Refresh model catalog
-openclaw models list --all --json > catalog/raw/openclaw-models.json
+openclaw models list --all --json > ~/.local/state/nexus-router/generated/openclaw-models.json
 
 # Generate normalized registry
 python src/generate_registry.py
@@ -132,7 +133,7 @@ python src/generate_registry.py
 ## Regenerate catalog
 
 ```bash
-openclaw models list --all --json > catalog/raw/openclaw-models.json
+openclaw models list --all --json > ~/.local/state/nexus-router/generated/openclaw-models.json
 python src/generate_registry.py
 ```
 

@@ -1,18 +1,17 @@
 #!/usr/bin/env python3
 """
 Generate normalized model registry from:
-- catalog/raw/openclaw-models.json  (openclaw models list --all --json)
+- generated/openclaw-models.json  (openclaw models list --all --json)
 - policies/families.yaml
 - policies/overrides.yaml
-- policies/benchmark-scores.yaml   (optional, benchmark-derived scores)
+- router.sqlite benchmark_model_scores table
 
-Output: catalog/normalized/models.json
+Output: generated/models.json
 
 Flags:
   --only-configured       Include only models whose provider has auth=true
   --providers A,B,C       Include only models from listed providers
   --all                   Include all 800+ catalog models (default without flags)
-  --benchmark-file PATH   Path to benchmark-scores.yaml (default: policies/benchmark-scores.yaml)
 """
 
 import argparse
@@ -30,16 +29,29 @@ except ImportError:
 
 ROOT = Path(__file__).parent.parent
 
-RAW_CATALOG      = ROOT / "catalog/raw/openclaw-models.json"
-FAMILIES_FILE    = ROOT / "policies/families.yaml"
-OVERRIDES_FILE   = ROOT / "policies/overrides.yaml"
-BENCHMARKS_FILE  = ROOT / "policies/benchmark-scores.yaml"
-OUT_FILE         = ROOT / "catalog/normalized/models.json"
+try:
+    from .paths import RAW_CATALOG_FILE as RAW_CATALOG, POLICIES_ROOT, REGISTRY_FILE as OUT_FILE, ensure_parent
+    from .db import load_benchmark_scores
+except ImportError:
+    from paths import RAW_CATALOG_FILE as RAW_CATALOG, POLICIES_ROOT, REGISTRY_FILE as OUT_FILE, ensure_parent
+    from db import load_benchmark_scores
+
+FAMILIES_FILE    = POLICIES_ROOT / "families.yaml"
+OVERRIDES_FILE   = POLICIES_ROOT / "overrides.yaml"
 
 
 def load_json(path: Path) -> dict:
-    with open(path) as f:
-        return json.load(f)
+    raw = path.read_text()
+    stripped = raw.lstrip()
+    if stripped.startswith("{"):
+        return json.loads(stripped)
+    obj_start = raw.find("{")
+    if obj_start != -1:
+        return json.loads(raw[obj_start:])
+    arr_start = raw.find("[")
+    if arr_start != -1:
+        return json.loads(raw[arr_start:])
+    raise ValueError(f"No JSON object found in {path}")
 
 
 def load_yaml(path: Path) -> dict:
@@ -182,8 +194,6 @@ def main():
                         help="Comma-separated provider ids to include, e.g. openai-codex,github-copilot")
     parser.add_argument("--all", dest="include_all", action="store_true",
                         help="Include all 800+ catalog models (default without filters)")
-    parser.add_argument("--benchmark-file", type=Path, default=None,
-                        help="Path to benchmark-scores.yaml (default: policies/benchmark-scores.yaml)")
     args = parser.parse_args()
 
     print(f"Loading raw catalog from {RAW_CATALOG}...")
@@ -195,15 +205,13 @@ def main():
     print(f"Loading overrides from {OVERRIDES_FILE}...")
     overrides = load_yaml(OVERRIDES_FILE)
 
-    bench_path = args.benchmark_file or BENCHMARKS_FILE
-    benchmarks = {}
-    if bench_path.exists():
-        print(f"Loading benchmark scores from {bench_path}...")
-        benchmarks = load_yaml(bench_path)
-        n_bench = len((benchmarks.get("models") or {}))
+    benchmarks = {"models": load_benchmark_scores()}
+    n_bench = len((benchmarks.get("models") or {}))
+    if n_bench:
+        print("Loading benchmark scores from router DB...")
         print(f"  {n_bench} benchmark model entries loaded")
     else:
-        print(f"No benchmark file found at {bench_path} — using family priors only")
+        print("No benchmark scores found in router DB — using family priors only")
 
     # Resolve provider filter
     only_providers: set[str] | None = None
@@ -236,7 +244,7 @@ def main():
         "models": models,
     }
 
-    OUT_FILE.parent.mkdir(parents=True, exist_ok=True)
+    ensure_parent(OUT_FILE)
     with open(OUT_FILE, "w") as f:
         json.dump(result, f, indent=2)
 

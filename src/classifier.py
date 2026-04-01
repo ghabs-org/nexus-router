@@ -27,9 +27,9 @@ from urllib import error as urllib_error
 from urllib import request as urllib_request
 
 from .types import ClassifierOutput, PreSignals, ProviderHealth
+from .paths import REGISTRY_FILE
 
 ROOT = Path(__file__).parent.parent
-REGISTRY_FILE = ROOT / "catalog/normalized/models.json"
 DEFAULT_CLASSIFIER_LIMIT = 4
 CLASSIFIER_PROFILE = "nexus-router-classifier"
 DEFAULT_DIRECT_PROVIDER_TIMEOUT_SECONDS = 15

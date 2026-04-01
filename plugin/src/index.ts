@@ -91,6 +91,13 @@ interface RouteRequestResult {
   status?: number;
 }
 
+interface RouteModePreference {
+  pref_key: string;
+  scope: "conversation" | "session" | "channel";
+  mode: RouteMode;
+  updated_at: string;
+}
+
 // ── Defaults ──────────────────────────────────────────────────────────────────
 
 const DEFAULT_URL         = "http://127.0.0.1:7771";
@@ -274,6 +281,40 @@ function rememberConversationRouteMode(conversationKey: string, mode: RouteMode)
     at: Date.now(),
     sticky: STICKY_ROUTE_MODES.has(mode),
   });
+}
+
+async function persistRouteModePreference(routerUrl: string, key: string, mode: RouteMode, scope: "conversation" | "session" | "channel" = "conversation"): Promise<void> {
+  const trimmedKey = key.trim();
+  if (!trimmedKey) return;
+  try {
+    await fetch(`${routerUrl}/route-mode`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Editor-Version": PLUGIN_VERSION,
+      },
+      body: JSON.stringify({ key: trimmedKey, mode, scope }),
+    });
+  } catch {
+    // best-effort only; in-memory sticky mode remains as fallback
+  }
+}
+
+async function loadPersistedRouteModePreference(routerUrl: string, key: string, scope: "conversation" | "session" | "channel" = "conversation"): Promise<RouteModePreference | null> {
+  const trimmedKey = key.trim();
+  if (!trimmedKey) return null;
+  try {
+    const res = await fetch(`${routerUrl}/route-mode?key=${encodeURIComponent(trimmedKey)}&scope=${encodeURIComponent(scope)}`, {
+      headers: {
+        "Editor-Version": PLUGIN_VERSION,
+      },
+    });
+    if (!res.ok) return null;
+    const payload = await res.json() as { preference?: RouteModePreference | null };
+    return payload.preference ?? null;
+  } catch {
+    return null;
+  }
 }
 
 function rememberConversationKeyForSession(sessionKey: string, conversationKey: string): void {
@@ -928,7 +969,7 @@ function buildRouteInteractiveReply(mode?: RouteMode, scopeLabel = "this convers
     text: `⚙️ Routing mode: ${label} (${scopeLabel}).`,
     interactive: {
       blocks: [
-        { type: "text", text: `Choose a routing mode (current: ${label}, sticky for this session):` },
+        { type: "text", text: `Choose a routing mode (current: ${label}, persisted in router state):` },
         {
           type: "buttons",
           buttons: [
@@ -952,7 +993,7 @@ function resolveLastDecisionForContext(ctx: any, conversationKey: string): LastR
 function buildRouteHelpText(currentMode: RouteMode): string {
   return [
     `⚙️ Nexus Router help`,
-    `Current session mode: ${currentMode} (sticky until changed)`,
+    `Current session mode: ${currentMode} (persisted until changed)`,
     ``,
     `Modes:`,
     `- auto: cheap-first routing; escalates to balanced when confidence is weak`,
@@ -1015,6 +1056,8 @@ async function resolveRouteModeDetailsFromContext(api: any, ctx: any): Promise<R
   const candidates: Array<RouteModeResolution & { at: number }> = [];
   const seen = new Set<string>();
 
+  const routerUrl = (api?.config ?? {}).routerUrl ?? DEFAULT_URL;
+
   const addConversationCandidate = (
     key: string | null | undefined,
     source: "conversation" | "channel",
@@ -1054,6 +1097,25 @@ async function resolveRouteModeDetailsFromContext(api: any, ctx: any): Promise<R
   const channelKey = ctx?.channelId ?? ctx?.channel ?? "";
   if (channelKey) {
     addConversationCandidate(channelKey, "channel");
+  }
+
+  if (conversationKey) {
+    const persistedConversation = await loadPersistedRouteModePreference(routerUrl, conversationKey, "conversation");
+    if (persistedConversation) {
+      candidates.push({ mode: persistedConversation.mode, source: "conversation", key: conversationKey, at: Date.parse(persistedConversation.updated_at) || 0 });
+    }
+  }
+  if (ctx?.sessionKey) {
+    const persistedSession = await loadPersistedRouteModePreference(routerUrl, ctx.sessionKey, "session");
+    if (persistedSession) {
+      candidates.push({ mode: persistedSession.mode, source: "session", key: ctx.sessionKey, at: Date.parse(persistedSession.updated_at) || 0 });
+    }
+  }
+  if (channelKey) {
+    const persistedChannel = await loadPersistedRouteModePreference(routerUrl, channelKey, "channel");
+    if (persistedChannel) {
+      candidates.push({ mode: persistedChannel.mode, source: "channel", key: channelKey, at: Date.parse(persistedChannel.updated_at) || 0 });
+    }
   }
 
   candidates.sort((a, b) => b.at - a.at);
@@ -1124,10 +1186,7 @@ export default definePluginEntry({
       const sessionKey = ctx.sessionKey;
       clearRecentRoutingState(sessionKey);
       markRecentStartup(sessionKey, `reset:${event.reason ?? "unknown"}`);
-      if (shouldDefaultRouteOff(sessionKey)) {
-        rememberRouteMode(sessionKey ?? "", "off");
-        await debugLog(`[route-reset] session=${sessionKey ?? "unknown"} mode=off reason=${event.reason ?? "unknown"}`);
-      }
+      await debugLog(`[route-reset] session=${sessionKey ?? "unknown"} cleared-ephemeral-state reason=${event.reason ?? "unknown"}`);
     });
 
     api.registerCommand({
@@ -1193,6 +1252,9 @@ export default definePluginEntry({
         if (channelOnlyKey && channelOnlyKey !== conversationKey) {
           rememberConversationRouteMode(channelOnlyKey, normalized);
         }
+        if (conversationKey) await persistRouteModePreference(routerUrl, conversationKey, normalized, "conversation");
+        if (ctx.sessionKey) await persistRouteModePreference(routerUrl, ctx.sessionKey, normalized, "session");
+        if (channelOnlyKey) await persistRouteModePreference(routerUrl, channelOnlyKey, normalized, "channel");
         return buildRouteInteractiveReply(normalized, "this conversation");
       },
     });
