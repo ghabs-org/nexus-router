@@ -49,6 +49,28 @@ Make route debugging honest:
 
 ---
 
+## 2026-04-01 — heartbeat/memory bypass
+
+### Problem
+Background heartbeat or memory-triggered turns could still be routed like normal user turns.
+That created noisy routing logs and misleading pairs of `auto` + `balanced` routing decisions even when Gab had not sent a new chat message.
+
+### Local patch targets
+- `/home/ubuntu/git/ghabs/nexus-router/plugin/src/index.ts`
+- `/home/ubuntu/.openclaw/extensions/nexus-router/index.ts`
+
+### Behavior
+The router now bypasses routing for:
+- `ctx.trigger === "heartbeat"`
+- `ctx.trigger === "memory"`
+
+These turns still proceed, but they do not create normal router-selection decisions.
+
+### Intent
+Keep router decisions focused on meaningful user/chat work instead of background maintenance turns.
+
+---
+
 ## 2026-04-01 — explicit route-mode persistence / sticky behavior
 
 ### Intended behavior
@@ -69,6 +91,28 @@ Operationally this means:
 
 ### Intent
 Make explicit routing mode sticky across resets/restarts and consistent with user intent.
+
+---
+
+## 2026-04-01 — model registry: reasoning_capable and preferred_tasks corrections
+
+### Problem
+All `github-copilot` and `google-gemini-cli` models had `reasoning_capable: False` and were missing `reasoning` from `preferred_tasks` in `src/generate_registry.py`.
+This caused `mode=reasoning` to timeout (no eligible high-scoring models available after `openai-codex` quota was exhausted).
+
+### Fixed models
+- `github-copilot/gpt-5.4` → `reasoning_capable: True`, added reasoning/analysis/code_review to tasks
+- `github-copilot/o3` → `reasoning_capable: True`, primary tasks: reasoning/analysis/coding/code_review
+- `github-copilot/o4-mini` → `reasoning_capable: True`, tasks: reasoning/coding/fast_utility/general_chat
+- `google-gemini-cli/gemini-3.1-pro-preview` → `reasoning_capable: True`, tasks: reasoning/coding/analysis/code_review/content_creation
+- `google-gemini-cli/gemini-2.5-pro-preview` → `reasoning_capable: True`, tasks: reasoning/coding/analysis/content_creation
+
+### Source patch
+- `/home/ubuntu/git/ghabs/nexus-router/src/generate_registry.py` (line ~23)
+
+### Note
+The container bakes the image at build time, so source changes take effect on next `docker build` + deploy.
+Live registry was also patched immediately via API (`PATCH /models/{provider}/{model_id}`).
 
 ---
 

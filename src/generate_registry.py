@@ -67,11 +67,44 @@ def extract_provider(key: str) -> tuple[str, str]:
     return key, key
 
 
+def _benchmark_entry_is_usable(entry: dict) -> bool:
+    if not entry:
+        return False
+    if not any(k in entry for k in ("coding", "review", "reasoning", "summarize", "fast", "cost", "context", "vision", "tools", "multilingual")):
+        return False
+    source = str(entry.get("_source") or "").strip()
+    if not source or source == "catalog-only":
+        return False
+    return True
+
+
+def _canonical_benchmark_keys(provider: str, model_id: str, bench_models: dict) -> list[str]:
+    """Return candidate benchmark keys, preferring exact usable match then any same-model sibling across providers."""
+    exact = f"{provider}/{model_id}"
+    candidates = []
+
+    exact_entry = bench_models.get(exact, {})
+    if _benchmark_entry_is_usable(exact_entry):
+        candidates.append(exact)
+
+    # Generic provider-agnostic fallback: if another provider exposes the same
+    # underlying model_id and benchmark data exists for it, reuse those capability
+    # scores here. Provider-specific delivery differences are handled elsewhere.
+    sibling_suffix = f"/{model_id}"
+    siblings = sorted(
+        key for key, entry in bench_models.items()
+        if key != exact and key.endswith(sibling_suffix) and _benchmark_entry_is_usable(entry) and "inherited:" not in str(entry.get("_source") or "")
+    )
+    candidates.extend(siblings)
+    return candidates
+
+
 def resolve_scores(provider: str, model_id: str, features: dict, families: dict, benchmarks: dict) -> tuple[dict, dict]:
     """
     Resolve scoring priors for a model using:
     1. Family defaults
     2. Pattern overrides within that family
+    3. Benchmark-derived scores, with exact-match first and provider-agnostic fallback second
 
     Returns (scores, source_map)
     """
@@ -126,12 +159,24 @@ def resolve_scores(provider: str, model_id: str, features: dict, families: dict,
             break  # first matching pattern wins
 
     # Apply benchmark-derived scores (highest-priority source, overrides family)
-    full_key = f"{provider}/{model_id}"
-    bench_entry = (benchmarks.get("models") or {}).get(full_key, {})
+    bench_models = (benchmarks.get("models") or {})
+    bench_entry = {}
+    bench_key_used = None
+    for candidate_key in _canonical_benchmark_keys(provider, model_id, bench_models):
+        candidate = bench_models.get(candidate_key, {})
+        if candidate:
+            bench_entry = candidate
+            bench_key_used = candidate_key
+            break
+
     for k, v in bench_entry.items():
         if k in defaults:
             defaults[k] = v
-            source[k] = f"benchmark:{bench_entry.get('_source', 'unknown')}"
+            source_name = bench_entry.get('_source', 'unknown')
+            if bench_key_used == f"{provider}/{model_id}":
+                source[k] = f"benchmark:{source_name}"
+            else:
+                source[k] = f"benchmark-inherited:{bench_key_used}:{source_name}"
 
     return defaults, source
 
@@ -153,7 +198,6 @@ def normalize(raw: dict, families: dict, overrides: dict, benchmarks: dict,
         features = {
             "supportsVision": "image" in entry.get("input", ""),
             "supportsTools": True,  # conservative default; update when catalog exposes it
-            "supportsReasoning": any(x in model_id for x in ["reasoning", "think", "r1", "o1", "o3", "o4"]),
             "contextWindow": entry.get("contextWindow", 0),
             "inputModalities": [m for m in entry.get("input", "text").split("+") if m],
         }

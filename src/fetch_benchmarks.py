@@ -1068,6 +1068,96 @@ def merge_scores(existing: dict, new_scores: dict, force: bool) -> dict:
     return merged
 
 
+def _load_catalog_models() -> list[str]:
+    """Return every OpenClaw model key from the raw catalog."""
+    try:
+        raw = MODEL_CATALOG_FILE.read_text()
+        stripped = raw.lstrip()
+        if stripped.startswith("{"):
+            data = json.loads(stripped)
+        else:
+            obj_start = raw.find("{")
+            arr_start = raw.find("[")
+            start = obj_start if obj_start != -1 else arr_start
+            if start == -1:
+                return []
+            data = json.loads(raw[start:])
+    except Exception:
+        return []
+
+    result = []
+    for row in data.get("models") or []:
+        key = str(row.get("key") or "").strip()
+        if key and "/" in key:
+            result.append(key)
+    return sorted(set(result))
+
+
+def _sibling_model_keys(model_id: str, available_keys: set[str]) -> list[str]:
+    suffix = f"/{model_id}"
+    return sorted(k for k in available_keys if k.endswith(suffix))
+
+
+def _has_score_dimensions(entry: dict) -> bool:
+    return any(dim in entry and entry.get(dim) is not None for dim in SCORE_DIMS)
+
+
+def _is_real_benchmark_source(entry: dict) -> bool:
+    source = str(entry.get("_source") or "").strip()
+    if not source or source == "catalog-only":
+        return False
+    if "inherited:" in source:
+        return False
+    return True
+
+
+def densify_benchmark_scores(existing: dict[str, dict]) -> dict[str, dict]:
+    """
+    Ensure every OC catalog model has a benchmark_model_scores row.
+
+    For models without exact benchmark data, inherit score dimensions from any
+    sibling `*/same-model-id` row when available. This keeps the benchmark table
+    dense over the OC catalog while preserving provider-specific runtime
+    differences for other layers (health/quota/latency).
+    """
+    dense = {k: dict(v) for k, v in existing.items()}
+    all_keys = set(existing.keys())
+    catalog_models = _load_catalog_models()
+    all_keys.update(catalog_models)
+
+    for full_key in sorted(all_keys):
+        if "/" not in full_key:
+            continue
+        provider, model_id = full_key.split("/", 1)
+        row = dict(dense.get(full_key, {}))
+
+        # Keep exact rows only when they come from a real benchmark source.
+        # Synthetic rows (catalog-only / inherited) must be recomputed on each run
+        # so they can upgrade from catalog-only -> inherited, refresh inherited
+        # values, or fall back to catalog-only if no real donor remains.
+        if not (_has_score_dimensions(row) and _is_real_benchmark_source(row)):
+            siblings = [k for k in _sibling_model_keys(model_id, set(dense.keys())) if k != full_key and dense.get(k)]
+            inherited = None
+            for sib in siblings:
+                payload = dense.get(sib) or {}
+                if _has_score_dimensions(payload) and _is_real_benchmark_source(payload):
+                    inherited = (sib, payload)
+                    break
+            if inherited:
+                sib_key, payload = inherited
+                row = {dim: payload[dim] for dim in SCORE_DIMS if dim in payload}
+                if "_confidence" in payload:
+                    row["_confidence"] = dict(payload["_confidence"])
+                row["_source"] = f"inherited:{sib_key}"
+                row["_updated_at"] = TODAY
+            else:
+                row = {"_source": "catalog-only", "_updated_at": TODAY}
+
+        dense[full_key] = row
+
+    return dense
+
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main():
@@ -1115,13 +1205,16 @@ def main():
         for model_id, entries in all_new.items()
     }
 
-    # Merge into existing
+    # Merge into existing sparse benchmark set first
     merged = dict(existing)
     for model_id, new_scores in aggregated_new.items():
         merged[model_id] = merge_scores(merged.get(model_id, {}), new_scores, args.force)
 
+    # Then densify over the full OC catalog so every model has a row.
+    merged = densify_benchmark_scores(merged)
+
     new_count = len(aggregated_new)
-    print(f"\nTotal benchmark entries: {len(merged)} ({new_count} new/updated)")
+    print(f"\nTotal benchmark entries: {len(merged)} ({new_count} new/updated, dense over OC catalog)")
 
     if args.dry_run:
         print("\n--- DRY RUN: would write ---")

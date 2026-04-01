@@ -208,13 +208,14 @@ def score_models(
         if mode == "fast":
             total += _fast_mode_correction(task_fit=task_fit, cost_score=cost_score, speed_score=speed_score)
         elif mode == "reasoning":
-            total += (0.38 * reasoning_score)
-            total += max(0.0, reasoning_score - task_fit) * 0.14
-            total += _reasoning_mode_correction(
+            total = _reasoning_mode_total(
                 task_fit=task_fit,
                 reasoning_score=reasoning_score,
                 health=health,
                 learned=learned,
+                preference=preference,
+                speed_score=speed_score,
+                quota_penalty=quota_penalty,
             )
 
         eligible.append(ModelScore(
@@ -315,23 +316,34 @@ def _fast_mode_correction(task_fit: float, cost_score: float, speed_score: float
     return correction
 
 
-def _reasoning_mode_correction(
+def _reasoning_mode_total(
     task_fit: float,
     reasoning_score: float,
     health: float,
     learned: float,
+    preference: float,
+    speed_score: float,
+    quota_penalty: float,
 ) -> float:
     """
-    Strongly bias reasoning mode toward top reasoning-capable models without hard-coding providers.
+    Dedicated scoring path for explicit reasoning mode.
 
-    This intentionally gives more weight to the model's reasoning capability and
-    only then layers health / learned history on top.
+    Principle:
+    - explicit `route_mode=reasoning` should noticeably change the ranking
+    - reasoning score should dominate the outcome
+    - health / learned history are secondary guardrails
+    - task fit matters, but much less once we are already in explicit reasoning mode
+    - speed and generic preference should be almost negligible
     """
-    task_bonus = max(0.0, task_fit - 0.72)
-    reasoning_bonus = max(0.0, reasoning_score - 0.78)
-    health_bonus = max(0.0, health - 0.82)
-    learned_bonus = max(0.0, learned - 0.80)
-    return (0.10 * task_bonus) + (0.30 * reasoning_bonus) + (0.08 * health_bonus) + (0.08 * learned_bonus)
+    return (
+        (0.68 * reasoning_score)
+        + (0.12 * health)
+        + (0.10 * learned)
+        + (0.06 * task_fit)
+        + (0.02 * preference)
+        + (0.01 * speed_score)
+        - quota_penalty
+    )
 
 
 def _build_preference_order(task_type: str, routing_policy: Optional[dict]) -> list[str]:

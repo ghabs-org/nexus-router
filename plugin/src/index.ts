@@ -1348,16 +1348,26 @@ export default definePluginEntry({
         return;
       }
 
-      if (startupReason) {
+      if (ctx?.trigger === "heartbeat" || ctx?.trigger === "memory") {
         if (sessionRef) {
           recentRouteCacheBySession.set(sessionRef, { text: dedupeText, mode: routeMode, at: Date.now() });
         }
-        await debugLog(`[hook-result] source=${source} source_tag=${sourceTag} route=${routeMode} bypassed reason=${startupReason}`);
+        await debugLog(`[hook-result] source=${source} source_tag=${sourceTag} route=${routeMode} bypassed reason=${ctx?.trigger}`);
         return;
       }
 
       if (routeMode === "off") {
         await debugLog(`[hook-result] source=${source} source_tag=${sourceTag} route=${routeMode} bypassed`);
+        return;
+      }
+
+      // Bypass routing on startup only when no explicit mode was set (auto = default).
+      // If the user persisted an explicit mode (fast/reasoning/balanced), honor it even on the first post-startup turn.
+      if (startupReason && routeMode === "auto") {
+        if (sessionRef) {
+          recentRouteCacheBySession.set(sessionRef, { text: dedupeText, mode: routeMode, at: Date.now() });
+        }
+        await debugLog(`[hook-result] source=${source} source_tag=${sourceTag} route=${routeMode} bypassed reason=${startupReason}`);
         return;
       }
       if (shouldBypassCompiledRetryRouting(ctx, source, ctx.sessionKey ?? sessionRef)) {
