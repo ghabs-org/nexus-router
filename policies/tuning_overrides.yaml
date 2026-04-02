@@ -1,0 +1,4 @@
+routing:
+  general_chat:
+    preference_adjustments:
+      openai-codex/gpt-5.4: -0.02
