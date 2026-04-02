@@ -156,7 +156,7 @@ class Router:
             )
 
         primary  = eligible[0]
-        fallbacks = [s.model_id for s in eligible[1:4]]  # top 3 fallbacks
+        fallbacks = _build_fallback_chain(eligible, primary_provider=primary.provider, limit=5)
 
         reason = _build_reason(primary, classifier, effective_classifier, pre_signals)
         if effective_route_mode in {"auto", "balanced", "fast", "reasoning", "off"}:
@@ -280,6 +280,37 @@ def _adapt_classifier_for_light_chat(
         return replace(classifier, task_type="fast_utility", complexity="low", cost_profile="cheap")
 
     return classifier
+
+
+def _build_fallback_chain(eligible_scores: list, *, primary_provider: str, limit: int = 5) -> list[str]:
+    """Build fallback chain preferring provider diversity.
+
+    Strategy:
+    - first pass: pick highest-ranked models from providers different from primary
+    - second pass: fill remaining slots from any provider by ranking order
+    """
+    selected: list[str] = []
+    seen: set[str] = set()
+
+    for score in eligible_scores[1:]:
+        if len(selected) >= limit:
+            break
+        if score.provider == primary_provider:
+            continue
+        if score.model_id in seen:
+            continue
+        seen.add(score.model_id)
+        selected.append(score.model_id)
+
+    for score in eligible_scores[1:]:
+        if len(selected) >= limit:
+            break
+        if score.model_id in seen:
+            continue
+        seen.add(score.model_id)
+        selected.append(score.model_id)
+
+    return selected
 
 
 def _build_reason(
