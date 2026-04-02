@@ -167,31 +167,110 @@ def main(argv=None):
     p = argparse.ArgumentParser()
     p.add_argument("--dry-run", dest="apply", action="store_false", help="preview only (default)")
     p.add_argument("--apply", dest="apply", action="store_true", help="apply changes (dangerous)")
+    p.add_argument("--guarded-apply", dest="guarded_apply", action="store_true", help="attempt a guarded apply: gates must pass to persist")
     p.add_argument("--max-delta", type=float, default=DEFAULTS["max_delta"], help="maximum per-update delta magnitude")
     p.add_argument("--min-samples", type=int, default=DEFAULTS["min_samples"], help="minimum feedback samples required to act")
+    p.add_argument("--min-total-samples", type=int, default=20, help="minimum total feedback samples across tasks to allow guarded apply")
+    p.add_argument("--max-changes", type=int, default=10, help="maximum number of changed entries allowed for guarded apply")
+    p.add_argument("--unknown-policy", choices=["ignore","require_higher"], default="ignore", help="how to treat task='unknown' rows in tuning")
     p.add_argument("--cooldown-days", type=int, default=DEFAULTS["cooldown_days"], help="cooldown window for same task/model")
     args = p.parse_args(argv)
 
-    # default mode dry-run
-    if not args.apply:
-        print("Running in dry-run mode. Use --apply to persist changes.")
+    # mode messages
+    mode = "dry-run"
+    if args.apply:
+        mode = "apply"
+    if args.guarded_apply:
+        mode = "guarded"
+
+    if mode == "dry-run":
+        print("Running in dry-run mode. Use --apply to persist changes or --guarded-apply for gated apply.")
+    else:
+        print(f"Running in {mode} mode.")
 
     report = load_report()
     if not report.get("ok"):
         print("report not ok, aborting", report)
         return 2
 
-    adjustments = compute_adjustments(report, args.max_delta, args.min_samples)
+    # compute adjustments with unknown policy
+    # If unknown-policy=require_higher, raise min_samples for unknown tasks
+    base_min_samples = args.min_samples
+    def min_samples_for(task):
+        if task == "unknown" and args.unknown_policy == "require_higher":
+            return max(base_min_samples * 3, base_min_samples + 10)
+        return base_min_samples
+
+    # prepare adjustments considering unknown policy
+    adjustments = {}
+    total_samples = 0
+    raw_adjustments = []
+    for row in report.get("model_task_signals_top", []):
+        task = row.get("task")
+        samples = int(row.get("samples", 0))
+        total_samples += samples
+        min_s = min_samples_for(task)
+        if samples < min_s:
+            continue
+        model = row.get("model")
+        centered = float(row.get("centered_signal", 0.0))
+        delta = max(-args.max_delta, min(args.max_delta, centered * args.max_delta))
+        if abs(delta) < 1e-8:
+            continue
+        adjustments.setdefault(task, {})[model] = round(delta, 6)
+        raw_adjustments.append((task, model))
+
     if not adjustments:
         print("No actionable adjustments found.")
         return 0
 
+    # gating for guarded apply
+    gates_pass = True
+    reasons = []
+    if args.guarded_apply:
+        if total_samples < args.min_total_samples:
+            gates_pass = False
+            reasons.append(f"total_samples ({total_samples}) < min_total_samples ({args.min_total_samples})")
+        num_changes = sum(len(m) for m in adjustments.values())
+        if num_changes > args.max_changes:
+            gates_pass = False
+            reasons.append(f"num_changes ({num_changes}) > max_changes ({args.max_changes})")
+        # simple critical drift heuristic: if report has key 'critical_drift' True or any centered_signal abs>0.9
+        critical = report.get("critical_drift", False)
+        if not critical:
+            for row in report.get("model_task_signals_top", []):
+                if abs(float(row.get("centered_signal", 0.0))) > 0.9:
+                    critical = True
+                    break
+        if critical:
+            gates_pass = False
+            reasons.append("critical drift detected")
+
+    # decide whether to actually apply
+    will_apply = args.apply or (args.guarded_apply and gates_pass)
+
     result = apply_adjustments(adjustments, args)
 
-    # print concise summary + preview
+    # prepare concise summary for notifications
+    recommendations_count = sum(len(m) for m in adjustments.values())
+    applied_count = len(result.get("applied", []))
+    snapshot_path = None
+    if args.apply and applied_count:
+        # last snapshot entry in journal could be parsed, but we recorded in apply_adjustments
+        # For simplicity, list backups dir for latest
+        if SNAP_DIR.exists():
+            snaps = sorted(SNAP_DIR.iterdir(), key=lambda p: p.stat().st_mtime)
+            if snaps:
+                snapshot_path = str(snaps[-1])
+
+    # Print machine-friendly summary lines (one per line)
+    print(f"mode={mode};recommendations={recommendations_count};applied={applied_count};snapshot={snapshot_path or ''}")
+    if args.guarded_apply:
+        print(f"gates_pass={gates_pass};reasons={'|'.join(reasons)}")
+
+    # legacy json/preview output
     print(json.dumps({"applied": result["applied"], "skipped": result["skipped"]}, indent=2))
-    # when dry-run, also print yaml preview
-    if not args.apply:
+    if not will_apply:
         print("--- overrides preview ---")
         print(yaml.safe_dump(result["overrides_preview"], sort_keys=False))
     return 0
