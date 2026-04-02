@@ -22,7 +22,7 @@ import os
 import shutil
 import sys
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Dict, Any
 
@@ -94,6 +94,16 @@ def append_journal(entry: str) -> None:
     STATE_DIR.mkdir(parents=True, exist_ok=True)
     with open(JOURNAL, "a") as f:
         f.write(entry + "\n")
+
+
+def _parse_iso(ts: str | None):
+    raw = str(ts or "").strip()
+    if not raw:
+        return None
+    try:
+        return datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except Exception:
+        return None
 
 
 def compute_adjustments(report: Dict[str, Any], max_delta: float, min_samples: int) -> Dict[str, Dict[str, float]]:
@@ -174,6 +184,7 @@ def main(argv=None):
     p.add_argument("--max-changes", type=int, default=10, help="maximum number of changed entries allowed for guarded apply")
     p.add_argument("--unknown-policy", choices=["ignore","require_higher"], default="ignore", help="how to treat task='unknown' rows in tuning")
     p.add_argument("--cooldown-days", type=int, default=DEFAULTS["cooldown_days"], help="cooldown window for same task/model")
+    p.add_argument("--max-feedback-age-hours", type=int, default=24, help="ignore stale feedback signals older than this many hours")
     args = p.parse_args(argv)
 
     # mode messages
@@ -205,9 +216,18 @@ def main(argv=None):
     adjustments = {}
     total_samples = 0
     raw_adjustments = []
+    now_utc = datetime.now(timezone.utc)
     for row in report.get("model_task_signals_top", []):
         task = row.get("task")
         samples = int(row.get("samples", 0))
+
+        # stale-signal gate: if we have recency info and it's too old, skip
+        last_feedback_at = _parse_iso(row.get("last_feedback_at"))
+        if last_feedback_at is not None:
+            age_hours = (now_utc - last_feedback_at.astimezone(timezone.utc)).total_seconds() / 3600.0
+            if age_hours > max(1, int(args.max_feedback_age_hours or 24)):
+                continue
+
         total_samples += samples
         min_s = min_samples_for(task)
         if samples < min_s:

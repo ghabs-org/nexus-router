@@ -553,8 +553,19 @@ def record_feedback(
     metadata: Optional[dict[str, Any]] = None,
 ) -> str:
     feedback_id = str(uuid.uuid4())
+    clean_decision_id = str(decision_id or "").strip()
+    if not clean_decision_id:
+        raise ValueError("decision_id required")
+
     conn = _connect()
     try:
+        linked = conn.execute(
+            "SELECT 1 FROM routing_decisions WHERE id=? LIMIT 1",
+            (clean_decision_id,),
+        ).fetchone()
+        if not linked:
+            raise ValueError("decision_id_not_found")
+
         conn.execute(
             """
             INSERT INTO route_feedback (
@@ -566,7 +577,7 @@ def record_feedback(
             (
                 feedback_id,
                 _now_iso(),
-                decision_id,
+                clean_decision_id,
                 verdict,
                 corrected_task,
                 model_verdict,
