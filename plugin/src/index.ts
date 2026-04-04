@@ -75,6 +75,8 @@ interface PendingOutcome {
   selectedModel: string;
   selectedProvider: string;
   sessionKey?: string;
+  shadowMode?: boolean;
+  targetSenderId?: string;
 }
 
 interface FailureInference {
@@ -386,6 +388,7 @@ async function sendTelegramFeedbackCard(
   targetSenderId: string,
   decision: RouteResponse,
   sourceTag: string,
+  opts?: { shadowMode?: boolean; actualModel?: string },
 ): Promise<boolean> {
   const decisionId = String(decision.decision_id || "").trim();
   if (!decisionId || hasRecentFeedbackPrompt(decisionId)) {
@@ -394,12 +397,24 @@ async function sendTelegramFeedbackCard(
 
   const task = String(decision.task_type || "unknown");
   const model = String(decision.selected_model || "unknown");
-  const confidence = Number.isFinite(decision.confidence) ? decision.confidence.toFixed(2) : "?";
-  const lines = [
-    `🧭 ${task} · ${model} · ${confidence}`,
-    `Source: ${sourceTag}`,
-    `Feedback?`,
-  ];
+  const classifierSource = String(decision.classifier_source || "").toLowerCase();
+  const confidence = (classifierSource === "fallback" || classifierSource === "heuristic")
+    ? "fallback"
+    : (Number.isFinite(decision.confidence) ? decision.confidence.toFixed(2) : "?");
+  const shadowMode = Boolean(opts?.shadowMode);
+  const actualModel = String(opts?.actualModel || "").trim();
+  const lines = shadowMode
+    ? [
+        `🧭 shadow ${task} · proposed ${model} · conf ${confidence}`,
+        `Actual reply model: ${actualModel || "unknown"}`,
+        `Source: ${sourceTag}`,
+        `Feedback?`,
+      ]
+    : [
+        `🧭 ${task} · ${model} · ${confidence}`,
+        `Source: ${sourceTag}`,
+        `Feedback?`,
+      ];
   const text = lines.join("\n");
 
   try {
@@ -1336,6 +1351,11 @@ export default definePluginEntry({
       const firstPassCostProfile = resolveCostProfileForRouteMode(routeMode, costProfile);
       const sessionRef = String(ctx?.sessionKey ?? ctx?.sessionId ?? ctx?.conversationId ?? "");
       const dedupeText = routingText.trim();
+      const shouldUseLlmClassifier = shouldUseContextualLlmClassifier(
+        routeMode,
+        conversationContext,
+        routingText,
+      );
       await debugLog(
         `[hook-enter] source=${source} source_tag=${sourceTag} trigger=${ctx?.trigger ?? "unknown"} route=${routeMode} prompt_len=${routingText.length} profile=${firstPassCostProfile}`,
       );
@@ -1357,7 +1377,71 @@ export default definePluginEntry({
       }
 
       if (routeMode === "off") {
-        await debugLog(`[hook-result] source=${source} source_tag=${sourceTag} route=${routeMode} bypassed`);
+        const shadowResult = await routeRequest(
+          routerUrl,
+          routingText,
+          firstPassCostProfile,
+          timeoutMs,
+          routeMode,
+          conversationContext,
+          shouldUseLlmClassifier,
+        );
+        const shadowDecision = shadowResult.decision;
+        if (!shadowDecision) {
+          const failure = describeRouteRequestFailure(shadowResult, timeoutMs);
+          await debugLog(`[hook-result] source=${source} source_tag=${sourceTag} route=${routeMode} shadow_failed ${failure}`);
+          return;
+        }
+
+        if (sessionRef) {
+          recentRouteCacheBySession.set(sessionRef, {
+            text: dedupeText,
+            mode: routeMode,
+            at: Date.now(),
+            selectedModel: shadowDecision.selected_model,
+          });
+        }
+
+        const lastDecision: LastRouteDecision = {
+          at: Date.now(),
+          decisionId: shadowDecision.decision_id,
+          requestedRouteMode: routeMode,
+          routeMode,
+          source,
+          sourceTag,
+          promptLen: routingText.length,
+          promptText: routingText,
+          replyContextUsed: shadowDecision.reply_context_used ?? Boolean(conversationContext.trim()),
+          classifierSource: (shadowDecision.classifier_source ?? (shouldUseLlmClassifier ? "llm" : "heuristic")) as LastRouteDecision["classifierSource"],
+          costProfile: firstPassCostProfile,
+          taskType: shadowDecision.task_type,
+          effectiveTaskType: extractEffectiveTaskType(shadowDecision.reason),
+          confidence: shadowDecision.confidence,
+          firstPassModel: shadowDecision.selected_model,
+          firstPassProvider: shadowDecision.selected_provider,
+          selectedModel: shadowDecision.selected_model,
+          selectedProvider: shadowDecision.selected_provider,
+          fallbacks: shadowDecision.fallbacks,
+          score: shadowDecision.score,
+          reason: [...shadowDecision.reason, "shadow_mode:route_off"],
+          autoEscalated: false,
+        };
+        rememberLastDecision(ctx.sessionKey, lastDecision);
+
+        if (ctx.sessionId && shadowDecision.decision_id) {
+          enqueuePendingOutcome(ctx.sessionId, {
+            decisionId: shadowDecision.decision_id,
+            selectedModel: shadowDecision.selected_model,
+            selectedProvider: shadowDecision.selected_provider,
+            sessionKey: ctx.sessionKey,
+            shadowMode: true,
+            targetSenderId: resolveSenderForSession(ctx.sessionKey ?? sessionRef)?.senderId,
+          });
+        }
+
+        await debugLog(
+          `[hook-result] source=${source} source_tag=${sourceTag} route=${routeMode} shadow decision=${shadowDecision.selected_model} task=${shadowDecision.task_type} confidence=${shadowDecision.confidence.toFixed(2)} score=${shadowDecision.score.toFixed(3)}`,
+        );
         return;
       }
 
@@ -1408,12 +1492,6 @@ export default definePluginEntry({
       let autoDecision: RouteResponse | null = null;
       let finalMode: RouteMode = routeMode;
       let finalCostProfile = firstPassCostProfile;
-
-      const shouldUseLlmClassifier = shouldUseContextualLlmClassifier(
-        routeMode,
-        conversationContext,
-        routingText,
-      );
 
       if (routeMode === "auto") {
         const autoResult = await routeRequest(
@@ -1673,6 +1751,37 @@ export default definePluginEntry({
             quota_remaining_ratio: failure.quotaRemainingRatio,
           }),
         });
+
+        if (pending.shadowMode) {
+          const decision = last;
+          const sender = pending.targetSenderId
+            ? { senderId: pending.targetSenderId }
+            : resolveSenderForSession(pending.sessionKey ?? ctx.sessionKey);
+          if (decision?.decisionId && sender?.senderId) {
+            await sendTelegramFeedbackCard(
+              api,
+              sender.senderId,
+              {
+                decision_id: decision.decisionId,
+                task_type: decision.taskType,
+                confidence: decision.confidence,
+                selected_model: decision.selectedModel,
+                selected_provider: decision.selectedProvider,
+                fallbacks: decision.fallbacks,
+                score: decision.score,
+                reason: decision.reason,
+                classifier_source: decision.classifierSource,
+                reply_context_used: decision.replyContextUsed,
+              },
+              decision.sourceTag,
+              { shadowMode: true, actualModel: outcomeModel },
+            );
+          } else {
+            await debugLog(
+              `[feedback-card] shadow skipped decision=${pending.decisionId} reason=${decision ? 'missing_sender' : 'missing_decision'}`,
+            );
+          }
+        }
       } catch {
         // best effort; keep routing path non-blocking
       }

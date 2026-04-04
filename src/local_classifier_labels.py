@@ -8,6 +8,8 @@ existing routing pipeline.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
+import os
 
 ROUTER_TASK_LABELS: tuple[str, ...] = (
     "coding",
@@ -25,9 +27,16 @@ ID_TO_LABEL: dict[int, str] = {idx: label for label, idx in LABEL_TO_ID.items()}
 
 DEFAULT_MODEL_NAME = "answerdotai/ModernBERT-base"
 DEFAULT_HF_CACHE_DIR = "/home/ubuntu/.openclaw/workspace/.cache/huggingface"
-DEFAULT_DATA_DIR = "artifacts/router-classifier/data"
-DEFAULT_OUTPUT_DIR = "artifacts/router-classifier/checkpoints"
-DEFAULT_ONNX_DIR = "artifacts/router-classifier/onnx"
+
+# Runtime-aligned artifact root (host): ~/.local/state/nexus-router/artifacts
+# Override with NEXUS_ROUTER_ARTIFACTS_DIR if needed.
+DEFAULT_ARTIFACTS_ROOT = os.getenv(
+    "NEXUS_ROUTER_ARTIFACTS_DIR",
+    str(Path.home() / ".local" / "state" / "nexus-router" / "artifacts"),
+)
+DEFAULT_DATA_DIR = str(Path(DEFAULT_ARTIFACTS_ROOT) / "router-classifier" / "data")
+DEFAULT_OUTPUT_DIR = str(Path(DEFAULT_ARTIFACTS_ROOT) / "router-classifier" / "checkpoints")
+DEFAULT_ONNX_DIR = str(Path(DEFAULT_ARTIFACTS_ROOT) / "router-classifier" / "onnx")
 MAX_SEQUENCE_LENGTH = 512
 
 
