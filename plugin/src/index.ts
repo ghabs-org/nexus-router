@@ -424,10 +424,14 @@ async function sendTelegramFeedbackCard(
   targetSenderId: string,
   decision: RouteResponse,
   sourceTag: string,
-  opts?: { shadowMode?: boolean; actualModel?: string },
+  opts?: { shadowMode?: boolean; actualModel?: string; messagePreview?: string },
 ): Promise<boolean> {
   const decisionId = String(decision.decision_id || "").trim();
   if (!decisionId || hasRecentFeedbackPrompt(decisionId)) {
+    return false;
+  }
+
+  if (shouldSuppressFeedbackCardForText(opts?.messagePreview)) {
     return false;
   }
 
@@ -1646,7 +1650,7 @@ export default definePluginEntry({
       const sender = resolveSenderForSession(ctx.sessionKey ?? sessionRef);
       if (decision.decision_id) {
         if (sender) {
-          await sendTelegramFeedbackCard(api, sender.senderId, decision, sourceTag);
+          await sendTelegramFeedbackCard(api, sender.senderId, decision, sourceTag, { messagePreview: routingText });
         } else {
           await debugLog(
             `[feedback-card] skipped decision=${decision.decision_id} reason=missing_sender session=${ctx.sessionKey ?? sessionRef ?? ""}`,
@@ -1810,7 +1814,7 @@ export default definePluginEntry({
                 reply_context_used: decision.replyContextUsed,
               },
               decision.sourceTag,
-              { shadowMode: true, actualModel: outcomeModel },
+              { shadowMode: true, actualModel: outcomeModel, messagePreview: decision.promptText },
             );
           } else {
             await debugLog(
