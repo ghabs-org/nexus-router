@@ -784,6 +784,16 @@ def heuristic_classify(message: str, pre_signals: PreSignals) -> Optional[Classi
             confidence=0.80,
         )
 
+    # If inline/fenced code detected (and not a diff), prefer coding: avoid routing code snippets to chat
+    if pre_signals.has_code and not pre_signals.has_diff:
+        return ClassifierOutput(
+            task_type="coding",
+            subtype=None,
+            complexity="medium",
+            needs_tools=True,
+            confidence=0.82,
+        )
+
     # Very short message, no code: likely fast utility
     if pre_signals.message_length < 120 and not pre_signals.has_code:
         return ClassifierOutput(
