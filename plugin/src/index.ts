@@ -383,6 +383,42 @@ function buildFeedbackKeyboard(decisionId: string): Array<Array<{ text: string; 
   ];
 }
 
+function shouldSuppressFeedbackCardForText(messagePreview?: string): boolean {
+  const text = String(messagePreview ?? "").trim();
+  if (!text) return false;
+
+  const lowered = text.toLowerCase();
+  const internalMarkers = [
+    "<<<begin_openclaw_internal_context>>>",
+    "<<<end_openclaw_internal_context>>>",
+    "[subagent context]",
+    "[subagent task]",
+    "requester session:",
+    "requester channel:",
+    "results auto-announce to your requester",
+    "completion is push-based",
+    "do not busy-poll for status",
+  ];
+  if (internalMarkers.some((marker) => lowered.includes(marker))) {
+    return true;
+  }
+
+  const looksLikeApprovalRelay =
+    lowered.includes("/approve")
+    || lowered.includes("approval-pending")
+    || lowered.includes("approval required")
+    || lowered.includes("allow-once")
+    || lowered.includes("approve what will actually run")
+    || lowered.includes("native approval card")
+    || lowered.includes("chat approvals are unavailable");
+
+  if (looksLikeApprovalRelay) {
+    return true;
+  }
+
+  return false;
+}
+
 async function sendTelegramFeedbackCard(
   api: any,
   targetSenderId: string,
