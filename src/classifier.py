@@ -794,6 +794,19 @@ def heuristic_classify(message: str, pre_signals: PreSignals) -> Optional[Classi
             confidence=0.72,
         )
 
+    # Short conversational greetings/PMs: classify as general_chat with high confidence
+    if pre_signals.message_length < 60 and not pre_signals.has_code:
+        lower = message.strip().lower()
+        greetings = ("hi", "hello", "hey", "how are you", "how's your day", "how are you?")
+        if any(lower.startswith(g) or g in lower for g in greetings):
+            return ClassifierOutput(
+                task_type="general_chat",
+                complexity="low",
+                needs_tools=False,
+                cost_profile="cheap",
+                confidence=0.90,
+            )
+
     # Not confident enough for fast-path
     return None
 
