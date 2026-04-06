@@ -17,6 +17,7 @@ import { appendFile } from "node:fs/promises";
 
 interface NexusRouterConfig {
   routerUrl?: string;
+  bridgeUrl?: string;
   enabled?: boolean;
   costProfile?: "cheap" | "balanced" | "premium";
   debugMode?: boolean;
@@ -103,6 +104,7 @@ interface RouteModePreference {
 // ── Defaults ──────────────────────────────────────────────────────────────────
 
 const DEFAULT_URL         = "http://127.0.0.1:7771";
+const DEFAULT_BRIDGE_URL  = "http://127.0.0.1:8091";
 const DEFAULT_CONFIDENCE  = 0.60;
 const DEFAULT_TIMEOUT_MS  = 10000;
 const DEFAULT_COST        = "balanced";
@@ -383,15 +385,55 @@ function buildFeedbackKeyboard(decisionId: string): Array<Array<{ text: string; 
   ];
 }
 
+function shouldSuppressFeedbackCardForText(messagePreview?: string): boolean {
+  const text = String(messagePreview ?? "").trim();
+  if (!text) return false;
+
+  const lowered = text.toLowerCase();
+  const internalMarkers = [
+    "<<<begin_openclaw_internal_context>>>",
+    "<<<end_openclaw_internal_context>>>",
+    "[subagent context]",
+    "[subagent task]",
+    "requester session:",
+    "requester channel:",
+    "results auto-announce to your requester",
+    "completion is push-based",
+    "do not busy-poll for status",
+  ];
+  if (internalMarkers.some((marker) => lowered.includes(marker))) {
+    return true;
+  }
+
+  const looksLikeApprovalRelay =
+    lowered.includes("/approve")
+    || lowered.includes("approval-pending")
+    || lowered.includes("approval required")
+    || lowered.includes("allow-once")
+    || lowered.includes("approve what will actually run")
+    || lowered.includes("native approval card")
+    || lowered.includes("chat approvals are unavailable");
+
+  if (looksLikeApprovalRelay) {
+    return true;
+  }
+
+  return false;
+}
+
 async function sendTelegramFeedbackCard(
   api: any,
   targetSenderId: string,
   decision: RouteResponse,
   sourceTag: string,
-  opts?: { shadowMode?: boolean; actualModel?: string },
+  opts?: { shadowMode?: boolean; actualModel?: string; messagePreview?: string },
 ): Promise<boolean> {
   const decisionId = String(decision.decision_id || "").trim();
   if (!decisionId || hasRecentFeedbackPrompt(decisionId)) {
+    return false;
+  }
+
+  if (shouldSuppressFeedbackCardForText(opts?.messagePreview)) {
     return false;
   }
 
@@ -419,17 +461,60 @@ async function sendTelegramFeedbackCard(
 
   try {
     const telegram = api?.runtime?.telegram;
-    if (!telegram?.sendMessageTelegram) {
-      await debugLog(`[feedback-card] skipped decision=${decisionId} reason=no_telegram_runtime`);
+    if (telegram?.sendMessageTelegram) {
+      const result = await telegram.sendMessageTelegram(targetSenderId, text, {
+        buttons: buildFeedbackKeyboard(decisionId),
+        textMode: "plain",
+        cfg: api?.config?.loadConfig?.(),
+      });
+      rememberFeedbackPrompt(decisionId);
+      await debugLog(`[feedback-card] sent decision=${decisionId} to=${targetSenderId} message_id=${result?.messageId ?? "?"} via=telegram_runtime`);
+      return true;
+    }
+
+    const bridgePayload = {
+      telegram_user_id: targetSenderId,
+      decision_id: decisionId,
+      task_type: task,
+      selected_model: model,
+      confidence: Number.isFinite(decision.confidence) ? decision.confidence : undefined,
+      classifier_source: decision.classifier_source,
+      shadow_mode: shadowMode,
+      actual_model: actualModel || undefined,
+      source_channel: "telegram",
+      source_message_preview: opts?.messagePreview,
+    };
+
+    const bridgeBearerToken = process.env.NEXUS_ROUTER_BRIDGE_BEARER_TOKEN;
+    const bridgeHeaders: Record<string, string> = {
+      "Content-Type": "application/json",
+    };
+    if (bridgeBearerToken) {
+      bridgeHeaders["Authorization"] = `Bearer ${bridgeBearerToken}`;
+    }
+
+    const bridgeBaseUrl = (api?.config as NexusRouterConfig)?.bridgeUrl
+      ?? process.env.NEXUS_ROUTER_BRIDGE_URL
+      ?? DEFAULT_BRIDGE_URL;
+    const bridgeRes = await fetch(`${bridgeBaseUrl}/api/v1/router/feedback-card`, {
+      method: "POST",
+      headers: bridgeHeaders,
+      body: JSON.stringify(bridgePayload),
+    });
+
+    if (!bridgeRes.ok) {
+      await debugLog(`[feedback-card] failed decision=${decisionId} to=${targetSenderId} error=bridge_http_${bridgeRes.status}`);
       return false;
     }
-    const result = await telegram.sendMessageTelegram(targetSenderId, text, {
-      buttons: buildFeedbackKeyboard(decisionId),
-      textMode: "markdown",
-      cfg: api?.config?.loadConfig?.(),
-    });
+
+    const bridgeJson = await bridgeRes.json().catch(() => ({} as any));
+    if (!bridgeJson?.ok) {
+      await debugLog(`[feedback-card] failed decision=${decisionId} to=${targetSenderId} error=bridge_not_ok`);
+      return false;
+    }
+
     rememberFeedbackPrompt(decisionId);
-    await debugLog(`[feedback-card] sent decision=${decisionId} to=${targetSenderId} message_id=${result?.messageId ?? "?"}`);
+    await debugLog(`[feedback-card] sent decision=${decisionId} to=${targetSenderId} via=bridge`);
     return true;
   } catch (error: any) {
     await debugLog(`[feedback-card] failed decision=${decisionId} to=${targetSenderId} error=${error?.message ?? String(error)}`);
@@ -1610,7 +1695,7 @@ export default definePluginEntry({
       const sender = resolveSenderForSession(ctx.sessionKey ?? sessionRef);
       if (decision.decision_id) {
         if (sender) {
-          await sendTelegramFeedbackCard(api, sender.senderId, decision, sourceTag);
+          await sendTelegramFeedbackCard(api, sender.senderId, decision, sourceTag, { messagePreview: routingText });
         } else {
           await debugLog(
             `[feedback-card] skipped decision=${decision.decision_id} reason=missing_sender session=${ctx.sessionKey ?? sessionRef ?? ""}`,
@@ -1774,7 +1859,7 @@ export default definePluginEntry({
                 reply_context_used: decision.replyContextUsed,
               },
               decision.sourceTag,
-              { shadowMode: true, actualModel: outcomeModel },
+              { shadowMode: true, actualModel: outcomeModel, messagePreview: decision.promptText },
             );
           } else {
             await debugLog(

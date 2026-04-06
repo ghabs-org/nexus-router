@@ -152,9 +152,10 @@ def main() -> int:
         args=training_args,
         train_dataset=train_ds,
         eval_dataset=eval_ds,
-        tokenizer=tokenizer,
         data_collator=collator,
     )
+    # attach tokenizer for compatibility with some Trainer utilities
+    trainer.tokenizer = tokenizer
     trainer.train()
     trainer.save_model(args.output_dir)
     tokenizer.save_pretrained(args.output_dir)

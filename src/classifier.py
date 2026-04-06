@@ -784,6 +784,32 @@ def heuristic_classify(message: str, pre_signals: PreSignals) -> Optional[Classi
             confidence=0.80,
         )
 
+    # If inline/fenced code detected (and not a diff), prefer coding: avoid routing code snippets to chat
+    if pre_signals.has_code and not pre_signals.has_diff:
+        return ClassifierOutput(
+            task_type="coding",
+            subtype=None,
+            complexity="medium",
+            needs_tools=True,
+            confidence=0.82,
+        )
+
+    # Short conversational greetings/PMs: classify as general_chat with high confidence
+    if pre_signals.message_length < 60 and not pre_signals.has_code:
+        lower = message.strip().lower()
+        single_word_greetings = ("hi", "hello", "hey")
+        phrase_greetings = ("how are you", "how's your day")
+        if any(re.match(rf"^{g}\b", lower) for g in single_word_greetings) or any(
+            re.search(rf"\b{g}\b", lower) for g in phrase_greetings
+        ):
+            return ClassifierOutput(
+                task_type="general_chat",
+                complexity="low",
+                needs_tools=False,
+                cost_profile="cheap",
+                confidence=0.90,
+            )
+
     # Very short message, no code: likely fast utility
     if pre_signals.message_length < 120 and not pre_signals.has_code:
         return ClassifierOutput(
