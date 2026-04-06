@@ -459,17 +459,52 @@ async function sendTelegramFeedbackCard(
 
   try {
     const telegram = api?.runtime?.telegram;
-    if (!telegram?.sendMessageTelegram) {
-      await debugLog(`[feedback-card] skipped decision=${decisionId} reason=no_telegram_runtime`);
+    if (telegram?.sendMessageTelegram) {
+      const result = await telegram.sendMessageTelegram(targetSenderId, text, {
+        buttons: buildFeedbackKeyboard(decisionId),
+        textMode: "plain",
+        cfg: api?.config?.loadConfig?.(),
+      });
+      rememberFeedbackPrompt(decisionId);
+      await debugLog(`[feedback-card] sent decision=${decisionId} to=${targetSenderId} message_id=${result?.messageId ?? "?"} via=telegram_runtime`);
+      return true;
+    }
+
+    const bridgePayload = {
+      telegram_user_id: targetSenderId,
+      decision_id: decisionId,
+      task_type: task,
+      selected_model: model,
+      confidence: Number.isFinite(decision.confidence) ? decision.confidence : undefined,
+      classifier_source: decision.classifier_source,
+      shadow_mode: shadowMode,
+      actual_model: actualModel || undefined,
+      source_channel: "telegram",
+      source_message_preview: opts?.messagePreview,
+    };
+
+    const bridgeRes = await fetch("http://127.0.0.1:8091/api/v1/router/feedback-card", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": "Bearer d78b5699f15a16b707f5bd480dea17be50f3c7981eba3d961cae1ac28aa6774f",
+      },
+      body: JSON.stringify(bridgePayload),
+    });
+
+    if (!bridgeRes.ok) {
+      await debugLog(`[feedback-card] failed decision=${decisionId} to=${targetSenderId} error=bridge_http_${bridgeRes.status}`);
       return false;
     }
-    const result = await telegram.sendMessageTelegram(targetSenderId, text, {
-      buttons: buildFeedbackKeyboard(decisionId),
-      textMode: "markdown",
-      cfg: api?.config?.loadConfig?.(),
-    });
+
+    const bridgeJson = await bridgeRes.json().catch(() => ({} as any));
+    if (!bridgeJson?.ok) {
+      await debugLog(`[feedback-card] failed decision=${decisionId} to=${targetSenderId} error=bridge_not_ok`);
+      return false;
+    }
+
     rememberFeedbackPrompt(decisionId);
-    await debugLog(`[feedback-card] sent decision=${decisionId} to=${targetSenderId} message_id=${result?.messageId ?? "?"}`);
+    await debugLog(`[feedback-card] sent decision=${decisionId} to=${targetSenderId} via=bridge`);
     return true;
   } catch (error: any) {
     await debugLog(`[feedback-card] failed decision=${decisionId} to=${targetSenderId} error=${error?.message ?? String(error)}`);
