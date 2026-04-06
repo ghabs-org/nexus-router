@@ -17,6 +17,7 @@ import { appendFile } from "node:fs/promises";
 
 interface NexusRouterConfig {
   routerUrl?: string;
+  bridgeUrl?: string;
   enabled?: boolean;
   costProfile?: "cheap" | "balanced" | "premium";
   debugMode?: boolean;
@@ -103,6 +104,7 @@ interface RouteModePreference {
 // ── Defaults ──────────────────────────────────────────────────────────────────
 
 const DEFAULT_URL         = "http://127.0.0.1:7771";
+const DEFAULT_BRIDGE_URL  = "http://127.0.0.1:8091";
 const DEFAULT_CONFIDENCE  = 0.60;
 const DEFAULT_TIMEOUT_MS  = 10000;
 const DEFAULT_COST        = "balanced";
@@ -483,12 +485,20 @@ async function sendTelegramFeedbackCard(
       source_message_preview: opts?.messagePreview,
     };
 
-    const bridgeRes = await fetch("http://127.0.0.1:8091/api/v1/router/feedback-card", {
+    const bridgeBearerToken = process.env.NEXUS_ROUTER_BRIDGE_BEARER_TOKEN;
+    const bridgeHeaders: Record<string, string> = {
+      "Content-Type": "application/json",
+    };
+    if (bridgeBearerToken) {
+      bridgeHeaders["Authorization"] = `Bearer ${bridgeBearerToken}`;
+    }
+
+    const bridgeBaseUrl = (api?.config as NexusRouterConfig)?.bridgeUrl
+      ?? process.env.NEXUS_ROUTER_BRIDGE_URL
+      ?? DEFAULT_BRIDGE_URL;
+    const bridgeRes = await fetch(`${bridgeBaseUrl}/api/v1/router/feedback-card`, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": "Bearer d78b5699f15a16b707f5bd480dea17be50f3c7981eba3d961cae1ac28aa6774f",
-      },
+      headers: bridgeHeaders,
       body: JSON.stringify(bridgePayload),
     });
 
