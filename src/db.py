@@ -57,6 +57,7 @@ def ensure_schema():
     conn.executescript(sql)
     _ensure_feedback_table_compat(conn)
     _ensure_routing_decisions_compat(conn)
+    conn.commit()
     conn.close()
 
 
@@ -86,13 +87,30 @@ def _ensure_routing_decisions_compat(conn: sqlite3.Connection) -> None:
         return
     expected = {
         "route_mode": "TEXT",
-        "shadow_mode": "INTEGER",
+        "provenance_mode": "TEXT",
         "source_type": "TEXT",
         "source_tag": "TEXT",
     }
     for column, column_type in expected.items():
         if column not in columns:
             conn.execute(f"ALTER TABLE routing_decisions ADD COLUMN {column} {column_type}")
+
+    columns = {row["name"] for row in conn.execute("PRAGMA table_info(routing_decisions)").fetchall()}
+    if "provenance_mode" in columns:
+        conn.execute(
+            """
+            UPDATE routing_decisions
+            SET provenance_mode = CASE
+              WHEN provenance_mode IS NOT NULL AND TRIM(provenance_mode) != '' THEN provenance_mode
+              WHEN COALESCE(shadow_mode, 0) = 1 THEN 'shadow'
+              ELSE 'route'
+            END
+            WHERE provenance_mode IS NULL OR TRIM(provenance_mode) = ''
+            """
+        )
+
+    conn.execute("UPDATE schema_meta SET value='4' WHERE key='schema_version'")
+    conn.execute("INSERT OR IGNORE INTO schema_meta (key, value) VALUES ('schema_version', '4')")
 
 
 def write_decision(
@@ -105,7 +123,7 @@ def write_decision(
     nexus_issue_id: Optional[str] = None,
     nexus_project: Optional[str] = None,
     route_mode: Optional[str] = None,
-    shadow_mode: Optional[bool] = None,
+    provenance_mode: Optional[str] = None,
     source_type: Optional[str] = None,
     source_tag: Optional[str] = None,
 ) -> str:
@@ -128,7 +146,7 @@ def write_decision(
               fallbacks, routing_score, reason, excluded_models,
               provider_health_score, quota_state, provider_auth_ok,
               nexus_workflow_id, nexus_step_id, nexus_issue_id, nexus_project,
-              route_mode, shadow_mode, source_type, source_tag
+              route_mode, provenance_mode, source_type, source_tag
             ) VALUES (
               ?,?,  ?,?,?,  ?,?,?,  ?,?,?,
               ?,?,?,?,?,  ?,?,  ?,?,?,?,  ?,?,?,  ?,?,?,?,
@@ -151,7 +169,7 @@ def write_decision(
                 int(provider_health.auth == "ok"),
                 nexus_workflow_id, nexus_step_id, nexus_issue_id, nexus_project,
                 route_mode,
-                None if shadow_mode is None else int(shadow_mode),
+                provenance_mode,
                 source_type,
                 source_tag,
             ),

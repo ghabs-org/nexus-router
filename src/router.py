@@ -79,7 +79,7 @@ class Router:
         route_mode: Optional[str] = None,
         source_type: Optional[str] = None,
         source_tag: Optional[str] = None,
-        shadow_mode: Optional[bool] = None,
+        provenance_mode: Optional[str] = None,
     ) -> RoutingDecision:
         """
         Route a request to the best available model.
@@ -197,7 +197,7 @@ class Router:
                 nexus_issue_id=nexus_context.get("nexus_issue_id"),
                 nexus_project=nexus_context.get("nexus_project"),
                 route_mode=effective_route_mode,
-                shadow_mode=shadow_mode,
+                provenance_mode=provenance_mode,
                 source_type=source_type,
                 source_tag=source_tag,
             )

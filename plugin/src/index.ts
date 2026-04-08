@@ -157,7 +157,7 @@ async function routeRequest(
   useLlmClassifier?: boolean,
   sourceType?: "compiled-prompt" | "raw-user",
   sourceTag?: string,
-  shadowMode?: boolean,
+  provenanceMode?: "route" | "shadow",
 ): Promise<RouteRequestResult> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -173,7 +173,7 @@ async function routeRequest(
         message: prompt,
         cost_profile: costProfile,
         route_mode: routeMode,
-        shadow_mode: shadowMode ?? false,
+        provenance_mode: provenanceMode ?? "route",
         source_type: sourceType,
         source_tag: sourceTag,
         conversation_context: conversationContext,
@@ -485,7 +485,7 @@ async function sendTelegramFeedbackCard(
       selected_model: model,
       confidence: Number.isFinite(decision.confidence) ? decision.confidence : undefined,
       classifier_source: decision.classifier_source,
-      shadow_mode: shadowMode,
+      provenance_mode: shadowMode ? "shadow" : "route",
       actual_model: actualModel || undefined,
       source_channel: "telegram",
       source_message_preview: opts?.messagePreview,
@@ -1478,7 +1478,7 @@ export default definePluginEntry({
           shouldUseLlmClassifier,
           source,
           sourceTag,
-          true,
+          "shadow",
         );
         const shadowDecision = shadowResult.decision;
         if (!shadowDecision) {
@@ -1598,7 +1598,7 @@ export default definePluginEntry({
           shouldUseLlmClassifier,
           source,
           sourceTag,
-          false,
+          "route",
         );
         autoDecision = autoResult.decision;
         if (!autoDecision) {
@@ -1620,7 +1620,7 @@ export default definePluginEntry({
             shouldUseLlmClassifier,
             source,
             sourceTag,
-            false,
+            "route",
           );
           const balancedDecision = balancedResult.decision;
           if (balancedDecision) {
@@ -1651,7 +1651,7 @@ export default definePluginEntry({
           shouldUseLlmClassifier,
           source,
           sourceTag,
-          false,
+          "route",
         );
         decision = directResult.decision;
         if (!decision) {

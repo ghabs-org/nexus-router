@@ -1,5 +1,5 @@
 -- Nexus Router — SQLite schema
--- Version: 3
+-- Version: 4
 -- Location: data/router.sqlite
 
 PRAGMA journal_mode = WAL;
@@ -62,7 +62,7 @@ CREATE TABLE IF NOT EXISTS routing_decisions (
 
   -- provenance / hygiene markers
   route_mode            TEXT,
-  shadow_mode           INTEGER,
+  provenance_mode       TEXT,
   source_type           TEXT,
   source_tag            TEXT
 );
@@ -186,7 +186,7 @@ CREATE INDEX IF NOT EXISTS idx_route_feedback_created_at ON route_feedback(creat
 CREATE INDEX IF NOT EXISTS idx_route_feedback_preferred_model ON route_feedback(preferred_model);
 CREATE INDEX IF NOT EXISTS idx_route_mode_preferences_updated_at ON route_mode_preferences(updated_at);
 
-INSERT OR IGNORE INTO schema_meta (key, value) VALUES ('schema_version', '3');
+INSERT OR IGNORE INTO schema_meta (key, value) VALUES ('schema_version', '4');
 INSERT OR IGNORE INTO schema_meta (key, value) VALUES ('created_at', datetime('now'));
 
 -- ────────────────────────────────────────────────────────────────────────────
