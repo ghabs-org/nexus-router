@@ -201,6 +201,9 @@ class RouterHandler(BaseHTTPRequestHandler):
                 return
             nexus_context = body.get("nexus_context")
             route_mode = body.get("route_mode")
+            source_type = body.get("source_type")
+            source_tag = body.get("source_tag")
+            shadow_mode = body.get("shadow_mode")
 
             # Extract pre-signals
             pre_signals = extract_pre_signals(message, has_image_attachment=has_image)
@@ -291,6 +294,9 @@ class RouterHandler(BaseHTTPRequestHandler):
                 pre_signals=pre_signals,
                 nexus_context=nexus_context or {},
                 route_mode=route_mode,
+                source_type=str(source_type).strip() if source_type is not None else None,
+                source_tag=str(source_tag).strip() if source_tag is not None else None,
+                shadow_mode=bool(shadow_mode) if shadow_mode is not None else None,
             )
 
             local_bits = ""

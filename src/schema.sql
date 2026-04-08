@@ -58,7 +58,13 @@ CREATE TABLE IF NOT EXISTS routing_decisions (
   nexus_workflow_id     TEXT,
   nexus_step_id         TEXT,
   nexus_issue_id        TEXT,
-  nexus_project         TEXT
+  nexus_project         TEXT,
+
+  -- provenance / hygiene markers
+  route_mode            TEXT,
+  shadow_mode           INTEGER,
+  source_type           TEXT,
+  source_tag            TEXT
 );
 
 -- ────────────────────────────────────────────────────────────────────────────

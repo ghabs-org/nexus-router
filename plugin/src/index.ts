@@ -155,6 +155,9 @@ async function routeRequest(
   routeMode: RouteMode,
   conversationContext?: string,
   useLlmClassifier?: boolean,
+  sourceType?: "compiled-prompt" | "raw-user",
+  sourceTag?: string,
+  shadowMode?: boolean,
 ): Promise<RouteRequestResult> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -170,6 +173,9 @@ async function routeRequest(
         message: prompt,
         cost_profile: costProfile,
         route_mode: routeMode,
+        shadow_mode: shadowMode ?? false,
+        source_type: sourceType,
+        source_tag: sourceTag,
         conversation_context: conversationContext,
         use_llm_classifier: useLlmClassifier ?? false,
       }),
@@ -1470,6 +1476,9 @@ export default definePluginEntry({
           routeMode,
           conversationContext,
           shouldUseLlmClassifier,
+          source,
+          sourceTag,
+          true,
         );
         const shadowDecision = shadowResult.decision;
         if (!shadowDecision) {
@@ -1587,6 +1596,9 @@ export default definePluginEntry({
           routeMode,
           conversationContext,
           shouldUseLlmClassifier,
+          source,
+          sourceTag,
+          false,
         );
         autoDecision = autoResult.decision;
         if (!autoDecision) {
@@ -1606,6 +1618,9 @@ export default definePluginEntry({
             "balanced",
             conversationContext,
             shouldUseLlmClassifier,
+            source,
+            sourceTag,
+            false,
           );
           const balancedDecision = balancedResult.decision;
           if (balancedDecision) {
@@ -1634,6 +1649,9 @@ export default definePluginEntry({
           routeMode,
           conversationContext,
           shouldUseLlmClassifier,
+          source,
+          sourceTag,
+          false,
         );
         decision = directResult.decision;
         if (!decision) {

@@ -56,6 +56,7 @@ def ensure_schema():
     conn = _connect()
     conn.executescript(sql)
     _ensure_feedback_table_compat(conn)
+    _ensure_routing_decisions_compat(conn)
     conn.close()
 
 
@@ -79,6 +80,21 @@ def _ensure_feedback_table_compat(conn: sqlite3.Connection) -> None:
             conn.execute(f"ALTER TABLE route_feedback ADD COLUMN {column} {column_type}")
 
 
+def _ensure_routing_decisions_compat(conn: sqlite3.Connection) -> None:
+    columns = {row["name"] for row in conn.execute("PRAGMA table_info(routing_decisions)").fetchall()}
+    if not columns:
+        return
+    expected = {
+        "route_mode": "TEXT",
+        "shadow_mode": "INTEGER",
+        "source_type": "TEXT",
+        "source_tag": "TEXT",
+    }
+    for column, column_type in expected.items():
+        if column not in columns:
+            conn.execute(f"ALTER TABLE routing_decisions ADD COLUMN {column} {column_type}")
+
+
 def write_decision(
     decision: RoutingDecision,
     classifier: ClassifierOutput,
@@ -88,6 +104,10 @@ def write_decision(
     nexus_step_id: Optional[str] = None,
     nexus_issue_id: Optional[str] = None,
     nexus_project: Optional[str] = None,
+    route_mode: Optional[str] = None,
+    shadow_mode: Optional[bool] = None,
+    source_type: Optional[str] = None,
+    source_tag: Optional[str] = None,
 ) -> str:
     """
     Write a new routing decision to the DB.
@@ -107,10 +127,12 @@ def write_decision(
               selected_model, selected_provider,
               fallbacks, routing_score, reason, excluded_models,
               provider_health_score, quota_state, provider_auth_ok,
-              nexus_workflow_id, nexus_step_id, nexus_issue_id, nexus_project
+              nexus_workflow_id, nexus_step_id, nexus_issue_id, nexus_project,
+              route_mode, shadow_mode, source_type, source_tag
             ) VALUES (
               ?,?,  ?,?,?,  ?,?,?,  ?,?,?,
-              ?,?,?,?,?,  ?,?,  ?,?,?,?,  ?,?,?,  ?,?,?,?
+              ?,?,?,?,?,  ?,?,  ?,?,?,?,  ?,?,?,  ?,?,?,?,
+              ?,?,?,?
             )
             """,
             (
@@ -128,6 +150,10 @@ def write_decision(
                 provider_health.health_score, provider_health.quota,
                 int(provider_health.auth == "ok"),
                 nexus_workflow_id, nexus_step_id, nexus_issue_id, nexus_project,
+                route_mode,
+                None if shadow_mode is None else int(shadow_mode),
+                source_type,
+                source_tag,
             ),
         )
         conn.commit()
