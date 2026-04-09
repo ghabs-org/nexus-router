@@ -173,6 +173,7 @@ async function routeRequest(
         message: prompt,
         cost_profile: costProfile,
         route_mode: routeMode,
+        mode: provenanceMode ?? "route",
         provenance_mode: provenanceMode ?? "route",
         source_type: sourceType,
         source_tag: sourceTag,
@@ -245,7 +246,7 @@ const RECENT_COMMAND_GUARD_MS = 15_000;
 let recentLastDecisionGlobal: LastRouteDecision | null = null;
 
 function rememberRecentUserMessage(sessionKey: string, text: string): void {
-  const trimmed = text.trim();
+  const trimmed = stripOpenClawMetadataEnvelope(text);
   if (!sessionKey || !trimmed) return;
   recentUserMessages.set(sessionKey, { text: trimmed, at: Date.now() });
 }
@@ -391,6 +392,35 @@ function buildFeedbackKeyboard(decisionId: string): Array<Array<{ text: string; 
   ];
 }
 
+/**
+ * Strip OpenClaw injected metadata envelopes from a raw user message before
+ * routing. These blocks are injected by the runtime and should never reach
+ * the classifier or appear in feedback-card previews.
+ *
+ * Strips:
+ *   - Conversation info (untrusted metadata): ```json ... ```
+ *   - Sender (untrusted metadata): ```json ... ```
+ *   - Replied message (untrusted, for context): ```json ... ```
+ *   - Any leading/trailing whitespace after stripping.
+ */
+export function stripOpenClawMetadataEnvelope(text: string): string {
+  // Remove all fenced-json blocks that follow an OpenClaw envelope header
+  // Pattern: optional header line + ```json ... ``` block
+  let stripped = text
+    .replace(
+      /(?:^|\n)(?:Conversation info|Sender|Replied message|Inbound Context|Group Chat Context)\s*\([^)]*\):[^\n]*\n```json[\s\S]*?```/gi,
+      "",
+    )
+    // Also strip bare ```json blocks that look like openclaw metadata (heuristic: contain "message_id", "sender_id", "schema")
+    .replace(
+      /```json\s*\{[\s\S]*?(?:"message_id"|"sender_id"|"schema":\s*"openclaw)[\s\S]*?```/gi,
+      "",
+    );
+  // Collapse runs of blank lines
+  stripped = stripped.replace(/\n{3,}/g, "\n\n").trim();
+  return stripped;
+}
+
 function shouldSuppressFeedbackCardForText(messagePreview?: string): boolean {
   const text = String(messagePreview ?? "").trim();
   if (!text) return false;
@@ -406,6 +436,11 @@ function shouldSuppressFeedbackCardForText(messagePreview?: string): boolean {
     "results auto-announce to your requester",
     "completion is push-based",
     "do not busy-poll for status",
+    // OpenClaw injected metadata envelopes
+    "conversation info (untrusted metadata)",
+    "sender (untrusted metadata)",
+    "replied message (untrusted",
+    "inbound context (trusted metadata)",
   ];
   if (internalMarkers.some((marker) => lowered.includes(marker))) {
     return true;

@@ -401,7 +401,7 @@ def _load_feedback_preferences(conn: sqlite3.Connection) -> dict[str, dict[str, 
         rows = conn.execute(
             """
             SELECT
-              COALESCE(rf.preferred_model, rd.selected_model) AS model,
+              rf.preferred_model AS model,
               COALESCE(NULLIF(rf.corrected_task, ''), rd.task_type, '*') AS task_type,
               COUNT(*) AS sample_count,
               AVG(
@@ -416,8 +416,10 @@ def _load_feedback_preferences(conn: sqlite3.Connection) -> dict[str, dict[str, 
               MAX(COALESCE(rf.reason_tag, '')) AS top_reason_tag
             FROM route_feedback rf
             LEFT JOIN routing_decisions rd ON rd.id = rf.decision_id
-            WHERE COALESCE(rf.preferred_model, rd.selected_model) IS NOT NULL
-            GROUP BY COALESCE(rf.preferred_model, rd.selected_model), COALESCE(NULLIF(rf.corrected_task, ''), rd.task_type, '*')
+            WHERE rf.preferred_model IS NOT NULL
+               OR rf.model_verdict IS NOT NULL
+            GROUP BY rf.preferred_model,
+                     COALESCE(NULLIF(rf.corrected_task, ''), rd.task_type, '*')
             """
         ).fetchall()
     except sqlite3.OperationalError:

@@ -47,7 +47,7 @@ def main() -> None:
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
 
-    task_stats = defaultdict(lambda: {"total": 0, "wrong": 0, "correct": 0})
+    task_stats = defaultdict(lambda: {"total": 0, "wrong": 0, "correct": 0, "unlabelled": 0})
     model_task = defaultdict(lambda: {"samples": 0, "score_sum": 0.0, "last_feedback_at": ""})
 
     decision_columns = {row["name"] for row in conn.execute("PRAGMA table_info(routing_decisions)").fetchall()}
@@ -119,7 +119,20 @@ def main() -> None:
         elif verdict == "correct":
             task_stats[task]["correct"] += 1
 
+        # Track whether this feedback row has explicit labels
+        preferred_model = str(r["model_id"] or "").strip()
+        has_explicit_label = bool(
+            preferred_model and preferred_model != (r["model_id"] or "")  # always False (same field)
+        ) or bool(model_verdict)
+        # Re-derive: unlabelled = no model_verdict and no preferred_model on the feedback row
+        # (we can't distinguish here since the query already resolves model_id;
+        #  use model_verdict as the primary signal)
+        is_unlabelled = not model_verdict
+        if is_unlabelled:
+            task_stats[task]["unlabelled"] += 1
+
         # Keep scoring aligned with db.py aggregation semantics.
+        # Only include in model_task signals when model_verdict is present (explicit signal).
         if model_verdict == "good":
             score = 1.0
         elif model_verdict == "neutral":
@@ -129,22 +142,27 @@ def main() -> None:
         else:
             score = 0.75 if verdict == "correct" else 0.0
 
-        key = f"{task}::{model}"
-        model_task[key]["samples"] += 1
-        model_task[key]["score_sum"] += score
-        created_at = str(r["created_at"] or "")
-        if created_at and created_at > str(model_task[key].get("last_feedback_at") or ""):
-            model_task[key]["last_feedback_at"] = created_at
+        # Only aggregate model/task preference signals for explicitly labelled rows
+        if not is_unlabelled:
+            key = f"{task}::{model}"
+            model_task[key]["samples"] += 1
+            model_task[key]["score_sum"] += score
+            created_at = str(r["created_at"] or "")
+            if created_at and created_at > str(model_task[key].get("last_feedback_at") or ""):
+                model_task[key]["last_feedback_at"] = created_at
 
     by_task = []
+    total_unlabelled = 0
     for task, s in sorted(task_stats.items(), key=lambda kv: kv[1]["total"], reverse=True):
         total = max(1, s["total"])
+        total_unlabelled += s["unlabelled"]
         by_task.append(
             {
                 "task": task,
                 "samples": s["total"],
                 "wrong_rate": round(s["wrong"] / total, 4),
                 "correct_rate": round(s["correct"] / total, 4),
+                "unlabelled": s["unlabelled"],
             }
         )
 
@@ -176,6 +194,7 @@ def main() -> None:
         "feedback_samples": len(rows),
         "feedback_total": int(total_feedback or 0),
         "orphan_feedback_excluded": int((total_feedback or 0) - len(rows)),
+        "unlabelled_feedback_count": total_unlabelled,
         "task_summary": by_task,
         "model_task_signals_top": by_model_task[:50],
     }
