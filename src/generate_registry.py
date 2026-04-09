@@ -31,10 +31,10 @@ ROOT = Path(__file__).parent.parent
 
 try:
     from .paths import RAW_CATALOG_FILE as RAW_CATALOG, POLICIES_ROOT, REGISTRY_FILE as OUT_FILE, ensure_parent
-    from .db import load_benchmark_scores
+    from .db import load_benchmark_scores, load_outcome_counts
 except ImportError:
     from paths import RAW_CATALOG_FILE as RAW_CATALOG, POLICIES_ROOT, REGISTRY_FILE as OUT_FILE, ensure_parent
-    from db import load_benchmark_scores
+    from db import load_benchmark_scores, load_outcome_counts
 
 FAMILIES_FILE    = POLICIES_ROOT / "families.yaml"
 OVERRIDES_FILE   = POLICIES_ROOT / "overrides.yaml"
@@ -99,12 +99,28 @@ def _canonical_benchmark_keys(provider: str, model_id: str, bench_models: dict) 
     return candidates
 
 
-def resolve_scores(provider: str, model_id: str, features: dict, families: dict, benchmarks: dict) -> tuple[dict, dict]:
+# Cold-start graduation threshold: once a model has at least this many recorded
+# routing outcomes, its family priors are skipped entirely in favour of
+# data-driven benchmark/feedback scores. Set via env var NEXUS_COLD_START_MIN_OUTCOMES.
+_COLD_START_MIN_OUTCOMES = int(
+    __import__("os").environ.get("NEXUS_COLD_START_MIN_OUTCOMES", "30")
+)
+
+
+def resolve_scores(
+    provider: str,
+    model_id: str,
+    features: dict,
+    families: dict,
+    benchmarks: dict,
+    outcome_counts: dict[str, int] | None = None,
+) -> tuple[dict, dict]:
     """
     Resolve scoring priors for a model using:
-    1. Family defaults
-    2. Pattern overrides within that family
-    3. Benchmark-derived scores, with exact-match first and provider-agnostic fallback second
+    1. Family defaults (cold-start only — skipped once model has >= NEXUS_COLD_START_MIN_OUTCOMES outcomes)
+    2. Pattern overrides within that family (cold-start only)
+    3. Derived scores from catalog features (context window, vision modality) — always applied
+    4. Benchmark-derived scores from SQLite — always applied, highest priority
 
     Returns (scores, source_map)
     """
@@ -124,10 +140,23 @@ def resolve_scores(provider: str, model_id: str, features: dict, families: dict,
     }
     source = {k: "global:default" for k in defaults}
 
-    # Apply family defaults
-    for k, v in family_cfg.get("default", {}).items():
-        defaults[k] = v
-        source[k] = "family:default"
+    # Determine whether this model has "graduated" from cold-start priors.
+    # A graduated model has enough real outcomes that family priors should not influence it.
+    model_key = f"{provider}/{model_id}"
+    n_outcomes = (outcome_counts or {}).get(model_key, 0)
+    graduated = n_outcomes >= _COLD_START_MIN_OUTCOMES
+
+    if graduated:
+        # Skip family defaults and pattern overrides entirely.
+        # scoreSource will reflect "graduated:N" so the registry shows which models
+        # are fully data-driven vs still on cold-start priors.
+        for k in defaults:
+            source[k] = f"graduated:{n_outcomes}_outcomes"
+    else:
+        # Apply family defaults (cold-start prior)
+        for k, v in family_cfg.get("default", {}).items():
+            defaults[k] = v
+            source[k] = "family:default"
 
     # Apply context score from context window size
     ctx = features.get("contextWindow", 0)
@@ -149,14 +178,15 @@ def resolve_scores(provider: str, model_id: str, features: dict, families: dict,
         defaults["vision"] = 0.0
         source["vision"] = "derived:modality"
 
-    # Apply pattern overrides
-    for pattern_entry in family_cfg.get("patterns", []):
-        pattern = pattern_entry.get("match", "")
-        if re.search(pattern, model_id):
-            for k, v in pattern_entry.get("overrides", {}).items():
-                defaults[k] = v
-                source[k] = f"pattern:{pattern}"
-            break  # first matching pattern wins
+    # Apply pattern overrides (cold-start only — skipped for graduated models)
+    if not graduated:
+        for pattern_entry in family_cfg.get("patterns", []):
+            pattern = pattern_entry.get("match", "")
+            if re.search(pattern, model_id):
+                for k, v in pattern_entry.get("overrides", {}).items():
+                    defaults[k] = v
+                    source[k] = f"pattern:{pattern}"
+                break  # first matching pattern wins
 
     # Apply benchmark-derived scores (highest-priority source, overrides family)
     bench_models = (benchmarks.get("models") or {})
@@ -181,8 +211,14 @@ def resolve_scores(provider: str, model_id: str, features: dict, families: dict,
     return defaults, source
 
 
-def normalize(raw: dict, families: dict, overrides: dict, benchmarks: dict,
-              only_providers: set[str] | None = None) -> list[dict]:
+def normalize(
+    raw: dict,
+    families: dict,
+    overrides: dict,
+    benchmarks: dict,
+    only_providers: set[str] | None = None,
+    outcome_counts: dict[str, int] | None = None,
+) -> list[dict]:
     models = []
     for entry in raw.get("models", []):
         key = entry.get("key", "")
@@ -208,7 +244,7 @@ def normalize(raw: dict, families: dict, overrides: dict, benchmarks: dict,
             "local": entry.get("local", False),
         }
 
-        scores, score_source = resolve_scores(provider, model_id, features, families, benchmarks)
+        scores, score_source = resolve_scores(provider, model_id, features, families, benchmarks, outcome_counts=outcome_counts)
 
         # Apply manual overrides
         manual = (overrides.get("overrides") or {}).get(key, {})
@@ -238,6 +274,12 @@ def main():
                         help="Comma-separated provider ids to include, e.g. openai-codex,github-copilot")
     parser.add_argument("--all", dest="include_all", action="store_true",
                         help="Include all 800+ catalog models (default without filters)")
+    parser.add_argument("--purge-cold-start", action="store_true",
+                        help=(
+                            f"Skip family priors for models with >= {_COLD_START_MIN_OUTCOMES} outcomes "
+                            "(always enabled during normal generation; this flag just makes it explicit "
+                            "and prints a graduation report)."
+                        ))
     args = parser.parse_args()
 
     print(f"Loading raw catalog from {RAW_CATALOG}...")
@@ -256,6 +298,18 @@ def main():
         print(f"  {n_bench} benchmark model entries loaded")
     else:
         print("No benchmark scores found in router DB — using family priors only")
+
+    # Load outcome counts for cold-start graduation
+    outcome_counts = load_outcome_counts()
+    graduated = [m for m, n in outcome_counts.items() if n >= _COLD_START_MIN_OUTCOMES]
+    cold_start = [m for m, n in outcome_counts.items() if n < _COLD_START_MIN_OUTCOMES]
+    print(f"Cold-start graduation threshold: {_COLD_START_MIN_OUTCOMES} outcomes")
+    print(f"  Graduated (data-driven, family priors ignored): {len(graduated)}")
+    print(f"  Still on cold-start priors (< threshold): {len(cold_start)}")
+    if args.purge_cold_start and graduated:
+        print("  Graduated models (family priors suppressed):")
+        for m in sorted(graduated):
+            print(f"    {m} ({outcome_counts[m]} outcomes)")
 
     # Resolve provider filter
     only_providers: set[str] | None = None
@@ -276,7 +330,7 @@ def main():
         print(f"Only-configured filter: {sorted(only_providers)}")
 
     print("Normalizing...")
-    models = normalize(raw, families, overrides, benchmarks, only_providers)
+    models = normalize(raw, families, overrides, benchmarks, only_providers, outcome_counts=outcome_counts)
 
     result = {
         "generatedAt": datetime.now(timezone.utc).isoformat(),
@@ -299,10 +353,21 @@ def main():
         1 for m in models
         if any(v.startswith("benchmark:") for v in m["scoreSource"].values())
     )
+    graduated_count = sum(
+        1 for m in models
+        if any(v.startswith("graduated:") for v in m["scoreSource"].values())
+    )
+    cold_start_count = sum(
+        1 for m in models
+        if any(v.startswith("family:") or v.startswith("pattern:") for v in m["scoreSource"].values())
+    )
     print(f"  authed/available: {len(authed)}")
     print(f"  benchmark-scored: {bench_count}")
+    print(f"  graduated (data-driven, priors ignored): {graduated_count}")
+    print(f"  cold-start (family priors active): {cold_start_count}")
     providers = sorted(set(m["provider"] for m in models))
     print(f"  providers ({len(providers)}): {', '.join(providers[:8])}{'...' if len(providers) > 8 else ''}")
+    main()
 
 
 if __name__ == "__main__":

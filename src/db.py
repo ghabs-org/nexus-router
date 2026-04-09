@@ -344,6 +344,27 @@ def _update_model_stats(
         )
 
 
+def load_outcome_counts() -> dict[str, int]:
+    """
+    Return a mapping of model_id -> total_selected (number of routing outcomes recorded).
+    Used by generate_registry to decide whether a model has "graduated" from cold-start
+    family priors to fully data-driven scoring.
+    """
+    if not DB_PATH.exists():
+        return {}
+    conn = _connect()
+    try:
+        try:
+            rows = conn.execute(
+                "SELECT model, total_selected FROM model_stats WHERE total_selected IS NOT NULL"
+            ).fetchall()
+        except sqlite3.OperationalError:
+            return {}
+        return {row["model"]: int(row["total_selected"] or 0) for row in rows}
+    finally:
+        conn.close()
+
+
 def load_model_stats() -> dict[str, dict]:
     """
     Load learned model stats from DB.
