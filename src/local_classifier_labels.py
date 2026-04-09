@@ -26,7 +26,7 @@ LABEL_TO_ID: dict[str, int] = {label: idx for idx, label in enumerate(ROUTER_TAS
 ID_TO_LABEL: dict[int, str] = {idx: label for label, idx in LABEL_TO_ID.items()}
 
 DEFAULT_MODEL_NAME = "answerdotai/ModernBERT-base"
-DEFAULT_HF_CACHE_DIR = "/home/ubuntu/.openclaw/workspace/.cache/huggingface"
+DEFAULT_HF_CACHE_DIR = str(Path.home() / ".cache" / "nexus-router" / "huggingface")
 
 # Runtime-aligned artifact root (host): ~/.local/state/nexus-router/artifacts
 # Override with NEXUS_ROUTER_ARTIFACTS_DIR if needed.

@@ -7,10 +7,10 @@ on `answerdotai/ModernBERT-base`.
 
 We are intentionally keeping two different Python environments:
 
-- **Runtime / production base:** `/home/ubuntu/.openclaw/workspace/.venvs/memsearch`
+- **Runtime / production base:** `/home/ubuntu/.local/state/openclaw/venvs/memsearch`
   - good place for `onnxruntime` inference once a classifier artifact exists
   - should stay lean and focused on serving / routing
-- **Build / export env:** `/home/ubuntu/.openclaw/workspace/.venvs/router-classifier-build`
+- **Build / export env:** `/home/ubuntu/.local/state/nexus-router/venvs/router-classifier-build`
   - used for training, Hugging Face model loading, and ONNX export
   - allowed to carry heavier packages like `torch`, `transformers`, and `optimum`
 
@@ -18,10 +18,10 @@ This keeps training/export concerns out of the production runtime.
 
 ## Shared HF cache
 
-Both environments should reuse the workspace cache:
+Both environments should reuse an external cache, not the workspace:
 
-- `HF_HOME=/home/ubuntu/.openclaw/workspace/.cache/huggingface`
-- `HUGGINGFACE_HUB_CACHE=/home/ubuntu/.openclaw/workspace/.cache/huggingface/hub`
+- `HF_HOME=/home/ubuntu/.cache/nexus-router/huggingface`
+- `HUGGINGFACE_HUB_CACHE=/home/ubuntu/.cache/nexus-router/huggingface/hub`
 
 The build scripts default to those paths.
 
@@ -50,7 +50,7 @@ Prepare JSONL files under `artifacts/router-classifier/data/`:
 Then run:
 
 ```bash
-source /home/ubuntu/.openclaw/workspace/.venvs/router-classifier-build/bin/activate
+source /home/ubuntu/.local/state/nexus-router/venvs/router-classifier-build/bin/activate
 python scripts/train_router_classifier.py --dry-run
 python scripts/train_router_classifier.py
 ```
@@ -63,7 +63,7 @@ without starting a training job.
 After training, export to ONNX with:
 
 ```bash
-source /home/ubuntu/.openclaw/workspace/.venvs/router-classifier-build/bin/activate
+source /home/ubuntu/.local/state/nexus-router/venvs/router-classifier-build/bin/activate
 python scripts/export_router_classifier_onnx.py \
   --checkpoint-dir artifacts/router-classifier/checkpoints \
   --onnx-dir artifacts/router-classifier/onnx
