@@ -25,13 +25,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--db", default=str(DB_PATH), help="Path to router.sqlite")
     parser.add_argument(
         "--source-type",
-        default="raw-user",
-        help="Filter to routing_decisions.source_type (default: raw-user)",
+        default="standalone",
+        help="Filter to routing_decisions.source_type (default: standalone)",
     )
     parser.add_argument(
-        "--provenance-mode",
+        "--mode",
         default=None,
-        help="Optional filter to routing_decisions.provenance_mode (for example: route or shadow)",
+        help="Optional filter to routing_decisions.mode (for example: route or shadow)",
     )
     parser.add_argument("--limit", type=int, default=5000, help="Max joined feedback rows to inspect")
     return parser.parse_args()
@@ -51,20 +51,30 @@ def main() -> None:
     model_task = defaultdict(lambda: {"samples": 0, "score_sum": 0.0, "last_feedback_at": ""})
 
     decision_columns = {row["name"] for row in conn.execute("PRAGMA table_info(routing_decisions)").fetchall()}
-    provenance_expr = (
-        "COALESCE(rd.provenance_mode, CASE WHEN COALESCE(rd.shadow_mode, 0) = 1 THEN 'shadow' ELSE 'route' END)"
-        if "shadow_mode" in decision_columns
-        else "COALESCE(rd.provenance_mode, 'route')"
+    mode_expr = (
+        "COALESCE(NULLIF(rd.mode, ''), NULLIF(rd.provenance_mode, ''), CASE WHEN COALESCE(rd.shadow_mode, 0) = 1 THEN 'shadow' ELSE 'route' END)"
+        if "mode" in decision_columns and "provenance_mode" in decision_columns and "shadow_mode" in decision_columns
+        else "COALESCE(NULLIF(rd.mode, ''), NULLIF(rd.provenance_mode, ''), 'route')"
+        if "mode" in decision_columns and "provenance_mode" in decision_columns
+        else "COALESCE(NULLIF(rd.mode, ''), CASE WHEN COALESCE(rd.shadow_mode, 0) = 1 THEN 'shadow' ELSE 'route' END)"
+        if "mode" in decision_columns and "shadow_mode" in decision_columns
+        else "COALESCE(NULLIF(rd.mode, ''), 'route')"
+        if "mode" in decision_columns
+        else "COALESCE(NULLIF(rd.provenance_mode, ''), CASE WHEN COALESCE(rd.shadow_mode, 0) = 1 THEN 'shadow' ELSE 'route' END)"
+        if "provenance_mode" in decision_columns and "shadow_mode" in decision_columns
+        else "COALESCE(NULLIF(rd.provenance_mode, ''), 'route')"
+        if "provenance_mode" in decision_columns
+        else "CASE WHEN COALESCE(rd.shadow_mode, 0) = 1 THEN 'shadow' ELSE 'route' END"
     )
 
     filters = []
     params: list[object] = []
     if args.source_type:
-        filters.append("COALESCE(rd.source_type, 'unknown') = ?")
+        filters.append("COALESCE(NULLIF(rd.source_type, ''), 'standalone') = ?")
         params.append(args.source_type)
-    if args.provenance_mode:
-        filters.append(f"{provenance_expr} = ?")
-        params.append(args.provenance_mode)
+    if args.mode:
+        filters.append(f"{mode_expr} = ?")
+        params.append(args.mode)
 
     where_sql = f"WHERE {' AND '.join(filters)}" if filters else ""
 
@@ -86,8 +96,8 @@ def main() -> None:
           rf.verdict,
           rf.model_verdict,
           rf.created_at,
-          {provenance_expr} AS provenance_mode,
-          COALESCE(rd.source_type, 'unknown') AS source_type
+          {mode_expr} AS mode,
+          COALESCE(NULLIF(rd.source_type, ''), 'standalone') AS source_type
         FROM route_feedback rf
         JOIN routing_decisions rd ON rd.id = rf.decision_id
         {where_sql}
@@ -160,7 +170,7 @@ def main() -> None:
         "db": str(db_path),
         "filters": {
             "source_type": args.source_type,
-            "provenance_mode": args.provenance_mode,
+            "mode": args.mode,
             "limit": args.limit,
         },
         "feedback_samples": len(rows),

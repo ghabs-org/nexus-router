@@ -60,9 +60,9 @@ CREATE TABLE IF NOT EXISTS routing_decisions (
   nexus_issue_id        TEXT,
   nexus_project         TEXT,
 
-  -- provenance / hygiene markers
+  -- routing strategy + provenance / hygiene markers
   route_mode            TEXT,
-  provenance_mode       TEXT,
+  mode                  TEXT,
   source_type           TEXT,
   source_tag            TEXT
 );
