@@ -39,8 +39,9 @@ STATE_FILE = STATE_DIR / "state.json"
 
 DEFAULTS = {
     "max_delta": 0.03,
-    "min_samples": 5,
+    "min_samples": 8,
     "cooldown_days": 3,
+    "max_feedback_age_hours": 48,
 }
 
 
@@ -180,11 +181,11 @@ def main(argv=None):
     p.add_argument("--guarded-apply", dest="guarded_apply", action="store_true", help="attempt a guarded apply: gates must pass to persist")
     p.add_argument("--max-delta", type=float, default=DEFAULTS["max_delta"], help="maximum per-update delta magnitude")
     p.add_argument("--min-samples", type=int, default=DEFAULTS["min_samples"], help="minimum feedback samples required to act")
-    p.add_argument("--min-total-samples", type=int, default=20, help="minimum total feedback samples across tasks to allow guarded apply")
+    p.add_argument("--min-total-samples", type=int, default=50, help="minimum total feedback samples across tasks to allow guarded apply")
     p.add_argument("--max-changes", type=int, default=10, help="maximum number of changed entries allowed for guarded apply")
     p.add_argument("--unknown-policy", choices=["ignore","require_higher"], default="ignore", help="how to treat task='unknown' rows in tuning")
     p.add_argument("--cooldown-days", type=int, default=DEFAULTS["cooldown_days"], help="cooldown window for same task/model")
-    p.add_argument("--max-feedback-age-hours", type=int, default=24, help="ignore stale feedback signals older than this many hours")
+    p.add_argument("--max-feedback-age-hours", type=int, default=DEFAULTS["max_feedback_age_hours"], help="ignore stale feedback signals older than this many hours")
     args = p.parse_args(argv)
 
     # mode messages
