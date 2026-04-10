@@ -541,40 +541,48 @@ class TestClassifier:
         assert signals.has_image
 
     def test_heuristic_classifies_diff_as_review(self):
+        # Diff is a content signal — heuristic no longer classifies it; returns None.
         msg = "@@ -1,3 +1,4 @@\n-old\n+new"
         signals = extract_pre_signals(msg)
         result = heuristic_classify(msg, signals)
-        assert result is not None
-        assert result.task_type == "code_review"
+        assert result is None
 
     def test_heuristic_classifies_image_as_vision(self):
+        # Image attachment — always fires regardless of message length.
         msg = "What does this look like?"
         signals = extract_pre_signals(msg, has_image_attachment=True)
         result = heuristic_classify(msg, signals)
         assert result is not None
         assert result.task_type == "vision"
 
+    def test_heuristic_classifies_image_as_vision_long_message(self):
+        # Image attachment with long text — should still fire (not gated on length).
+        msg = "Describe this image in detail. " * 30  # >500 chars
+        signals = extract_pre_signals(msg, has_image_attachment=True)
+        result = heuristic_classify(msg, signals)
+        assert result is not None
+        assert result.task_type == "vision"
+
     def test_heuristic_short_message_fast_utility(self):
+        # Short message without image or >200k token count — falls through to classifier.
         msg = "What time is it?"
         signals = extract_pre_signals(msg)
         result = heuristic_classify(msg, signals)
-        assert result is not None
-        assert result.task_type == "fast_utility"
+        assert result is None
 
     def test_heuristic_single_word_test_not_coding(self):
+        # Single-word message — content heuristics removed; returns None.
         msg = "test"
         signals = extract_pre_signals(msg)
         result = heuristic_classify(msg, signals)
-        assert result is not None
-        assert result.task_type == "fast_utility"
+        assert result is None
 
     def test_heuristic_returns_none_for_ambiguous(self):
         msg = "Let's think about the best architecture for our new product. We need to balance performance and cost."
         signals = extract_pre_signals(msg)
         result = heuristic_classify(msg, signals)
-        # Should be None or reasoning — ambiguous, classifier should fire
-        if result is not None:
-            assert result.task_type in ("reasoning", "general_chat", "fast_utility")
+        # Content-based heuristics removed — structural heuristic always returns None here.
+        assert result is None
 
     def test_parse_classifier_response_valid(self):
         raw = '{"task_type": "coding", "complexity": "high", "needs_tools": true, "needs_vision": false, "needs_long_context": false, "cost_profile": "balanced", "confidence": 0.88, "detected_language": "en"}'
@@ -869,12 +877,11 @@ class TestRouteProvenance:
         assert body["reply_context_used"] is False
 
     def test_heuristic_classifier_source(self):
-        """Diff message → heuristic detects code_review → classifier_source='heuristic'."""
-        diff_msg = (
-            "--- a/file.py\n+++ b/file.py\n@@ -1,3 +1,4 @@\n"
-            " def foo():\n-    return 1\n+    return 2\n+    pass"
-        )
-        status, body = _MockHandler().call_route({"message": diff_msg})
+        """Image message → heuristic detects vision → classifier_source='heuristic'."""
+        status, body = _MockHandler().call_route({
+            "message": "What's in this screenshot?",
+            "has_image_attachment": True,
+        })
         assert status == 200
         assert body["classifier_source"] == "heuristic"
         assert body["reply_context_used"] is False
@@ -926,18 +933,15 @@ class TestRouteProvenance:
         assert body["reply_context_used"] is False
 
     def test_heuristic_with_context_does_not_set_reply_context_used(self):
-        """Heuristic classifies as code_review (not reclassified by LLM) → reply_context_used=False."""
-        diff_msg = (
-            "--- a/file.py\n+++ b/file.py\n@@ -1,3 +1,4 @@\n"
-            " def foo():\n-    return 1\n+    return 2\n+    pass"
-        )
+        """Heuristic classifies as vision (not reclassified by LLM) → reply_context_used=False."""
         status, body = _MockHandler().call_route({
-            "message": diff_msg,
+            "message": "What's in this screenshot?",
+            "has_image_attachment": True,
             "use_llm_classifier": True,
             "conversation_context": "We discussed Python earlier.",
         })
         assert status == 200
-        # code_review task_type ≠ fast_utility → no LLM reclassification triggered
+        # vision task_type ≠ fast_utility → no LLM reclassification triggered
         assert body["classifier_source"] == "heuristic"
         assert body["reply_context_used"] is False
 

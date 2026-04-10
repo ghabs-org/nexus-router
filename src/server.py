@@ -259,9 +259,18 @@ class RouterHandler(BaseHTTPRequestHandler):
                         classifier_debug["local_unavailable"] = local_classifier.load_error
 
             if classifier is None:
+                # Heuristic fallback — only for unambiguous structural signals
+                # (image attachment, token count). Named task heuristics (coding,
+                # fast_utility, etc.) are intentionally removed so the LLM classifier
+                # can read context and make the call.
+                # Reason is logged so routing debug shows why heuristic was used.
+                local_classifier = get_local_classifier()
+                _local_err = getattr(local_classifier, "load_error", None)
+                heuristic_reason = f"local_classifier_unavailable:{_local_err}" if _local_err else "local_classifier_no_result"
                 classifier = heuristic_classify(message, pre_signals)
                 if classifier is not None:
                     classifier_source = "heuristic"
+                    classifier_debug["heuristic_reason"] = heuristic_reason
 
             if should_reclassify_with_llm(classifier, use_llm, classifier_context, message):
                 classifier = None
