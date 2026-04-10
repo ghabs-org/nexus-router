@@ -312,6 +312,8 @@ class RouterHandler(BaseHTTPRequestHandler):
                 mode=str(mode).strip() if mode is not None else None,
                 source_type=str(source_type).strip() if source_type is not None else "standalone",
                 source_tag=str(source_tag).strip() if source_tag is not None else None,
+                message_text=message,
+                classifier_source=classifier_source,
             )
 
             local_bits = ""

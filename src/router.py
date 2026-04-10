@@ -80,6 +80,8 @@ class Router:
         source_type: Optional[str] = None,
         source_tag: Optional[str] = None,
         mode: Optional[str] = None,
+        message_text: Optional[str] = None,
+        classifier_source: Optional[str] = None,
     ) -> RoutingDecision:
         """
         Route a request to the best available model.
@@ -200,6 +202,8 @@ class Router:
                 mode=mode,
                 source_type=(source_type or 'standalone'),
                 source_tag=source_tag,
+                message_text=message_text,
+                classifier_source=classifier_source,
             )
             decision.decision_id = decision_id
 
