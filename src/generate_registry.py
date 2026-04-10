@@ -367,7 +367,6 @@ def main():
     print(f"  cold-start (family priors active): {cold_start_count}")
     providers = sorted(set(m["provider"] for m in models))
     print(f"  providers ({len(providers)}): {', '.join(providers[:8])}{'...' if len(providers) > 8 else ''}")
-    main()
 
 
 if __name__ == "__main__":

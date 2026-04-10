@@ -1,0 +1,1 @@
+import json;print({"ok": true, "model_task_signals_top": [{"task": "unknown", "model": "m1", "samples": 5, "centered_signal": 0.6}]})
