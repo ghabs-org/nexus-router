@@ -90,6 +90,8 @@ def _ensure_routing_decisions_compat(conn: sqlite3.Connection) -> None:
         "mode": "TEXT",
         "source_type": "TEXT",
         "source_tag": "TEXT",
+        "message_text": "TEXT",       # truncated user message for classifier training
+        "classifier_source": "TEXT",  # llm | heuristic | local | explicit | fallback
     }
     for column, column_type in expected.items():
         if column not in columns:
@@ -150,6 +152,8 @@ def write_decision(
     mode: Optional[str] = None,
     source_type: Optional[str] = None,
     source_tag: Optional[str] = None,
+    message_text: Optional[str] = None,
+    classifier_source: Optional[str] = None,
 ) -> str:
     """
     Write a new routing decision to the DB.
@@ -170,11 +174,12 @@ def write_decision(
               fallbacks, routing_score, reason, excluded_models,
               provider_health_score, quota_state, provider_auth_ok,
               nexus_workflow_id, nexus_step_id, nexus_issue_id, nexus_project,
-              route_mode, mode, source_type, source_tag
+              route_mode, mode, source_type, source_tag,
+              message_text, classifier_source
             ) VALUES (
               ?,?,  ?,?,?,  ?,?,?,  ?,?,?,
               ?,?,?,?,?,  ?,?,  ?,?,?,?,  ?,?,?,  ?,?,?,?,
-              ?,?,?,?
+              ?,?,?,?,  ?,?
             )
             """,
             (
@@ -196,6 +201,9 @@ def write_decision(
                 mode,
                 source_type or 'standalone',
                 source_tag,
+                # Truncate to 512 chars — enough for classifier, avoids storing full docs
+                (message_text or "")[:512] or None,
+                classifier_source,
             ),
         )
         conn.commit()
