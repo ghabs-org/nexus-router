@@ -64,7 +64,11 @@ CREATE TABLE IF NOT EXISTS routing_decisions (
   route_mode            TEXT,
   mode                  TEXT,
   source_type           TEXT,
-  source_tag            TEXT
+  source_tag            TEXT,
+
+  -- classifier training data
+  message_text          TEXT,                  -- user message, truncated to 512 chars
+  classifier_source     TEXT                   -- llm | heuristic | local | explicit | fallback
 );
 
 -- ────────────────────────────────────────────────────────────────────────────

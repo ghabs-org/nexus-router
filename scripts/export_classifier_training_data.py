@@ -33,7 +33,6 @@ except ImportError:
     from db import _connect  # type: ignore
     from local_classifier_labels import ROUTER_TASK_LABELS  # type: ignore
 
-TRUSTED_SOURCES = {"llm", "explicit"}
 VALID_LABELS = set(ROUTER_TASK_LABELS)
 
 
@@ -87,7 +86,7 @@ def export(output_path: str, min_samples: int = 1) -> None:
         bar = "█" * min(40, count // 5)
         print(f"  {label:20s} {count:5d}  {bar}")
 
-    rare = [l for l, c in label_counts.items() if c < min_samples]
+    rare = [lbl for lbl, c in label_counts.items() if c < min_samples]
     if rare:
         print(f"\n⚠ Labels with < {min_samples} samples (may need augmentation): {rare}")
 
