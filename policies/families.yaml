@@ -1,6 +1,14 @@
 # families.yaml
-# Provider/model family scoring priors.
-# These are heuristic baselines. Override per-model in overrides.yaml.
+# Provider/model family scoring priors — COLD-START ONLY.
+#
+# These heuristic baselines are used ONLY when a model has fewer than
+# NEXUS_COLD_START_MIN_OUTCOMES (default: 30) recorded routing outcomes.
+# Once a model graduates (>= threshold), these priors are ignored entirely
+# and all scoring is driven by benchmark/feedback data from router.sqlite.
+#
+# DO NOT update these values manually once the system is live.
+# They are a one-time warm-start seed, not an ongoing config.
+# See generate_registry.py resolve_scores() for the graduation logic.
 # All scores: 0.0–1.0 (higher = better for that dimension)
 #
 # Dimensions:
