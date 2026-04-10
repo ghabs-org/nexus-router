@@ -15,7 +15,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.types import ClassifierOutput, PreSignals, ProviderHealth
-from src.scorer import score_models, _preference_score, _learned_score, _fast_mode_correction, _reasoning_mode_correction, _build_preference_order
+from src.scorer import score_models, _preference_score, _learned_score, _fast_mode_correction, _reasoning_mode_total, _build_preference_order
 from src.router import Router, _adapt_classifier_for_light_chat
 from src.classifier import extract_pre_signals, heuristic_classify, parse_classifier_response, classify_with_model, select_classifier_models, _call_direct_provider_classifier
 from src.server import should_reclassify_with_llm, RouterHandler
@@ -248,7 +248,34 @@ class TestScorer:
         scored = score_models(classifier, models, provider_health, learned, routing_policy=policy)
         assert scored[0].model_preference_bump == 0
 
-    def test_model_preference_never_overrides_hard_health_constraints(self):
+    def test_model_preference_bump_active_without_routing_policy(self):
+        # Regression: feedback penalty must apply even when routing_policy=None
+        # (routing.yaml disabled means routing_policy is always None in production)
+        classifier = ClassifierOutput(task_type="fast_utility", confidence=0.90)
+        provider_health = {"p": ProviderHealth(provider="p", auth="ok", quota="healthy", health_score=0.95)}
+        models = [{
+            "id": "p/flash", "provider": "p",
+            "scores": {"coding": 0.7, "review": 0.7, "reasoning": 0.7, "summarize": 0.7, "fast": 0.8, "cost": 0.8, "context": 0.7, "vision": 0.6},
+            "features": {"contextWindow": 128000}, "availability": {"authed": True},
+        }]
+        learned = {
+            "p/flash": {
+                "total_selected": 50,
+                "success_rate": 0.85,
+                "total_override": 0,
+                "feedback_preference": {
+                    "fast_utility": {"samples": 27, "score": 0.0, "last_feedback_at": "2099-01-01T00:00:00+00:00"}
+                },
+            }
+        }
+        # No routing_policy — simulates disabled routing.yaml (the original bug scenario)
+        scored = score_models(classifier, models, provider_health, learned, routing_policy=None)
+        assert scored[0].model_preference_bump < -0.20, (
+            "Expected strong penalty (< -0.20) for 27 negative feedback samples with no routing_policy; "
+            f"got {scored[0].model_preference_bump}"
+        )
+
+    def test_model_preference_bump_never_overrides_hard_health_constraints(self):
         classifier = ClassifierOutput(task_type="reasoning", confidence=0.82)
         provider_health = {
             "bad": ProviderHealth(provider="bad", auth="ok", quota="healthy", health_score=0.1),
@@ -279,8 +306,8 @@ class TestScorer:
         assert cheap_fast > expensive_slow
 
     def test_reasoning_mode_correction_rewards_top_models(self):
-        strong = _reasoning_mode_correction(task_fit=0.93, reasoning_score=0.95, health=0.95, learned=0.92)
-        weak = _reasoning_mode_correction(task_fit=0.75, reasoning_score=0.80, health=0.80, learned=0.78)
+        strong = _reasoning_mode_total(task_fit=0.93, reasoning_score=0.95, health=0.95, learned=0.92, preference=0.5, speed_score=0.5, quota_penalty=0.0)
+        weak = _reasoning_mode_total(task_fit=0.75, reasoning_score=0.80, health=0.80, learned=0.78, preference=0.5, speed_score=0.5, quota_penalty=0.0)
         assert strong > weak
 
     def test_fast_utility_preference_order_prefers_gemini_3_flash_preview_over_2_5_flash(self):

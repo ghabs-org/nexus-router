@@ -91,7 +91,17 @@ def score_models(
     weights = _resolve_weights(classifier, policy_weights)
     task_dim = TASK_TO_DIMENSION.get(classifier.task_type, "reasoning")
     preference_order = _build_preference_order(classifier.task_type, routing_policy)
-    preference_cfg = ((routing_policy or {}).get("feedback", {}) or {}).get("model_preference", {}) or {}
+    # Build preference config: merge routing_policy overrides over safe defaults.
+    # Feedback is ALWAYS enabled regardless of routing_policy state.
+    _preference_defaults: dict = {
+        "enabled": True,
+        "max_bump": 0.08,
+        "max_penalty": 0.30,
+        "min_samples": 3,
+        "decay_window_days": 30,
+    }
+    _policy_preference_cfg = ((routing_policy or {}).get("feedback", {}) or {}).get("model_preference", {}) or {}
+    preference_cfg = {**_preference_defaults, **{k: v for k, v in _policy_preference_cfg.items() if v is not None}}
 
     eligible  = []
     excluded  = []
@@ -399,8 +409,9 @@ def _model_preference_bump(
     learned_stats: dict[str, dict],
     preference_cfg: dict,
 ) -> tuple[float, dict[str, object]]:
-    enabled = bool(preference_cfg.get("enabled", False))
-    if not enabled:
+    # Feedback is always enabled; preference_cfg always has 'enabled': True from score_models.
+    # Guard: if somehow called with an empty/disabled cfg, apply sensible defaults.
+    if not preference_cfg.get("enabled", True):
         return 0.0, {"samples": 0}
 
     stats = learned_stats.get(model_id) or {}
@@ -419,8 +430,9 @@ def _model_preference_bump(
 
     score = float(task_feedback.get("score") or 0.0)
 
-    max_bump = float(preference_cfg.get("max_bump", 0.04) or 0.04)
-    max_penalty = float(preference_cfg.get("max_penalty", max_bump) or max_bump)
+    # Asymmetric: penalise harder than reward (bad routing costs more than missing a good model)
+    max_bump = float(preference_cfg.get("max_bump", 0.08) or 0.08)
+    max_penalty = float(preference_cfg.get("max_penalty", 0.30) or 0.30)
     decay_days = max(1, int(preference_cfg.get("decay_window_days", 30) or 30))
     last_feedback_at = _parse_iso_utc(task_feedback.get("last_feedback_at"))
     if last_feedback_at is None:
