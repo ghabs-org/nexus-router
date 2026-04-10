@@ -537,7 +537,7 @@ class TestClassifier:
         assert result.task_type == "vision"
 
     def test_heuristic_short_message_fast_utility(self):
-        # Short message without image or huge token count — falls through to classifier.
+        # Short message without image or >200k token count — falls through to classifier.
         msg = "What time is it?"
         signals = extract_pre_signals(msg)
         result = heuristic_classify(msg, signals)
