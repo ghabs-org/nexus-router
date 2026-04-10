@@ -3,7 +3,7 @@
 # Creates a lean venv for the local ONNX classifier runtime.
 #
 # Default location: ~/.local/lib/nexus-router/classifier-venv/
-# Override with NEXUS_CLASSIFIER_VENV env var.
+# Override with NEXUS_ROUTER_LOCAL_CLASSIFIER_VENV env var.
 #
 # This path is intentionally:
 #   - Outside the git repo (not a tracked artifact)
@@ -13,7 +13,7 @@
 # Usage: bash scripts/setup-classifier-venv.sh
 set -euo pipefail
 
-VENV_DIR="${NEXUS_CLASSIFIER_VENV:-$HOME/.local/lib/nexus-router/classifier-venv}"
+VENV_DIR="${NEXUS_ROUTER_LOCAL_CLASSIFIER_VENV:-$HOME/.local/lib/nexus-router/classifier-venv}"
 
 echo "[classifier-venv] Creating lean ONNX runtime venv at $VENV_DIR"
 mkdir -p "$(dirname "$VENV_DIR")"

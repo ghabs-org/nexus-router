@@ -753,8 +753,8 @@ def heuristic_classify(message: str, pre_signals: PreSignals) -> Optional[Classi
     the reason is logged in classifier_debug["heuristic_reason"].
     """
     # Vision: image attached — classifier cannot see the image, so we can
-    # safely short-circuit.
-    if pre_signals.has_image and pre_signals.message_length < 500:
+    # safely short-circuit regardless of message length.
+    if pre_signals.has_image:
         return ClassifierOutput(
             task_type="vision",
             complexity="medium",

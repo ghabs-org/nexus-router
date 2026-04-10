@@ -264,11 +264,9 @@ class RouterHandler(BaseHTTPRequestHandler):
                 # fast_utility, etc.) are intentionally removed so the LLM classifier
                 # can read context and make the call.
                 # Reason is logged so routing debug shows why heuristic was used.
-                heuristic_reason = None
-                if classifier is None:
-                    local_classifier = get_local_classifier()
-                    _local_err = getattr(local_classifier, "load_error", None)
-                    heuristic_reason = f"local_classifier_unavailable:{_local_err}" if _local_err else "local_classifier_no_result"
+                local_classifier = get_local_classifier()
+                _local_err = getattr(local_classifier, "load_error", None)
+                heuristic_reason = f"local_classifier_unavailable:{_local_err}" if _local_err else "local_classifier_no_result"
                 classifier = heuristic_classify(message, pre_signals)
                 if classifier is not None:
                     classifier_source = "heuristic"
