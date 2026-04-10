@@ -1,1 +1,0 @@
-import json;print({"ok": true, "model_task_signals_top": [{"task": "t1", "model": "m1", "samples": 2, "centered_signal": 0.5}], "critical_drift": false})
