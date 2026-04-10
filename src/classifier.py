@@ -739,14 +739,21 @@ def extract_pre_signals(
 
 def heuristic_classify(message: str, pre_signals: PreSignals) -> Optional[ClassifierOutput]:
     """
-    Fast-path heuristic classifier.
-    Returns a ClassifierOutput when signals are unambiguous enough,
-    skipping the LLM classifier call entirely.
+    Structural heuristic classifier — last-resort fallback only.
 
-    Returns None if the heuristic is not confident — caller should
-    fall through to LLM classification.
+    Only handles cases where the signal is unambiguous from message structure
+    alone and the local/LLM classifier cannot add information:
+      - Vision: image attachment (classifier can't see the image)
+      - Long context: token count far exceeds classifier input window
+
+    All content-based heuristics (coding, code_review, fast_utility,
+    general_chat) have been intentionally removed. Those should be handled
+    by the local classifier (reads message + context) or the LLM classifier.
+    Heuristic is only reached when the local classifier is unavailable;
+    the reason is logged in classifier_debug["heuristic_reason"].
     """
-    # Vision: image attached with little text
+    # Vision: image attached — classifier cannot see the image, so we can
+    # safely short-circuit.
     if pre_signals.has_image and pre_signals.message_length < 500:
         return ClassifierOutput(
             task_type="vision",
@@ -755,7 +762,7 @@ def heuristic_classify(message: str, pre_signals: PreSignals) -> Optional[Classi
             confidence=0.90,
         )
 
-    # Large context: very long message
+    # Long context: token count far exceeds what any classifier can process.
     if pre_signals.estimated_tokens > 200_000:
         return ClassifierOutput(
             task_type="long_context",
@@ -764,63 +771,7 @@ def heuristic_classify(message: str, pre_signals: PreSignals) -> Optional[Classi
             confidence=0.85,
         )
 
-    # Diff detected: likely code review
-    if pre_signals.has_diff and not pre_signals.has_image:
-        return ClassifierOutput(
-            task_type="code_review",
-            subtype="review",
-            complexity="medium",
-            needs_tools=True,
-            confidence=0.82,
-        )
-
-    # Stack trace: likely debugging
-    if pre_signals.has_logs and pre_signals.has_code:
-        return ClassifierOutput(
-            task_type="coding",
-            subtype="debugging",
-            complexity="medium",
-            needs_tools=True,
-            confidence=0.80,
-        )
-
-    # If inline/fenced code detected (and not a diff), prefer coding: avoid routing code snippets to chat
-    if pre_signals.has_code and not pre_signals.has_diff:
-        return ClassifierOutput(
-            task_type="coding",
-            subtype=None,
-            complexity="medium",
-            needs_tools=True,
-            confidence=0.82,
-        )
-
-    # Short conversational greetings/PMs: classify as general_chat with high confidence
-    if pre_signals.message_length < 60 and not pre_signals.has_code:
-        lower = message.strip().lower()
-        single_word_greetings = ("hi", "hello", "hey")
-        phrase_greetings = ("how are you", "how's your day")
-        if any(re.match(rf"^{g}\b", lower) for g in single_word_greetings) or any(
-            re.search(rf"\b{g}\b", lower) for g in phrase_greetings
-        ):
-            return ClassifierOutput(
-                task_type="general_chat",
-                complexity="low",
-                needs_tools=False,
-                cost_profile="cheap",
-                confidence=0.90,
-            )
-
-    # Very short message, no code: likely fast utility
-    if pre_signals.message_length < 120 and not pre_signals.has_code:
-        return ClassifierOutput(
-            task_type="fast_utility",
-            complexity="low",
-            needs_tools=False,
-            cost_profile="cheap",
-            confidence=0.72,
-        )
-
-    # Not confident enough for fast-path
+    # Not confident enough for structural heuristic — fall through to LLM.
     return None
 
 

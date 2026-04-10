@@ -14,3 +14,4 @@ plugin/node_modules/
 artifacts/
 
 .test-state/
+classifier-venv/
