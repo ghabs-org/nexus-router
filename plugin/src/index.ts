@@ -158,6 +158,7 @@ async function routeRequest(
   sourceType?: "compiled-prompt" | "raw-user",
   sourceTag?: string,
   provenanceMode?: "route" | "shadow",
+  persistDecision: boolean = true,
 ): Promise<RouteRequestResult> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -180,6 +181,7 @@ async function routeRequest(
         source_tag: sourceTag,
         conversation_context: conversationContext,
         use_llm_classifier: useLlmClassifier ?? false,
+        persist_decision: persistDecision,
       }),
       signal: controller.signal,
     });
@@ -1635,6 +1637,7 @@ export default definePluginEntry({
           source,
           sourceTag,
           "route",
+          false,
         );
         autoDecision = autoResult.decision;
         if (!autoDecision) {
@@ -1657,6 +1660,7 @@ export default definePluginEntry({
             source,
             sourceTag,
             "route",
+            true,
           );
           const balancedDecision = balancedResult.decision;
           if (balancedDecision) {
@@ -1671,10 +1675,36 @@ export default definePluginEntry({
               const failure = describeRouteRequestFailure(balancedResult, timeoutMs);
               await debugLog(`[hook-auto-escalate] source=${source} source_tag=${sourceTag} balanced_fallback_failed ${failure}`);
             }
-            decision = autoDecision;
+            const finalAutoResult = await routeRequest(
+              routerUrl,
+              routingText,
+              firstPassCostProfile,
+              timeoutMs,
+              routeMode,
+              conversationContext,
+              shouldUseLlmClassifier,
+              source,
+              sourceTag,
+              "route",
+              true,
+            );
+            decision = finalAutoResult.decision ?? autoDecision;
           }
         } else {
-          decision = autoDecision;
+          const finalAutoResult = await routeRequest(
+            routerUrl,
+            routingText,
+            firstPassCostProfile,
+            timeoutMs,
+            routeMode,
+            conversationContext,
+            shouldUseLlmClassifier,
+            source,
+            sourceTag,
+            "route",
+            true,
+          );
+          decision = finalAutoResult.decision ?? autoDecision;
         }
       } else {
         const directResult = await routeRequest(

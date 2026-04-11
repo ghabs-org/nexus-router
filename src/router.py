@@ -82,6 +82,7 @@ class Router:
         mode: Optional[str] = None,
         message_text: Optional[str] = None,
         classifier_source: Optional[str] = None,
+        persist_decision: Optional[bool] = None,
     ) -> RoutingDecision:
         """
         Route a request to the best available model.
@@ -183,7 +184,8 @@ class Router:
         )
 
         # Persist if enabled
-        if self.persist:
+        effective_persist = self.persist if persist_decision is None else bool(persist_decision)
+        if effective_persist:
             ph = provider_health.get(primary.provider)
             if ph is None:
                 from .types import ProviderHealth

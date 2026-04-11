@@ -205,6 +205,7 @@ class RouterHandler(BaseHTTPRequestHandler):
             source_tag = body.get("source_tag")
             mode = body.get("mode")
             provenance_mode = body.get("provenance_mode")
+            persist_decision = body.get("persist_decision")
             if mode is None:
                 mode = provenance_mode
             if mode is None:
@@ -313,6 +314,7 @@ class RouterHandler(BaseHTTPRequestHandler):
                 source_tag=str(source_tag).strip() if source_tag is not None else None,
                 message_text=message,
                 classifier_source=classifier_source,
+                persist_decision=True if persist_decision is None else bool(persist_decision),
             )
 
             local_bits = ""
