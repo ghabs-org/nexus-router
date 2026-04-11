@@ -1552,7 +1552,7 @@ export default definePluginEntry({
           selectedProvider: shadowDecision.selected_provider,
           fallbacks: shadowDecision.fallbacks,
           score: shadowDecision.score,
-          reason: [...shadowDecision.reason, "shadow_mode:route_off"],
+          reason: [...shadowDecision.reason, "route_off"],
           autoEscalated: false,
         };
         rememberLastDecision(ctx.sessionKey, lastDecision);

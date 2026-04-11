@@ -205,11 +205,10 @@ class RouterHandler(BaseHTTPRequestHandler):
             source_tag = body.get("source_tag")
             mode = body.get("mode")
             provenance_mode = body.get("provenance_mode")
-            shadow_mode = body.get("shadow_mode")
             if mode is None:
                 mode = provenance_mode
             if mode is None:
-                mode = "shadow" if bool(shadow_mode) else "route"
+                mode = "route"
 
             # Extract pre-signals
             pre_signals = extract_pre_signals(message, has_image_attachment=has_image)

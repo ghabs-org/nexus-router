@@ -99,29 +99,19 @@ def _ensure_routing_decisions_compat(conn: sqlite3.Connection) -> None:
 
     columns = {row["name"] for row in conn.execute("PRAGMA table_info(routing_decisions)").fetchall()}
     if "mode" in columns:
-        provenance_expr = (
-            "CASE "
-            "WHEN mode IS NOT NULL AND TRIM(mode) != '' THEN mode "
-            "WHEN provenance_mode IS NOT NULL AND TRIM(provenance_mode) != '' THEN provenance_mode "
-            "WHEN COALESCE(shadow_mode, 0) = 1 THEN 'shadow' "
-            "ELSE 'route' END"
-            if "provenance_mode" in columns and "shadow_mode" in columns
-            else "CASE "
-                 "WHEN mode IS NOT NULL AND TRIM(mode) != '' THEN mode "
-                 "WHEN provenance_mode IS NOT NULL AND TRIM(provenance_mode) != '' THEN provenance_mode "
-                 "ELSE 'route' END"
-            if "provenance_mode" in columns
-            else "CASE "
-                 "WHEN mode IS NOT NULL AND TRIM(mode) != '' THEN mode "
-                 "WHEN COALESCE(shadow_mode, 0) = 1 THEN 'shadow' "
-                 "ELSE 'route' END"
-            if "shadow_mode" in columns
-            else "CASE WHEN mode IS NOT NULL AND TRIM(mode) != '' THEN mode ELSE 'route' END"
-        )
         conn.execute(
-            f"""
+            """
             UPDATE routing_decisions
-            SET mode = {provenance_expr}
+            SET mode = CASE
+                WHEN provenance_mode IS NOT NULL AND TRIM(provenance_mode) != '' THEN provenance_mode
+                ELSE 'route'
+            END
+            WHERE mode IS NULL OR TRIM(mode) = ''
+            """
+            if "provenance_mode" in columns
+            else """
+            UPDATE routing_decisions
+            SET mode = 'route'
             WHERE mode IS NULL OR TRIM(mode) = ''
             """
         )

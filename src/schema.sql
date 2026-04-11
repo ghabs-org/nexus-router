@@ -62,7 +62,7 @@ CREATE TABLE IF NOT EXISTS routing_decisions (
 
   -- routing strategy + provenance / hygiene markers
   route_mode            TEXT,
-  mode                  TEXT,
+  mode                  TEXT,                  -- backfilled from provenance_mode on migration; 'route' | 'shadow'
   source_type           TEXT,
   source_tag            TEXT,
 
