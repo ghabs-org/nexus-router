@@ -294,6 +294,7 @@ class RouterHandler(BaseHTTPRequestHandler):
                 and bool(classifier_context and classifier_context.strip())
             )
 
+            normalized_route_mode = str(route_mode or "auto").strip().lower()
             if classifier is None:
                 classifier = ClassifierOutput(
                     task_type="general_chat",
@@ -301,7 +302,9 @@ class RouterHandler(BaseHTTPRequestHandler):
                     confidence=0.60,
                 )
                 classifier_source = "fallback"
-            else:
+            elif normalized_route_mode != "auto":
+                # Explicit modes may override cost posture; auto should preserve
+                # the classifier's own cost/profile signal.
                 classifier.cost_profile = cost_profile
 
             decision = _get_router().route(

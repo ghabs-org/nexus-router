@@ -1092,7 +1092,7 @@ function resolveCostProfileForRouteMode(
 ): "cheap" | "balanced" | "premium" {
   switch (mode) {
     case "auto":
-      return "cheap";
+      return defaultProfile;
     case "balanced":
       return defaultProfile;
     case "fast":
@@ -1643,7 +1643,7 @@ export default definePluginEntry({
           "route",
           false, // Do not persist this initial probe
         );
-        let autoDecision = autoResult.decision;
+        autoDecision = autoResult.decision;
         if (!autoDecision) {
           const failure = describeRouteRequestFailure(autoResult, timeoutMs);
           await debugLog(`[hook-result] source=${source} source_tag=${sourceTag} route=${routeMode} ${failure}`);
@@ -1706,20 +1706,7 @@ export default definePluginEntry({
           source,
           sourceTag,
           "route",
-          true, // Always persist for non-auto modes
-        );
-        decision = directResult.decision;
-        const directResult = await routeRequest(
-          routerUrl,
-          routingText,
-          firstPassCostProfile,
-          timeoutMs,
-          routeMode,
-          conversationContext,
-          shouldUseLlmClassifier,
-          source,
-          sourceTag,
-          "route",
+          true,
         );
         decision = directResult.decision;
         if (!decision) {
@@ -1816,8 +1803,8 @@ export default definePluginEntry({
         taskType: decision.task_type,
         effectiveTaskType: extractEffectiveTaskType(decision.reason),
         confidence: decision.confidence,
-        firstPassModel: routeMode === "auto" && autoDecision ? autoDecision.selected_model : decision.selected_model,
-        firstPassProvider: routeMode === "auto" && autoDecision ? autoDecision.selected_provider : decision.selected_provider,
+        firstPassModel: routeMode === "auto" ? (autoDecision?.selected_model ?? decision.selected_model) : decision.selected_model,
+        firstPassProvider: routeMode === "auto" ? (autoDecision?.selected_provider ?? decision.selected_provider) : decision.selected_provider,
         selectedModel: decision.selected_model,
         selectedProvider: decision.selected_provider,
         fallbacks: decision.fallbacks,

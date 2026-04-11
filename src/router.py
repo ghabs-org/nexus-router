@@ -116,16 +116,11 @@ class Router:
                 cost_profile="cheap",
             )
         elif effective_route_mode == "auto":
-            # Task-aware auto defaults:
-            # - reasoning/planning should bias toward stronger models
-            # - quick/utility/chat should bias toward cheap+fast
-            # - coding/review stay balanced unless caller pins a mode
-            if effective_classifier.task_type in {"reasoning", "code_review", "long_context"}:
-                effective_classifier = replace(effective_classifier, cost_profile="premium")
-            elif effective_classifier.task_type in {"fast_utility", "general_chat", "summarization"}:
-                effective_classifier = replace(effective_classifier, cost_profile="cheap")
-            else:
-                effective_classifier = replace(effective_classifier, cost_profile="balanced")
+            # Auto should mean: trust the classifier/task signal and let the
+            # scorer choose the most appropriate model overall.
+            # Do not remap cost_profile here; explicit modes (fast/reasoning)
+            # are the place for hard policy biasing.
+            pass
         elif effective_route_mode == "balanced":
             # balanced preserves classifier cost_profile as provided by caller
             pass
