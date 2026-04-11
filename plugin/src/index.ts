@@ -158,7 +158,6 @@ async function routeRequest(
   sourceType?: "compiled-prompt" | "raw-user",
   sourceTag?: string,
   provenanceMode?: "route" | "shadow",
-  persistDecision: boolean = true,
 ): Promise<RouteRequestResult> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -181,7 +180,6 @@ async function routeRequest(
         source_tag: sourceTag,
         conversation_context: conversationContext,
         use_llm_classifier: useLlmClassifier ?? false,
-        persist_decision: persistDecision,
       }),
       signal: controller.signal,
     });
@@ -1621,15 +1619,10 @@ export default definePluginEntry({
       }
 
       let decision: RouteResponse | null = null;
-      let autoDecision: RouteResponse | null = null;
       let finalMode: RouteMode = routeMode;
       let finalCostProfile = firstPassCostProfile;
 
       if (routeMode === "auto") {
-        let finalDecision: RouteResponse | null = null;
-        let finalMode: RouteMode = routeMode;
-        let finalCostProfile = firstPassCostProfile;
-
         const autoResult = await routeRequest(
           routerUrl,
           routingText,
@@ -1641,76 +1634,10 @@ export default definePluginEntry({
           source,
           sourceTag,
           "route",
-          false, // Do not persist this initial probe
         );
-        autoDecision = autoResult.decision;
-        if (!autoDecision) {
-          const failure = describeRouteRequestFailure(autoResult, timeoutMs);
-          await debugLog(`[hook-result] source=${source} source_tag=${sourceTag} route=${routeMode} ${failure}`);
-          if (debugMode) console.warn(`[nexus-router] ${failure}, using default model`);
-          return; // Early exit if initial probe fails
-        }
-
-        if (shouldAutoEscalate(autoDecision.confidence)) {
-          const balancedCostProfile = resolveCostProfileForRouteMode("balanced", costProfile);
-          const balancedResult = await routeRequest(
-            routerUrl,
-            routingText,
-            balancedCostProfile,
-            timeoutMs,
-            "balanced",
-            conversationContext,
-            shouldUseLlmClassifier,
-            source,
-            sourceTag,
-            "route",
-            true, // Persist this final decision
-          );
-          const balancedDecision = balancedResult.decision;
-          if (balancedDecision) {
-            finalDecision = balancedDecision;
-            finalMode = "balanced";
-            finalCostProfile = balancedCostProfile;
-            await debugLog(
-              `[hook-auto-escalate] source=${source} source_tag=${sourceTag} from=auto confidence=${autoDecision.confidence.toFixed(2)} to=balanced selected=${balancedDecision.selected_model}`,
-            );
-          } else {
-            // Balanced probe failed, fall back to auto but persist it
-            if (balancedResult.error) {
-              const failure = describeRouteRequestFailure(balancedResult, timeoutMs);
-              await debugLog(`[hook-auto-escalate] source=${source} source_tag=${sourceTag} balanced_fallback_failed ${failure}`);
-            }
-            finalDecision = autoDecision; // Persist the auto decision as the final choice
-          }
-        } else {
-          finalDecision = autoDecision; // Persist the auto decision as the final choice
-        }
-
-        // Final persistence for auto mode:
-        // Use the final decision (auto or balanced), and explicitly persist it.
-        // The persist_decision flag only works if the router's /route endpoint respects it.
-        // For now, we rely on the single final call having persistDecision=true.
-        decision = finalDecision;
-        finalMode = finalMode; // Keep the actual final mode
-        finalCostProfile = finalCostProfile; // Keep the actual final cost profile
-      } else {
-        // All other modes (off, fast, balanced, reasoning) directly persist
-        const directResult = await routeRequest(
-          routerUrl,
-          routingText,
-          firstPassCostProfile,
-          timeoutMs,
-          routeMode,
-          conversationContext,
-          shouldUseLlmClassifier,
-          source,
-          sourceTag,
-          "route",
-          true,
-        );
-        decision = directResult.decision;
+        decision = autoResult.decision;
         if (!decision) {
-          const failure = describeRouteRequestFailure(directResult, timeoutMs);
+          const failure = describeRouteRequestFailure(autoResult, timeoutMs);
           await debugLog(`[hook-result] source=${source} source_tag=${sourceTag} route=${routeMode} ${failure}`);
           if (debugMode) console.warn(`[nexus-router] ${failure}, using default model`);
           return;
@@ -1803,8 +1730,8 @@ export default definePluginEntry({
         taskType: decision.task_type,
         effectiveTaskType: extractEffectiveTaskType(decision.reason),
         confidence: decision.confidence,
-        firstPassModel: routeMode === "auto" ? (autoDecision?.selected_model ?? decision.selected_model) : decision.selected_model,
-        firstPassProvider: routeMode === "auto" ? (autoDecision?.selected_provider ?? decision.selected_provider) : decision.selected_provider,
+        firstPassModel: routeMode === "auto" ? (decision?.selected_model) : decision.selected_model,
+        firstPassProvider: routeMode === "auto" ? (decision?.selected_provider) : decision.selected_provider,
         selectedModel: decision.selected_model,
         selectedProvider: decision.selected_provider,
         fallbacks: decision.fallbacks,
