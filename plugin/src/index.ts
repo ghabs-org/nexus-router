@@ -168,6 +168,7 @@ async function routeRequest(
       headers: {
         "Content-Type": "application/json",
         "Editor-Version": PLUGIN_VERSION,
+        "Connection": "close",
       },
       body: JSON.stringify({
         message: prompt,
