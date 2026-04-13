@@ -1564,7 +1564,7 @@ export default definePluginEntry({
             selectedProvider: shadowDecision.selected_provider,
             sessionKey: ctx.sessionKey,
             shadowMode: true,
-            targetSenderId: resolveSenderForSession(ctx.sessionKey ?? sessionRef)?.senderId,
+            targetSenderId: (resolveSenderForSession(ctx.sessionKey ?? sessionRef) ?? (ctx.senderId ? { senderId: String(ctx.senderId) } : undefined))?.senderId,
           });
         }
 
@@ -1691,7 +1691,7 @@ export default definePluginEntry({
         });
       }
 
-      const sender = resolveSenderForSession(ctx.sessionKey ?? sessionRef);
+      const sender = resolveSenderForSession(ctx.sessionKey ?? sessionRef) ?? (ctx.senderId ? { senderId: String(ctx.senderId), channelId: ctx.channelId ? String(ctx.channelId) : undefined } : null);
       if (decision.decision_id) {
         if (sender) {
           await sendTelegramFeedbackCard(api, sender.senderId, decision, sourceTag, { messagePreview: routingText });
