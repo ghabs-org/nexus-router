@@ -420,7 +420,7 @@ def _load_feedback_preferences(conn: sqlite3.Connection) -> dict[str, dict[str, 
         rows = conn.execute(
             """
             SELECT
-              rf.preferred_model AS model,
+              COALESCE(NULLIF(rf.preferred_model, ''), rd.selected_model) AS model,
               COALESCE(NULLIF(rf.corrected_task, ''), rd.task_type, '*') AS task_type,
               COUNT(*) AS sample_count,
               AVG(
@@ -428,6 +428,8 @@ def _load_feedback_preferences(conn: sqlite3.Connection) -> dict[str, dict[str, 
                   WHEN 'good' THEN 1.0
                   WHEN 'neutral' THEN 0.4
                   WHEN 'bad' THEN 0.0
+                  WHEN 'too_cheap' THEN 0.0
+                  WHEN 'too_powerful' THEN 0.0
                   ELSE CASE rf.verdict WHEN 'correct' THEN 0.75 ELSE 0.0 END
                 END
               ) AS preference_score,
@@ -436,8 +438,9 @@ def _load_feedback_preferences(conn: sqlite3.Connection) -> dict[str, dict[str, 
             FROM route_feedback rf
             LEFT JOIN routing_decisions rd ON rd.id = rf.decision_id
             WHERE rf.preferred_model IS NOT NULL
+               OR rd.selected_model IS NOT NULL
                OR rf.model_verdict IS NOT NULL
-            GROUP BY rf.preferred_model,
+            GROUP BY COALESCE(NULLIF(rf.preferred_model, ''), rd.selected_model),
                      COALESCE(NULLIF(rf.corrected_task, ''), rd.task_type, '*')
             """
         ).fetchall()

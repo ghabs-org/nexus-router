@@ -82,7 +82,6 @@ class Router:
         mode: Optional[str] = None,
         message_text: Optional[str] = None,
         classifier_source: Optional[str] = None,
-        persist_decision: Optional[bool] = None,
     ) -> RoutingDecision:
         """
         Route a request to the best available model.
@@ -178,9 +177,10 @@ class Router:
             all_scores=scored,
         )
 
-        # Persist if enabled
-        effective_persist = self.persist if persist_decision is None else bool(persist_decision)
-        if effective_persist:
+        # Persist if enabled. Skip ephemeral compiled prompt probes: they pollute
+        # training data and are not actual user messages.
+        should_persist = self.persist and (source_type or 'standalone') != 'compiled-prompt'
+        if should_persist:
             ph = provider_health.get(primary.provider)
             if ph is None:
                 from .types import ProviderHealth

@@ -131,9 +131,12 @@ feedback:
   model_preference:
     enabled: true
     max_bump: 0.04
-    max_penalty: 0.06
+    max_penalty: 0.30
     min_samples: 3
     decay_window_days: 30
+    hard_exclude_enabled: true
+    hard_exclude_min_samples: 10
+    hard_exclude_centered_score_lte: -0.8
   adapters:
     telegram_enabled: true
     discord_enabled: false

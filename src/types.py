@@ -71,6 +71,7 @@ class ModelScore:
     model_preference_bump: float = 0.0
     model_preference_samples: int = 0
     model_preference_reason_tag: Optional[str] = None
+    model_preference_centered_score: Optional[float] = None
     cost: float = 0.0
     speed: float = 0.0
     excluded: bool = False

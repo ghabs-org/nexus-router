@@ -205,7 +205,6 @@ class RouterHandler(BaseHTTPRequestHandler):
             source_tag = body.get("source_tag")
             mode = body.get("mode")
             provenance_mode = body.get("provenance_mode")
-            persist_decision = body.get("persist_decision")
             if mode is None:
                 mode = provenance_mode
             if mode is None:
@@ -317,8 +316,13 @@ class RouterHandler(BaseHTTPRequestHandler):
                 source_tag=str(source_tag).strip() if source_tag is not None else None,
                 message_text=message,
                 classifier_source=classifier_source,
-                persist_decision=True if persist_decision is None else bool(persist_decision),
             )
+
+            # --- DEBUG: Print timestamp before writing decision ---
+            from datetime import datetime, timezone
+            print(f"DEBUG_WRITE_DECISION: {datetime.now(timezone.utc).isoformat()} decision_id={decision.decision_id}", flush=True)
+            # --- END DEBUG ---
+
 
             local_bits = ""
             if classifier_debug.get("local_confidence") is not None:

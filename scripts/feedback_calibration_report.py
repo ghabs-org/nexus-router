@@ -137,7 +137,7 @@ def main() -> None:
             score = 1.0
         elif model_verdict == "neutral":
             score = 0.4
-        elif model_verdict == "bad":
+        elif model_verdict in {"bad", "too_cheap", "too_powerful"}:
             score = 0.0
         else:
             score = 0.75 if verdict == "correct" else 0.0

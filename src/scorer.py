@@ -99,6 +99,9 @@ def score_models(
         "max_penalty": 0.30,
         "min_samples": 3,
         "decay_window_days": 30,
+        "hard_exclude_enabled": True,
+        "hard_exclude_min_samples": 10,
+        "hard_exclude_centered_score_lte": -0.8,
     }
     _policy_preference_cfg = ((routing_policy or {}).get("feedback", {}) or {}).get("model_preference", {}) or {}
     preference_cfg = {**_preference_defaults, **{k: v for k, v in _policy_preference_cfg.items() if v is not None}}
@@ -203,6 +206,35 @@ def score_models(
         speed_score = scores_raw.get("fast", 0.70)
         reasoning_score = scores_raw.get("reasoning", 0.70)
 
+        hard_exclude_enabled = bool(preference_cfg.get("hard_exclude_enabled", True))
+        hard_exclude_min_samples = max(1, int(preference_cfg.get("hard_exclude_min_samples", 10) or 10))
+        hard_exclude_centered_lte = float(preference_cfg.get("hard_exclude_centered_score_lte", -0.8) or -0.8)
+        centered_score = preference_meta.get("centered_score")
+        reason_tag = str(preference_meta.get("top_reason_tag") or "")
+        if (
+            hard_exclude_enabled
+            and int(preference_meta.get("samples", 0) or 0) >= hard_exclude_min_samples
+            and isinstance(centered_score, (int, float))
+            and float(centered_score) <= hard_exclude_centered_lte
+        ):
+            excluded.append(ModelScore(
+                model_id=model_id, provider=provider,
+                total_score=0.0, task_fit=round(task_fit, 4), health=round(health, 4),
+                preference=round(preference, 4), learned=round(learned, 4),
+                model_preference_bump=round(model_preference_bump, 4),
+                model_preference_samples=int(preference_meta.get("samples", 0)),
+                model_preference_reason_tag=preference_meta.get("top_reason_tag"),
+                model_preference_centered_score=round(float(centered_score), 4),
+                cost=round(cost_score, 4), speed=round(speed_score, 4),
+                excluded=True,
+                exclusion_reason=(
+                    f"feedback_hard_exclude:{classifier.task_type}:samples={int(preference_meta.get('samples', 0))}"
+                    f":centered={float(centered_score):.2f}"
+                    + (f":reason={reason_tag}" if reason_tag else "")
+                ),
+            ))
+            continue
+
         # ── Composite score ──────────────────────────────────────────────────
         total = (
             task_fit   * weights["task_fit"]
@@ -239,6 +271,7 @@ def score_models(
             model_preference_bump=round(model_preference_bump, 4),
             model_preference_samples=int(preference_meta.get("samples", 0)),
             model_preference_reason_tag=preference_meta.get("top_reason_tag"),
+            model_preference_centered_score=preference_meta.get("centered_score"),
             cost=round(cost_score, 4),
             speed=round(speed_score, 4),
         ))

@@ -300,6 +300,60 @@ class TestScorer:
         assert bad.excluded is True
         assert "health_too_low" in (bad.exclusion_reason or "")
 
+    def test_hard_feedback_exclusion_removes_strongly_disliked_model_for_task(self):
+        classifier = ClassifierOutput(task_type="general_chat", confidence=0.82, cost_profile="cheap")
+        provider_health = {
+            "p": ProviderHealth(provider="p", auth="ok", quota="healthy", health_score=0.95),
+        }
+        models = [
+            {
+                "id": "p/disliked-flash", "provider": "p",
+                "scores": {"coding": 0.7, "review": 0.7, "reasoning": 0.7, "summarize": 0.8, "fast": 0.96, "cost": 0.97, "context": 0.7, "vision": 0.6},
+                "features": {"contextWindow": 128000}, "availability": {"authed": True},
+            },
+            {
+                "id": "p/next-best-flash", "provider": "p",
+                "scores": {"coding": 0.7, "review": 0.7, "reasoning": 0.76, "summarize": 0.82, "fast": 0.90, "cost": 0.90, "context": 0.7, "vision": 0.6},
+                "features": {"contextWindow": 128000}, "availability": {"authed": True},
+            },
+        ]
+        learned = {
+            "p/disliked-flash": {
+                "total_selected": 120,
+                "success_rate": 0.83,
+                "total_override": 0,
+                "feedback_preference": {
+                    "general_chat": {
+                        "samples": 49,
+                        "score": 0.0,
+                        "last_feedback_at": "2099-01-01T00:00:00+00:00",
+                        "top_reason_tag": "too_cheap",
+                    }
+                },
+            },
+            "p/next-best-flash": {
+                "total_selected": 20,
+                "success_rate": 0.84,
+                "total_override": 0,
+            },
+        }
+        policy = {"feedback": {"model_preference": {
+            "enabled": True,
+            "max_bump": 0.04,
+            "max_penalty": 0.30,
+            "min_samples": 3,
+            "decay_window_days": 30,
+            "hard_exclude_enabled": True,
+            "hard_exclude_min_samples": 10,
+            "hard_exclude_centered_score_lte": -0.8,
+        }}}
+        scored = score_models(classifier, models, provider_health, learned, routing_policy=policy)
+        winner = next(s for s in scored if not s.excluded)
+        disliked = next(s for s in scored if s.model_id == "p/disliked-flash")
+        assert disliked.excluded is True
+        assert "feedback_hard_exclude:general_chat" in (disliked.exclusion_reason or "")
+        assert winner.model_id == "p/next-best-flash"
+
     def test_fast_mode_correction_prefers_lower_cost_and_higher_speed(self):
         cheap_fast = _fast_mode_correction(task_fit=0.80, cost_score=0.90, speed_score=0.90)
         expensive_slow = _fast_mode_correction(task_fit=0.80, cost_score=0.55, speed_score=0.55)
@@ -978,14 +1032,14 @@ def test_load_model_stats_includes_feedback_preferences(tmp_path, monkeypatch):
     try:
         conn.execute(
             "INSERT INTO routing_decisions (id, created_at, task_type, selected_model, selected_provider) VALUES (?,?,?,?,?)",
-            ("dec-1", db._now_iso(), "reasoning", "model/a", "provider-a"),
+            ("dec-feedback-pref-1", db._now_iso(), "reasoning", "model/a", "provider-a"),
         )
         conn.commit()
     finally:
         conn.close()
 
     db.record_feedback(
-        decision_id="dec-1",
+        decision_id="dec-feedback-pref-1",
         verdict="wrong",
         preferred_model="model/a",
         model_verdict="good",
@@ -994,3 +1048,36 @@ def test_load_model_stats_includes_feedback_preferences(tmp_path, monkeypatch):
     )
     stats = db.load_model_stats()
     assert stats["model/a"]["feedback_preference"]["reasoning"]["samples"] == 1
+
+
+def test_load_model_stats_maps_too_cheap_feedback_to_selected_model_when_preferred_model_missing(tmp_path, monkeypatch):
+    import importlib
+
+    monkeypatch.setenv("NEXUS_ROUTER_DB_PATH", str(tmp_path / "routing.sqlite"))
+    import src.db as db
+    importlib.reload(db)
+
+    db.ensure_schema()
+    conn = db._connect()
+    try:
+        conn.execute(
+            "INSERT INTO routing_decisions (id, created_at, task_type, selected_model, selected_provider) VALUES (?,?,?,?,?)",
+            ("dec-too-cheap-1", db._now_iso(), "general_chat", "google-gemini-cli/gemini-2.5-flash", "google-gemini-cli"),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    db.record_feedback(
+        decision_id="dec-too-cheap-1",
+        verdict="wrong",
+        preferred_model=None,
+        model_verdict="too_cheap",
+        reason_tag="too_cheap",
+        source_surface="telegram",
+    )
+    stats = db.load_model_stats()
+    pref = stats["google-gemini-cli/gemini-2.5-flash"]["feedback_preference"]["general_chat"]
+    assert pref["samples"] == 1
+    assert pref["score"] == 0.0
+    assert pref["top_reason_tag"] == "too_cheap"
