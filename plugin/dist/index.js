@@ -235,6 +235,13 @@ function resolveSenderForSession(sessionKey) {
     }
     return { senderId: entry.senderId, channelId: entry.channelId };
 }
+function resolveDirectSenderFallback(ctx) {
+    const rawSenderId = ctx?.senderId ?? ctx?.metadata?.sender_id ?? ctx?.inboundMeta?.sender_id ?? ctx?.messageMeta?.sender?.id ?? null;
+    const rawChannelId = ctx?.channelId ?? ctx?.metadata?.chat_id ?? ctx?.inboundMeta?.chat_id ?? ctx?.messageMeta?.chat?.id ?? rawSenderId;
+    const senderId = rawSenderId != null ? String(rawSenderId).trim() : null;
+    if (!senderId) return null;
+    return { senderId, channelId: rawChannelId != null ? String(rawChannelId).trim() : senderId, at: Date.now() };
+}
 function rememberFeedbackPrompt(decisionId) {
     const trimmed = String(decisionId ?? "").trim();
     if (!trimmed)
@@ -1322,7 +1329,7 @@ export default definePluginEntry({
                         selectedProvider: shadowDecision.selected_provider,
                         sessionKey: ctx.sessionKey,
                         shadowMode: true,
-                        targetSenderId: (resolveSenderForSession(ctx.sessionKey ?? sessionRef) ?? (ctx.senderId ? { senderId: String(ctx.senderId) } : undefined))?.senderId,
+                        targetSenderId: (resolveSenderForSession(ctx.sessionKey ?? sessionRef) ?? (ctx.senderId ? { senderId: String(ctx.senderId) } : undefined) ?? resolveDirectSenderFallback(ctx))?.senderId,
                     });
                 }
                 await debugLog(`[hook-result] source=${source} source_tag=${sourceTag} route=${routeMode} shadow decision=${shadowDecision.selected_model} task=${shadowDecision.task_type} confidence=${shadowDecision.confidence.toFixed(2)} score=${shadowDecision.score.toFixed(3)}`);
@@ -1421,7 +1428,7 @@ export default definePluginEntry({
                     selectedModel: decision.selected_model,
                 });
             }
-            const sender = resolveSenderForSession(ctx.sessionKey ?? sessionRef) ?? (ctx.senderId ? { senderId: String(ctx.senderId), channelId: ctx.channelId ? String(ctx.channelId) : undefined, at: Date.now() } : null);
+            const sender = resolveSenderForSession(ctx.sessionKey ?? sessionRef) ?? (ctx.senderId ? { senderId: String(ctx.senderId), channelId: ctx.channelId ? String(ctx.channelId) : undefined, at: Date.now() } : null) ?? resolveDirectSenderFallback(ctx);
             if (decision.decision_id) {
                 if (sender) {
                     await sendTelegramFeedbackCard(api, sender.senderId, decision, sourceTag, { messagePreview: routingText });
