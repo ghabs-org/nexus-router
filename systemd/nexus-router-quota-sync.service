@@ -3,10 +3,11 @@ Description=Nexus Router quota sync job
 After=network.target
 
 [Service]
+EnvironmentFile=/etc/ghabs/env
 Type=oneshot
 User=ubuntu
-WorkingDirectory=/home/ubuntu/git/ghabs/nexus-router
-ExecStart=/home/ubuntu/git/ghabs/nexus-router/ops/quota-sync.sh --input /home/ubuntu/.local/state/nexus-router/state/quota-snapshots.json --skip-missing
+WorkingDirectory=${NEXUS_ROUTER_SRC:-/home/ubuntu/git/ghabs/nexus-router}
+ExecStart=${NEXUS_ROUTER_SRC:-/home/ubuntu/git/ghabs/nexus-router}/ops/quota-sync.sh --input /home/ubuntu/.local/state/nexus-router/state/quota-snapshots.json --skip-missing
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=nexus-router-quota-sync

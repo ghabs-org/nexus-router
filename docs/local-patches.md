@@ -19,7 +19,7 @@ OpenClaw runtime hotfixes belong in:
 That was confusing because the footer belongs to the **current command turn**, while `/route explain` inspects a **prior turn**.
 
 ### Local patch targets
-- `/home/ubuntu/git/ghabs/nexus-router/plugin/src/index.ts`
+- `${NEXUS_ROUTER_SRC:-/home/ubuntu/git/ghabs/nexus-router}/plugin/src/index.ts`
 - `/home/ubuntu/.openclaw/extensions/nexus-router/index.ts`
 
 ### Behavior
@@ -56,7 +56,7 @@ Background heartbeat or memory-triggered turns could still be routed like normal
 That created noisy routing logs and misleading pairs of `auto` + `balanced` routing decisions even when Gab had not sent a new chat message.
 
 ### Local patch targets
-- `/home/ubuntu/git/ghabs/nexus-router/plugin/src/index.ts`
+- `${NEXUS_ROUTER_SRC:-/home/ubuntu/git/ghabs/nexus-router}/plugin/src/index.ts`
 - `/home/ubuntu/.openclaw/extensions/nexus-router/index.ts`
 
 ### Behavior
@@ -108,7 +108,7 @@ This caused `mode=reasoning` to timeout (no eligible high-scoring models availab
 - `google-gemini-cli/gemini-2.5-pro-preview` → `reasoning_capable: True`, tasks: reasoning/coding/analysis/content_creation
 
 ### Source patch
-- `/home/ubuntu/git/ghabs/nexus-router/src/generate_registry.py` (line ~23)
+- `${NEXUS_ROUTER_SRC:-/home/ubuntu/git/ghabs/nexus-router}/src/generate_registry.py` (line ~23)
 
 ### Note
 The container bakes the image at build time, so source changes take effect on next `docker build` + deploy.

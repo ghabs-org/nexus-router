@@ -19,7 +19,7 @@ Smart LLM router that picks the best model for each request based on:
 The Nexus Router Python server must be running before this skill works:
 
 ```bash
-cd /home/ubuntu/git/ghabs/nexus-router
+cd ${NEXUS_ROUTER_SRC:-/home/ubuntu/git/ghabs/nexus-router}
 venv/bin/python -m src.server --port 7771
 ```
 
@@ -70,7 +70,7 @@ message → pre-signal extraction → heuristic classification
 
 ```bash
 # Route a coding task
-cd /home/ubuntu/git/ghabs/nexus-router
+cd ${NEXUS_ROUTER_SRC:-/home/ubuntu/git/ghabs/nexus-router}
 venv/bin/python -m src.cli route --task coding --complexity high --has-code
 
 # Route a vision task
@@ -98,7 +98,7 @@ venv/bin/python -m src.cli stats
 Run after `openclaw update` or when providers change:
 
 ```bash
-cd /home/ubuntu/git/ghabs/nexus-router
+cd ${NEXUS_ROUTER_SRC:-/home/ubuntu/git/ghabs/nexus-router}
 openclaw models list --all --json > ~/.local/state/nexus-router/generated/openclaw-models.json
 venv/bin/python src/generate_registry.py
 ```
