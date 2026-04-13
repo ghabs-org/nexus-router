@@ -18,6 +18,7 @@ import { appendFile } from "node:fs/promises";
 interface NexusRouterConfig {
   routerUrl?: string;
   bridgeUrl?: string;
+  bridgeBearerToken?: string;
   enabled?: boolean;
   costProfile?: "cheap" | "balanced" | "premium";
   debugMode?: boolean;
@@ -527,10 +528,10 @@ async function sendTelegramFeedbackCard(
       source_message_preview: opts?.messagePreview,
     };
 
-    const pluginConfig = (api?.config as NexusRouterConfig | undefined) ?? {};
+    const runtimePluginConfig = ((api as any)?.config?.plugins?.entries?.["nexus-router"]?.config ?? {}) as NexusRouterConfig;
     const loadedConfig = (api as any)?.config?.loadConfig?.();
-    const livePluginConfig = loadedConfig?.plugins?.entries?.["nexus-router"]?.config ?? {};
-    const bridgeBearerToken = (livePluginConfig.bridgeBearerToken ?? (pluginConfig as any).bridgeBearerToken) as string | undefined;
+    const livePluginConfig = (loadedConfig?.plugins?.entries?.["nexus-router"]?.config ?? {}) as NexusRouterConfig;
+    const bridgeBearerToken = livePluginConfig.bridgeBearerToken ?? runtimePluginConfig.bridgeBearerToken;
     const bridgeHeaders: Record<string, string> = {
       "Content-Type": "application/json",
     };
@@ -538,7 +539,7 @@ async function sendTelegramFeedbackCard(
       bridgeHeaders["Authorization"] = `Bearer ${bridgeBearerToken}`;
     }
 
-    const bridgeBaseUrl = livePluginConfig.bridgeUrl ?? pluginConfig.bridgeUrl ?? DEFAULT_BRIDGE_URL;
+    const bridgeBaseUrl = livePluginConfig.bridgeUrl ?? runtimePluginConfig.bridgeUrl ?? DEFAULT_BRIDGE_URL;
     const bridgeRes = await fetch(`${bridgeBaseUrl}/api/v1/router/feedback-card`, {
       method: "POST",
       headers: bridgeHeaders,

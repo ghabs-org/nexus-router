@@ -381,10 +381,10 @@ async function sendTelegramFeedbackCard(api, targetSenderId, decision, sourceTag
             source_channel: "telegram",
             source_message_preview: opts?.messagePreview,
         };
-        const pluginConfig = api?.config ?? {};
+        const runtimePluginConfig = api?.config?.plugins?.entries?.["nexus-router"]?.config ?? {};
         const loadedConfig = api?.config?.loadConfig?.();
         const livePluginConfig = loadedConfig?.plugins?.entries?.["nexus-router"]?.config ?? {};
-        const bridgeBearerToken = livePluginConfig.bridgeBearerToken ?? pluginConfig.bridgeBearerToken;
+        const bridgeBearerToken = livePluginConfig.bridgeBearerToken ?? runtimePluginConfig.bridgeBearerToken;
         const bridgeHeaders = {
             "Content-Type": "application/json",
         };
@@ -392,7 +392,7 @@ async function sendTelegramFeedbackCard(api, targetSenderId, decision, sourceTag
             bridgeHeaders["Authorization"] = `Bearer ${bridgeBearerToken}`;
         }
         const bridgeBaseUrl = livePluginConfig.bridgeUrl
-            ?? pluginConfig.bridgeUrl
+            ?? runtimePluginConfig.bridgeUrl
             ?? DEFAULT_BRIDGE_URL;
         const bridgeRes = await fetch(`${bridgeBaseUrl}/api/v1/router/feedback-card`, {
             method: "POST",
