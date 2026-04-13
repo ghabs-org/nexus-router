@@ -528,7 +528,9 @@ async function sendTelegramFeedbackCard(
     };
 
     const pluginConfig = (api?.config as NexusRouterConfig | undefined) ?? {};
-    const bridgeBearerToken = (pluginConfig as any).bridgeBearerToken as string | undefined;
+    const loadedConfig = (api as any)?.config?.loadConfig?.();
+    const livePluginConfig = loadedConfig?.plugins?.entries?.["nexus-router"]?.config ?? {};
+    const bridgeBearerToken = (livePluginConfig.bridgeBearerToken ?? (pluginConfig as any).bridgeBearerToken) as string | undefined;
     const bridgeHeaders: Record<string, string> = {
       "Content-Type": "application/json",
     };
@@ -536,7 +538,7 @@ async function sendTelegramFeedbackCard(
       bridgeHeaders["Authorization"] = `Bearer ${bridgeBearerToken}`;
     }
 
-    const bridgeBaseUrl = pluginConfig.bridgeUrl ?? DEFAULT_BRIDGE_URL;
+    const bridgeBaseUrl = livePluginConfig.bridgeUrl ?? pluginConfig.bridgeUrl ?? DEFAULT_BRIDGE_URL;
     const bridgeRes = await fetch(`${bridgeBaseUrl}/api/v1/router/feedback-card`, {
       method: "POST",
       headers: bridgeHeaders,

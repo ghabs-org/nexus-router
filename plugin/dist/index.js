@@ -382,14 +382,17 @@ async function sendTelegramFeedbackCard(api, targetSenderId, decision, sourceTag
             source_message_preview: opts?.messagePreview,
         };
         const pluginConfig = api?.config ?? {};
-        const bridgeBearerToken = pluginConfig.bridgeBearerToken;
+        const loadedConfig = api?.config?.loadConfig?.();
+        const livePluginConfig = loadedConfig?.plugins?.entries?.["nexus-router"]?.config ?? {};
+        const bridgeBearerToken = livePluginConfig.bridgeBearerToken ?? pluginConfig.bridgeBearerToken;
         const bridgeHeaders = {
             "Content-Type": "application/json",
         };
         if (bridgeBearerToken) {
             bridgeHeaders["Authorization"] = `Bearer ${bridgeBearerToken}`;
         }
-        const bridgeBaseUrl = pluginConfig.bridgeUrl
+        const bridgeBaseUrl = livePluginConfig.bridgeUrl
+            ?? pluginConfig.bridgeUrl
             ?? DEFAULT_BRIDGE_URL;
         const bridgeRes = await fetch(`${bridgeBaseUrl}/api/v1/router/feedback-card`, {
             method: "POST",
@@ -1319,7 +1322,7 @@ export default definePluginEntry({
                         selectedProvider: shadowDecision.selected_provider,
                         sessionKey: ctx.sessionKey,
                         shadowMode: true,
-                        targetSenderId: resolveSenderForSession(ctx.sessionKey ?? sessionRef)?.senderId,
+                        targetSenderId: (resolveSenderForSession(ctx.sessionKey ?? sessionRef) ?? (ctx.senderId ? { senderId: String(ctx.senderId) } : undefined))?.senderId,
                     });
                 }
                 await debugLog(`[hook-result] source=${source} source_tag=${sourceTag} route=${routeMode} shadow decision=${shadowDecision.selected_model} task=${shadowDecision.task_type} confidence=${shadowDecision.confidence.toFixed(2)} score=${shadowDecision.score.toFixed(3)}`);
@@ -1418,7 +1421,7 @@ export default definePluginEntry({
                     selectedModel: decision.selected_model,
                 });
             }
-            const sender = resolveSenderForSession(ctx.sessionKey ?? sessionRef);
+            const sender = resolveSenderForSession(ctx.sessionKey ?? sessionRef) ?? (ctx.senderId ? { senderId: String(ctx.senderId), channelId: ctx.channelId ? String(ctx.channelId) : undefined, at: Date.now() } : null);
             if (decision.decision_id) {
                 if (sender) {
                     await sendTelegramFeedbackCard(api, sender.senderId, decision, sourceTag, { messagePreview: routingText });
