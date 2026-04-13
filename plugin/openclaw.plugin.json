@@ -1,0 +1,51 @@
+{
+  "id": "nexus-router",
+  "name": "Nexus Router",
+  "description": "Routes each chat turn to the best available model via the Nexus Router service",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "routerUrl": {
+        "type": "string",
+        "description": "Nexus Router HTTP API URL",
+        "default": "http://127.0.0.1:7771"
+      },
+      "bridgeUrl": {
+        "type": "string",
+        "description": "Nexus bridge HTTP API URL for feedback cards",
+        "default": "http://127.0.0.1:8091"
+      },
+      "bridgeBearerToken": {
+        "type": "string",
+        "description": "Optional bearer token for Nexus bridge feedback-card endpoint"
+      },
+      "enabled": {
+        "type": "boolean",
+        "description": "Enable automatic model routing",
+        "default": true
+      },
+      "costProfile": {
+        "type": "string",
+        "enum": ["cheap", "balanced", "premium"],
+        "description": "Cost/quality routing profile",
+        "default": "balanced"
+      },
+      "debugMode": {
+        "type": "boolean",
+        "description": "Log routing decisions to console",
+        "default": false
+      },
+      "minConfidence": {
+        "type": "number",
+        "description": "Skip routing if classifier confidence is below this threshold (0.0–1.0)",
+        "default": 0.60
+      },
+      "timeoutMs": {
+        "type": "number",
+        "description": "Router request timeout in milliseconds",
+        "default": 3000
+      }
+    }
+  }
+}

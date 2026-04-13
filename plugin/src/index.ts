@@ -527,7 +527,8 @@ async function sendTelegramFeedbackCard(
       source_message_preview: opts?.messagePreview,
     };
 
-    const bridgeBearerToken = process.env.NEXUS_ROUTER_BRIDGE_BEARER_TOKEN;
+    const pluginConfig = (api?.config as NexusRouterConfig | undefined) ?? {};
+    const bridgeBearerToken = (pluginConfig as any).bridgeBearerToken as string | undefined;
     const bridgeHeaders: Record<string, string> = {
       "Content-Type": "application/json",
     };
@@ -535,9 +536,7 @@ async function sendTelegramFeedbackCard(
       bridgeHeaders["Authorization"] = `Bearer ${bridgeBearerToken}`;
     }
 
-    const bridgeBaseUrl = (api?.config as NexusRouterConfig)?.bridgeUrl
-      ?? process.env.NEXUS_ROUTER_BRIDGE_URL
-      ?? DEFAULT_BRIDGE_URL;
+    const bridgeBaseUrl = pluginConfig.bridgeUrl ?? DEFAULT_BRIDGE_URL;
     const bridgeRes = await fetch(`${bridgeBaseUrl}/api/v1/router/feedback-card`, {
       method: "POST",
       headers: bridgeHeaders,
