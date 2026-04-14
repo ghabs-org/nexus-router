@@ -26,7 +26,7 @@ interface NexusRouterConfig {
   timeoutMs?: number;
 }
 
-type RouteMode = "auto" | "balanced" | "fast" | "reasoning" | "off";
+type RouteMode = "auto" | "balanced" | "fast" | "reasoning" | "eco" | "free" | "off";
 
 interface RouteResponse {
   decision_id?: string;
@@ -112,7 +112,7 @@ const DEFAULT_COST        = "balanced";
 const PLUGIN_VERSION      = "0.1.0";
 const RECENT_MESSAGE_TTL_MS = 5 * 60 * 1000;
 const AUTO_ESCALATE_CONFIDENCE = 0.70;
-const ROUTE_MODES = new Set(["auto", "balanced", "fast", "reasoning", "off"]);
+const ROUTE_MODES = new Set(["auto", "balanced", "fast", "reasoning", "eco", "free", "off"]);
 const ROUTE_DEDUPE_WINDOW_MS = 20_000;
 const ROUTE_BURST_WINDOW_MS = 5_000;
 const ROUTE_BURST_MAX_CALLS = 4;
@@ -255,7 +255,7 @@ function rememberRecentUserMessage(sessionKey: string, text: string): void {
 
 // Route mode is an explicit user preference. Keep it sticky for the life of the
 // session/conversation instead of silently expiring back to the default.
-const STICKY_ROUTE_MODES = new Set<RouteMode>(["auto", "balanced", "fast", "reasoning", "off"]);
+const STICKY_ROUTE_MODES = new Set<RouteMode>(["auto", "balanced", "fast", "reasoning", "eco", "free", "off"]);
 
 export function isShortFollowUpForContextualRouting(text?: string): boolean {
   const trimmed = (text ?? "").trim();
@@ -893,7 +893,7 @@ function takeRecentConversationRouteMode(conversationKey?: string): RouteMode | 
 
 function parseRouteModeFromText(text: string): RouteMode | null {
   const lowered = text.trim().toLowerCase();
-  const match = lowered.match(/^(?:⚙️\s*)?routing mode(?:\s*(?:set to|:|=)\s*|\s+)(auto|balanced|fast|reasoning|off)(?:\s*\([^)]*\))?\.?$/i);
+  const match = lowered.match(/^(?:⚙️\s*)?routing mode(?:\s*(?:set to|:|=)\s*|\s+)(auto|balanced|fast|reasoning|eco|free|off)(?:\s*\([^)]*\))?\.?$/i);
   if (match?.[1]) {
     const mode = match[1].toLowerCase();
     if (ROUTE_MODES.has(mode)) {
@@ -1099,6 +1099,10 @@ function resolveCostProfileForRouteMode(
       return "cheap";
     case "reasoning":
       return "premium";
+    case "eco":
+      return "cheap";
+    case "free":
+      return "cheap";
     case "off":
       return defaultProfile;
   }
@@ -1121,6 +1125,8 @@ function buildRouteInteractiveReply(mode?: RouteMode, scopeLabel = "this convers
             { label: "Balanced", value: "/route balanced", style: "secondary" },
             { label: "Fast", value: "/route fast", style: "success" },
             { label: "Reasoning", value: "/route reasoning", style: "secondary" },
+            { label: "Eco", value: "/route eco", style: "secondary" },
+            { label: "Free", value: "/route free", style: "secondary" },
             { label: "Off", value: "/route off", style: "danger" },
           ],
         },
@@ -1144,17 +1150,21 @@ function buildRouteHelpText(currentMode: RouteMode): string {
     `- balanced: quality-first default`,
     `- fast: stronger cost bias; prefers cheaper/faster models`,
     `- reasoning: stronger-model bias for planning/trade-off tasks`,
+    `- eco: bias toward more efficient/lower-footprint models`,
+    `- free: only consider models explicitly marked is_free=true`,
     `- off: bypass router overrides`,
     ``,
     `Commands:`,
     `- /route status → show current session mode`,
     `- /route last → show last routing decision (short form)`,
     `- /route explain → show richer diagnostics (context + escalation + classifier source)`,
-    `- /route compare [fast balanced reasoning] → compare modes on the last prompt`,
+    `- /route compare [fast balanced reasoning eco free] → compare modes on the last prompt`,
     ``,
     `Examples:`,
     `- /route fast`,
     `- /route reasoning`,
+    `- /route eco`,
+    `- /route free`,
     `- /route compare`,
   ].join("\n");
 }
@@ -1375,7 +1385,7 @@ export default definePluginEntry({
         if (arg.startsWith("compare")) {
           const last = resolveLastDecisionForContext(ctx, conversationKey);
           const modeList = rawArgs.split(/\s+/).slice(1).map((m: string) => m.toLowerCase()).filter(Boolean) as RouteMode[];
-          const compareModes: RouteMode[] = modeList.length ? modeList : ["fast", "balanced", "reasoning"] as RouteMode[];
+          const compareModes: RouteMode[] = modeList.length ? modeList : ["fast", "balanced", "reasoning", "eco", "free"] as RouteMode[];
           return buildRouteCompareReply(routerUrl, last, compareModes, timeoutMs);
         }
 
@@ -1497,7 +1507,7 @@ export default definePluginEntry({
         return;
       }
 
-      if (ctx?.trigger === "heartbeat" || ctx?.trigger === "memory") {
+      if (ctx?.trigger === "heartbeat" || (ctx?.trigger === "memory" && source !== "raw-user")) {
         if (sessionRef) {
           recentRouteCacheBySession.set(sessionRef, { text: dedupeText, mode: routeMode, at: Date.now() });
         }
@@ -1640,6 +1650,26 @@ export default definePluginEntry({
         decision = autoResult.decision;
         if (!decision) {
           const failure = describeRouteRequestFailure(autoResult, timeoutMs);
+          await debugLog(`[hook-result] source=${source} source_tag=${sourceTag} route=${routeMode} ${failure}`);
+          if (debugMode) console.warn(`[nexus-router] ${failure}, using default model`);
+          return;
+        }
+      } else {
+        const directResult = await routeRequest(
+          routerUrl,
+          routingText,
+          firstPassCostProfile,
+          timeoutMs,
+          routeMode,
+          conversationContext,
+          shouldUseLlmClassifier,
+          source,
+          sourceTag,
+          "route",
+        );
+        decision = directResult.decision;
+        if (!decision) {
+          const failure = describeRouteRequestFailure(directResult, timeoutMs);
           await debugLog(`[hook-result] source=${source} source_tag=${sourceTag} route=${routeMode} ${failure}`);
           if (debugMode) console.warn(`[nexus-router] ${failure}, using default model`);
           return;

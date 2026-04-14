@@ -68,6 +68,70 @@ def should_reclassify_with_llm(
         and (message is None or not _is_tiny_prompt(message))
     )
 
+
+def _has_rich_signals(pre_signals: PreSignals) -> bool:
+    return any([
+        pre_signals.has_image,
+        pre_signals.has_code,
+        pre_signals.has_diff,
+        pre_signals.has_logs,
+        pre_signals.has_url,
+        pre_signals.has_file_refs,
+    ])
+
+
+def _apply_low_signal_guardrail(
+    classifier: ClassifierOutput | None,
+    *,
+    classifier_source: str,
+    pre_signals: PreSignals,
+    message: str,
+    mode: str | None,
+    route_mode: str | None,
+) -> tuple[ClassifierOutput | None, str | None]:
+    """
+    Guardrail for tiny/low-signal turns during shadow/off routing.
+
+    Prevent obviously wrong labels like vision/long_context/coding for short
+    confirmations or meta-chat when there is no supporting structural evidence.
+    """
+    if classifier is None:
+        return None, None
+    if classifier_source == 'explicit':
+        return classifier, None
+
+    normalized_mode = (mode or '').strip().lower()
+    normalized_route_mode = (route_mode or '').strip().lower()
+
+    if normalized_mode != 'shadow' and normalized_route_mode != 'off':
+        return classifier, None
+
+    if _has_rich_signals(pre_signals):
+        return classifier, None
+
+    low_signal = (
+        _is_tiny_prompt(message)
+        or (pre_signals.estimated_tokens <= 80 and pre_signals.message_length <= 240)
+    )
+    if not low_signal:
+        return classifier, None
+
+    if classifier.confidence >= 0.45:
+        return classifier, None
+
+    if classifier.task_type not in {'vision', 'long_context', 'coding', 'code_review'}:
+        return classifier, None
+
+    original = classifier.task_type
+    classifier.task_type = 'general_chat'
+    classifier.subtype = None
+    classifier.needs_tools = False
+    classifier.needs_vision = False
+    classifier.needs_long_context = False
+    classifier.cost_profile = 'balanced'
+    classifier.complexity = 'low'
+    return classifier, f'low_signal_guardrail:{original}->general_chat'
+
 DEFAULT_PORT = 7771
 DEFAULT_CLASSIFIER_TIMEOUT_SECONDS = int(os.environ.get("NEXUS_ROUTER_CLASSIFIER_TIMEOUT_SECONDS", "6"))
 
@@ -301,10 +365,21 @@ class RouterHandler(BaseHTTPRequestHandler):
                     confidence=0.60,
                 )
                 classifier_source = "fallback"
-            elif normalized_route_mode != "auto":
-                # Explicit modes may override cost posture; auto should preserve
-                # the classifier's own cost/profile signal.
-                classifier.cost_profile = cost_profile
+            else:
+                classifier, guardrail_reason = _apply_low_signal_guardrail(
+                    classifier,
+                    classifier_source=classifier_source,
+                    pre_signals=pre_signals,
+                    message=message,
+                    mode=str(mode).strip() if mode is not None else None,
+                    route_mode=route_mode,
+                )
+                if guardrail_reason:
+                    classifier_debug["guardrail_reason"] = guardrail_reason
+                if normalized_route_mode != "auto":
+                    # Explicit modes may override cost posture; auto should preserve
+                    # the classifier's own cost/profile signal.
+                    classifier.cost_profile = cost_profile
 
             decision = _get_router().route(
                 classifier=classifier,
@@ -332,6 +407,8 @@ class RouterHandler(BaseHTTPRequestHandler):
                 )
             elif classifier_debug.get("local_unavailable"):
                 local_bits += f" local_unavailable={classifier_debug['local_unavailable']}"
+            if classifier_debug.get("guardrail_reason"):
+                local_bits += f" guardrail={classifier_debug['guardrail_reason']}"
 
             print(
                 "route"
@@ -453,8 +530,8 @@ class RouterHandler(BaseHTTPRequestHandler):
             if not key:
                 _json_response(self, 400, {"error": "key required"})
                 return
-            if mode not in {"auto", "balanced", "fast", "reasoning", "off"}:
-                _json_response(self, 400, {"error": "mode must be auto|balanced|fast|reasoning|off"})
+            if mode not in {"auto", "balanced", "fast", "reasoning", "eco", "free", "off"}:
+                _json_response(self, 400, {"error": "mode must be auto|balanced|fast|reasoning|eco|free|off"})
                 return
             set_route_mode_preference(key, mode, scope)
             pref = get_route_mode_preference(key, scope)

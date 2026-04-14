@@ -57,6 +57,7 @@ def ensure_schema():
     conn.executescript(sql)
     _ensure_feedback_table_compat(conn)
     _ensure_routing_decisions_compat(conn)
+    _ensure_model_metadata_compat(conn)
     conn.commit()
     conn.close()
 
@@ -125,8 +126,20 @@ def _ensure_routing_decisions_compat(conn: sqlite3.Connection) -> None:
             """
         )
 
-    conn.execute("UPDATE schema_meta SET value='5' WHERE key='schema_version'")
-    conn.execute("INSERT OR IGNORE INTO schema_meta (key, value) VALUES ('schema_version', '5')")
+
+def _ensure_model_metadata_compat(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS model_metadata (
+          model       TEXT PRIMARY KEY,
+          is_free     INTEGER,
+          updated_at  TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_model_metadata_updated_at ON model_metadata(updated_at)")
+    conn.execute("UPDATE schema_meta SET value='6' WHERE key='schema_version'")
+    conn.execute("INSERT OR IGNORE INTO schema_meta (key, value) VALUES ('schema_version', '6')")
 
 
 def write_decision(
@@ -385,6 +398,47 @@ def load_model_stats() -> dict[str, dict]:
         conn.close()
 
 
+def load_model_metadata() -> dict[str, dict[str, Any]]:
+    if not DB_PATH.exists():
+        return {}
+    conn = _connect()
+    try:
+        try:
+            rows = conn.execute("SELECT model, is_free, updated_at FROM model_metadata").fetchall()
+        except sqlite3.OperationalError:
+            return {}
+        result: dict[str, dict[str, Any]] = {}
+        for row in rows:
+            raw = row["is_free"]
+            result[row["model"]] = {
+                "is_free": None if raw is None else bool(raw),
+                "updated_at": row["updated_at"],
+            }
+        return result
+    finally:
+        conn.close()
+
+
+def set_model_is_free(model: str, is_free: Optional[bool]) -> None:
+    model = str(model or "").strip()
+    if not model:
+        raise ValueError("model required")
+    conn = _connect()
+    try:
+        conn.execute(
+            """
+            INSERT INTO model_metadata (model, is_free, updated_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(model)
+            DO UPDATE SET is_free=excluded.is_free, updated_at=excluded.updated_at
+            """,
+            (model, None if is_free is None else int(bool(is_free)), _now_iso()),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def log_provider_observation(
     provider: str,
     auth_status: str,
@@ -463,8 +517,8 @@ def set_route_mode_preference(pref_key: str, mode: str, scope: str = "conversati
     scope = str(scope or "conversation").strip().lower()
     if not pref_key:
         raise ValueError("pref_key required")
-    if mode not in {"auto", "balanced", "fast", "reasoning", "off"}:
-        raise ValueError("mode must be auto|balanced|fast|reasoning|off")
+    if mode not in {"auto", "balanced", "fast", "reasoning", "eco", "free", "off"}:
+        raise ValueError("mode must be auto|balanced|fast|reasoning|eco|free|off")
     if scope not in {"conversation", "session", "channel"}:
         raise ValueError("scope must be conversation|session|channel")
 
@@ -533,6 +587,11 @@ def load_benchmark_scores() -> dict[str, dict[str, Any]]:
 def replace_benchmark_scores(models: dict[str, dict[str, Any]]) -> None:
     conn = _connect()
     try:
+        # Schema migration for eco
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(benchmark_model_scores)").fetchall()}
+        if columns and "eco" not in columns:
+            conn.execute("ALTER TABLE benchmark_model_scores ADD COLUMN eco REAL")
+            
         conn.execute("DELETE FROM benchmark_model_scores")
         for model_id, scores in models.items():
             conn.execute(
@@ -540,9 +599,9 @@ def replace_benchmark_scores(models: dict[str, dict[str, Any]]) -> None:
                 INSERT INTO benchmark_model_scores (
                   model_id, source, updated_at,
                   coding, review, reasoning, summarize, fast,
-                  cost, speed, context, vision, tools, multilingual,
+                  cost, speed, eco, context, vision, tools, multilingual,
                   metadata_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     model_id,
@@ -555,6 +614,7 @@ def replace_benchmark_scores(models: dict[str, dict[str, Any]]) -> None:
                     scores.get("fast"),
                     scores.get("cost"),
                     scores.get("speed"),
+                    scores.get("eco"),
                     scores.get("context"),
                     scores.get("vision"),
                     scores.get("tools"),

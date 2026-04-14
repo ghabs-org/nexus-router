@@ -24,7 +24,8 @@ DEFAULT_WEIGHTS = {
     "preference": 0.10,
     "learned":    0.10,
     "cost":       0.05,
-    "speed":      0.05,
+    "speed":      0.03,
+    "eco":        0.02,
 }
 
 # Models scoring below this health score are excluded entirely
@@ -40,6 +41,7 @@ TASK_TO_DIMENSION = {
     "long_context":    "context",
     "vision":          "vision",
     "general_chat":    "reasoning",
+    "eco":             "eco",
 }
 
 # Minimum vision score to be eligible for vision tasks
@@ -57,10 +59,11 @@ COMPLEXITY_PREFERENCE = {
 
 # cost_profile → weighting adjustment
 COST_PROFILE_WEIGHT = {
-    "cheap":    {"cost": 0.20, "speed": 0.10, "task_fit": 0.40, "health": 0.20, "preference": 0.05, "learned": 0.05},
+    "cheap":    {"cost": 0.20, "speed": 0.05, "eco": 0.10, "task_fit": 0.35, "health": 0.20, "preference": 0.05, "learned": 0.05},
     "balanced": DEFAULT_WEIGHTS,
-    "premium":  {"task_fit": 0.60, "health": 0.15, "preference": 0.10, "learned": 0.10, "cost": 0.02, "speed": 0.03},
-    "reasoning": {"task_fit": 0.62, "health": 0.14, "preference": 0.10, "learned": 0.10, "cost": 0.02, "speed": 0.02},
+    "premium":  {"task_fit": 0.60, "health": 0.15, "preference": 0.10, "learned": 0.10, "cost": 0.02, "speed": 0.02, "eco": 0.01},
+    "reasoning": {"task_fit": 0.62, "health": 0.14, "preference": 0.10, "learned": 0.10, "cost": 0.01, "speed": 0.02, "eco": 0.01},
+    "eco":      {"eco": 0.45, "cost": 0.20, "task_fit": 0.15, "health": 0.10, "preference": 0.05, "learned": 0.05, "speed": 0.00},
 }
 
 
@@ -125,6 +128,16 @@ def score_models(
                 total_score=0.0, task_fit=0.0, health=0.0,
                 preference=0.0, learned=0.0, cost=0.0, speed=0.0,
                 excluded=True, exclusion_reason="not_authed",
+            ))
+            continue
+
+        # Free mode: only allow models explicitly marked free.
+        if (route_mode or "").strip().lower() == "free" and features.get("is_free") is not True:
+            excluded.append(ModelScore(
+                model_id=model_id, provider=provider,
+                total_score=0.0, task_fit=0.0, health=0.0,
+                preference=0.0, learned=0.0, cost=0.0, speed=0.0,
+                excluded=True, exclusion_reason="not_free",
             ))
             continue
 
@@ -259,6 +272,16 @@ def score_models(
                 speed_score=speed_score,
                 quota_penalty=quota_penalty,
             )
+        elif mode == "eco":
+            total = _eco_mode_total(
+                task_fit=task_fit,
+                eco_score=scores_raw.get("eco", 0.50),
+                cost_score=cost_score,
+                health=health,
+                learned=learned,
+                preference=preference,
+                quota_penalty=quota_penalty,
+            )
 
         eligible.append(ModelScore(
             model_id=model_id,
@@ -274,6 +297,7 @@ def score_models(
             model_preference_centered_score=preference_meta.get("centered_score"),
             cost=round(cost_score, 4),
             speed=round(speed_score, 4),
+            eco=round(scores_raw.get("eco", 0.50), 4),
         ))
 
     # Sort eligible descending by total score
@@ -385,6 +409,34 @@ def _reasoning_mode_total(
         + (0.06 * task_fit)
         + (0.02 * preference)
         + (0.01 * speed_score)
+        - quota_penalty
+    )
+
+
+def _eco_mode_total(
+    task_fit: float,
+    eco_score: float,
+    cost_score: float,
+    health: float,
+    learned: float,
+    preference: float,
+    quota_penalty: float,
+) -> float:
+    """
+    Dedicated scoring path for explicit eco mode.
+
+    Principle:
+    - eco score (efficiency/size) and cost score dominate
+    - task fit is a floor/filter
+    - health/learned are secondary
+    """
+    return (
+        (0.40 * eco_score)
+        + (0.30 * cost_score)
+        + (0.10 * health)
+        + (0.10 * task_fit)
+        + (0.05 * learned)
+        + (0.05 * preference)
         - quota_penalty
     )
 

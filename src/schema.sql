@@ -178,6 +178,7 @@ CREATE TABLE IF NOT EXISTS benchmark_model_scores (
   fast                   REAL,
   cost                   REAL,
   speed                  REAL,
+  eco                    REAL,
   context                REAL,
   vision                 REAL,
   tools                  REAL,

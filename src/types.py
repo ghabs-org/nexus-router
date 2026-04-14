@@ -74,6 +74,7 @@ class ModelScore:
     model_preference_centered_score: Optional[float] = None
     cost: float = 0.0
     speed: float = 0.0
+    eco: float = 0.0
     excluded: bool = False
     exclusion_reason: Optional[str] = None
 

@@ -73,6 +73,7 @@ SOURCE_WEIGHTS: dict[str, float] = {
     "vellum": 0.9,
     "bfcl": 1.0,
     "mgsm": 1.0,
+    "hf_leaderboard": 0.8,
 }
 
 FETCH_RETRY_DELAYS = (1.0, 2.0, 4.0)
@@ -668,6 +669,24 @@ def _map_public_model_name(model_name: str) -> Optional[str]:
         "gpt 5.4": "openai-codex/gpt-5.4",
         "gpt-5.4-mini": "openai-codex/gpt-5.4-mini",
         "gpt 5.4 mini": "openai-codex/gpt-5.4-mini",
+        "claude-3-sonnet": "github-copilot/claude-sonnet-3",
+        "claude 3 sonnet": "github-copilot/claude-sonnet-3",
+        "devstral 2": "nvidia/mistralai/devstral-2-123b-instruct-2512",
+        "devstral-2": "nvidia/mistralai/devstral-2-123b-instruct-2512",
+        "mistral large 3": "nvidia/mistralai/mistral-large-3-675b-instruct-2512",
+        "mistral-large-3": "nvidia/mistralai/mistral-large-3-675b-instruct-2512",
+        "kimi k2 instruct": "nvidia/moonshotai/kimi-k2-instruct-0905",
+        "kimi-k2-instruct": "nvidia/moonshotai/kimi-k2-instruct-0905",
+        "kimi k2.5": "nvidia/moonshotai/kimi-k2.5",
+        "kimi-k2.5": "nvidia/moonshotai/kimi-k2.5",
+        "qwen 3.6 plus": "openrouter/qwen/qwen3.6-plus",
+        "qwen3.6-plus": "openrouter/qwen/qwen3.6-plus",
+        "gpt-oss 20b": "openai/gpt-oss-20b",
+        "gpt-oss-20b": "openai/gpt-oss-20b",
+        "llama 3.3 70b instruct": "meta/llama-3.3-70b-instruct",
+        "llama-3.3-70b-instruct": "meta/llama-3.3-70b-instruct",
+        "llama 3.3 70b instruct:free": "meta/llama-3.3-70b-instruct:free",
+        "llama-3.3-70b-instruct:free": "meta/llama-3.3-70b-instruct:free",
     }
     if key in alias_map:
         return alias_map[key]
@@ -920,6 +939,69 @@ def fetch_bfcl() -> dict[str, dict]:
     return {}
 
 
+
+def fetch_hf_leaderboard() -> dict[str, dict]:
+    """Fetch approximate efficiency scores from a curated Hugging Face model map.
+
+    This avoids broad catalog scans/rate limits. Eco score is a conservative
+    proxy derived from model/storage size: smaller models score higher.
+    """
+    curated = {
+        "nvidia/moonshotai/kimi-k2-instruct-0905": "moonshotai/Kimi-K2-Instruct",
+        "nvidia/moonshotai/kimi-k2.5": "moonshotai/Kimi-K2.5",
+        "nvidia/openai/gpt-oss-20b": "openai/gpt-oss-20b",
+        "openrouter/meta-llama/llama-3.3-70b-instruct:free": "meta-llama/Llama-3.3-70B-Instruct",
+        "nvidia/meta/llama-3.3-70b-instruct": "meta-llama/Llama-3.3-70B-Instruct",
+        "nvidia/meta/llama-3.1-8b-instruct": "meta-llama/Llama-3.1-8B-Instruct",
+        "nvidia/microsoft/phi-3.5-mini-instruct": "microsoft/Phi-3.5-mini-instruct",
+        "openrouter/qwen/qwen3.6-plus": "Qwen/Qwen3-32B",
+        "nvidia/mistralai/mistral-large-3-675b-instruct-2512": "mistralai/Mistral-Small-24B-Instruct-2501",
+        "nvidia/mistralai/devstral-2-123b-instruct-2512": "mistralai/Devstral-Small-2507",
+    }
+
+    def _eco_from_size_gb(size_gb: float) -> float:
+        clamped = max(0.1, min(size_gb, 500.0))
+        eco_score = (500.0 - clamped) / (500.0 - 0.1)
+        return max(0.0, min(1.0, eco_score))
+
+    result: dict[str, dict] = {}
+    for model_id, hf_repo in curated.items():
+        url = f'https://huggingface.co/api/models/{hf_repo}'
+        try:
+            payload = _fetch_json(url, timeout=20)
+        except Exception as e:
+            print(f"    hf_leaderboard: skip {model_id} ({hf_repo}) fetch failed: {e}")
+            continue
+        size_bytes = None
+        st = payload.get('safetensors') or {}
+        if isinstance(st, dict):
+            size_bytes = st.get('total')
+        if not size_bytes:
+            size_bytes = payload.get('usedStorage')
+        if not size_bytes:
+            print(f"    hf_leaderboard: skip {model_id} ({hf_repo}) no size metadata")
+            continue
+        try:
+            size_gb = float(size_bytes) / (1024.0 ** 3)
+        except Exception:
+            continue
+        result[model_id] = {
+            '_source': 'hf_leaderboard',
+            '_updated_at': TODAY,
+            'eco': round(_eco_from_size_gb(size_gb), 4),
+            '_metadata': {
+                'hf_model_repo': hf_repo,
+                'model_size_gb': round(size_gb, 4),
+                'source_kind': 'hf-model-api-curated',
+            },
+        }
+    if result:
+        print(f"    hf_leaderboard: produced {len(result)} curated eco rows")
+    else:
+        print('    hf_leaderboard: no curated eco rows produced')
+    return result
+
+
 def fetch_mgsm() -> dict[str, dict]:
     """
     Fetch multilingual scores from MGSM or similar.
@@ -950,6 +1032,7 @@ SOURCES = {
     "vl":        ("vellum",             fetch_vellum),
     "bfcl":      ("bfcl",               fetch_bfcl),
     "mgsm":      ("mgsm",               fetch_mgsm),
+    "hf_leaderboard": ("hf_leaderboard", fetch_hf_leaderboard),
 }
 
 ALL_SOURCES = list(SOURCES.keys())
@@ -957,7 +1040,7 @@ ALL_SOURCES = list(SOURCES.keys())
 
 # ── Merge logic ───────────────────────────────────────────────────────────────
 
-SCORE_DIMS = ["coding", "review", "reasoning", "summarize", "fast", "cost",
+SCORE_DIMS = ["coding", "review", "reasoning", "summarize", "fast", "cost", "eco",
               "context", "vision", "tools", "multilingual"]
 
 

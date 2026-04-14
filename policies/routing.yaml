@@ -116,6 +116,18 @@ routing:
       - model: openai-codex/gpt-5.4-mini
         priority: 4
 
+  eco:
+    description: "Environmentally friendly, efficient, small-footprint models"
+    candidates:
+      - model: google-gemini-cli/gemini-3-flash-preview
+        priority: 1
+      - model: openai-codex/gpt-5.4-mini
+        priority: 2
+      - model: google-gemini-cli/gemini-2.5-flash
+        priority: 3
+      - model: github-copilot/gpt-5.4-mini
+        priority: 4
+
 # Scoring formula weights
 scoring:
   weights:

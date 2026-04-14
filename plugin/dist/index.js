@@ -20,7 +20,7 @@ const DEFAULT_COST = "balanced";
 const PLUGIN_VERSION = "0.1.0";
 const RECENT_MESSAGE_TTL_MS = 5 * 60 * 1000;
 const AUTO_ESCALATE_CONFIDENCE = 0.70;
-const ROUTE_MODES = new Set(["auto", "balanced", "fast", "reasoning", "off"]);
+const ROUTE_MODES = new Set(["auto", "balanced", "fast", "reasoning", "eco", "free", "off"]);
 const ROUTE_DEDUPE_WINDOW_MS = 20_000;
 const ROUTE_BURST_WINDOW_MS = 5_000;
 const ROUTE_BURST_MAX_CALLS = 4;
@@ -127,7 +127,7 @@ function rememberRecentUserMessage(sessionKey, text) {
 }
 // Route mode is an explicit user preference. Keep it sticky for the life of the
 // session/conversation instead of silently expiring back to the default.
-const STICKY_ROUTE_MODES = new Set(["auto", "balanced", "fast", "reasoning", "off"]);
+const STICKY_ROUTE_MODES = new Set(["auto", "balanced", "fast", "reasoning", "eco", "free", "off"]);
 export function isShortFollowUpForContextualRouting(text) {
     const trimmed = (text ?? "").trim();
     if (!trimmed)
@@ -234,13 +234,6 @@ function resolveSenderForSession(sessionKey) {
         return null;
     }
     return { senderId: entry.senderId, channelId: entry.channelId };
-}
-function resolveDirectSenderFallback(ctx) {
-    const rawSenderId = ctx?.senderId ?? ctx?.metadata?.sender_id ?? ctx?.inboundMeta?.sender_id ?? ctx?.messageMeta?.sender?.id ?? null;
-    const rawChannelId = ctx?.channelId ?? ctx?.metadata?.chat_id ?? ctx?.inboundMeta?.chat_id ?? ctx?.messageMeta?.chat?.id ?? rawSenderId;
-    const senderId = rawSenderId != null ? String(rawSenderId).trim() : null;
-    if (!senderId) return null;
-    return { senderId, channelId: rawChannelId != null ? String(rawChannelId).trim() : senderId, at: Date.now() };
 }
 function rememberFeedbackPrompt(decisionId) {
     const trimmed = String(decisionId ?? "").trim();
@@ -388,9 +381,9 @@ async function sendTelegramFeedbackCard(api, targetSenderId, decision, sourceTag
             source_channel: "telegram",
             source_message_preview: opts?.messagePreview,
         };
-        const runtimePluginConfig = api?.config?.plugins?.entries?.["nexus-router"]?.config ?? {};
+        const runtimePluginConfig = (api?.config?.plugins?.entries?.["nexus-router"]?.config ?? {});
         const loadedConfig = api?.config?.loadConfig?.();
-        const livePluginConfig = loadedConfig?.plugins?.entries?.["nexus-router"]?.config ?? {};
+        const livePluginConfig = (loadedConfig?.plugins?.entries?.["nexus-router"]?.config ?? {});
         const bridgeBearerToken = livePluginConfig.bridgeBearerToken ?? runtimePluginConfig.bridgeBearerToken;
         const bridgeHeaders = {
             "Content-Type": "application/json",
@@ -398,9 +391,7 @@ async function sendTelegramFeedbackCard(api, targetSenderId, decision, sourceTag
         if (bridgeBearerToken) {
             bridgeHeaders["Authorization"] = `Bearer ${bridgeBearerToken}`;
         }
-        const bridgeBaseUrl = livePluginConfig.bridgeUrl
-            ?? runtimePluginConfig.bridgeUrl
-            ?? DEFAULT_BRIDGE_URL;
+        const bridgeBaseUrl = livePluginConfig.bridgeUrl ?? runtimePluginConfig.bridgeUrl ?? DEFAULT_BRIDGE_URL;
         const bridgeRes = await fetch(`${bridgeBaseUrl}/api/v1/router/feedback-card`, {
             method: "POST",
             headers: bridgeHeaders,
@@ -742,7 +733,7 @@ function takeRecentConversationRouteMode(conversationKey) {
 }
 function parseRouteModeFromText(text) {
     const lowered = text.trim().toLowerCase();
-    const match = lowered.match(/^(?:⚙️\s*)?routing mode(?:\s*(?:set to|:|=)\s*|\s+)(auto|balanced|fast|reasoning|off)(?:\s*\([^)]*\))?\.?$/i);
+    const match = lowered.match(/^(?:⚙️\s*)?routing mode(?:\s*(?:set to|:|=)\s*|\s+)(auto|balanced|fast|reasoning|eco|free|off)(?:\s*\([^)]*\))?\.?$/i);
     if (match?.[1]) {
         const mode = match[1].toLowerCase();
         if (ROUTE_MODES.has(mode)) {
@@ -922,6 +913,10 @@ function resolveCostProfileForRouteMode(mode, defaultProfile) {
             return "cheap";
         case "reasoning":
             return "premium";
+        case "eco":
+            return "cheap";
+        case "free":
+            return "cheap";
         case "off":
             return defaultProfile;
     }
@@ -940,6 +935,8 @@ function buildRouteInteractiveReply(mode, scopeLabel = "this conversation") {
                         { label: "Balanced", value: "/route balanced", style: "secondary" },
                         { label: "Fast", value: "/route fast", style: "success" },
                         { label: "Reasoning", value: "/route reasoning", style: "secondary" },
+                        { label: "Eco", value: "/route eco", style: "secondary" },
+                        { label: "Free", value: "/route free", style: "secondary" },
                         { label: "Off", value: "/route off", style: "danger" },
                     ],
                 },
@@ -961,17 +958,21 @@ function buildRouteHelpText(currentMode) {
         `- balanced: quality-first default`,
         `- fast: stronger cost bias; prefers cheaper/faster models`,
         `- reasoning: stronger-model bias for planning/trade-off tasks`,
+        `- eco: bias toward more efficient/lower-footprint models`,
+        `- free: only consider models explicitly marked is_free=true`,
         `- off: bypass router overrides`,
         ``,
         `Commands:`,
         `- /route status → show current session mode`,
         `- /route last → show last routing decision (short form)`,
         `- /route explain → show richer diagnostics (context + escalation + classifier source)`,
-        `- /route compare [fast balanced reasoning] → compare modes on the last prompt`,
+        `- /route compare [fast balanced reasoning eco free] → compare modes on the last prompt`,
         ``,
         `Examples:`,
         `- /route fast`,
         `- /route reasoning`,
+        `- /route eco`,
+        `- /route free`,
         `- /route compare`,
     ].join("\n");
 }
@@ -1165,7 +1166,7 @@ export default definePluginEntry({
                 if (arg.startsWith("compare")) {
                     const last = resolveLastDecisionForContext(ctx, conversationKey);
                     const modeList = rawArgs.split(/\s+/).slice(1).map((m) => m.toLowerCase()).filter(Boolean);
-                    const compareModes = modeList.length ? modeList : ["fast", "balanced", "reasoning"];
+                    const compareModes = modeList.length ? modeList : ["fast", "balanced", "reasoning", "eco", "free"];
                     return buildRouteCompareReply(routerUrl, last, compareModes, timeoutMs);
                 }
                 if (!normalized) {
@@ -1274,7 +1275,7 @@ export default definePluginEntry({
                 await debugLog(`[hook-result] source=${source} source_tag=${sourceTag} route=${routeMode} bypassed reason=cron`);
                 return;
             }
-            if (ctx?.trigger === "heartbeat" || ctx?.trigger === "memory") {
+            if (ctx?.trigger === "heartbeat" || (ctx?.trigger === "memory" && source !== "raw-user")) {
                 if (sessionRef) {
                     recentRouteCacheBySession.set(sessionRef, { text: dedupeText, mode: routeMode, at: Date.now() });
                 }
@@ -1329,7 +1330,7 @@ export default definePluginEntry({
                         selectedProvider: shadowDecision.selected_provider,
                         sessionKey: ctx.sessionKey,
                         shadowMode: true,
-                        targetSenderId: (resolveSenderForSession(ctx.sessionKey ?? sessionRef) ?? (ctx.senderId ? { senderId: String(ctx.senderId) } : undefined) ?? resolveDirectSenderFallback(ctx))?.senderId,
+                        targetSenderId: (resolveSenderForSession(ctx.sessionKey ?? sessionRef) ?? (ctx.senderId ? { senderId: String(ctx.senderId) } : undefined))?.senderId,
                     });
                 }
                 await debugLog(`[hook-result] source=${source} source_tag=${sourceTag} route=${routeMode} shadow decision=${shadowDecision.selected_model} task=${shadowDecision.task_type} confidence=${shadowDecision.confidence.toFixed(2)} score=${shadowDecision.score.toFixed(3)}`);
@@ -1390,6 +1391,17 @@ export default definePluginEntry({
                     return;
                 }
             }
+            else {
+                const directResult = await routeRequest(routerUrl, routingText, firstPassCostProfile, timeoutMs, routeMode, conversationContext, shouldUseLlmClassifier, source, sourceTag, "route");
+                decision = directResult.decision;
+                if (!decision) {
+                    const failure = describeRouteRequestFailure(directResult, timeoutMs);
+                    await debugLog(`[hook-result] source=${source} source_tag=${sourceTag} route=${routeMode} ${failure}`);
+                    if (debugMode)
+                        console.warn(`[nexus-router] ${failure}, using default model`);
+                    return;
+                }
+            }
             if (!decision) {
                 if (sessionRef) {
                     recentRouteCacheBySession.set(sessionRef, { text: dedupeText, mode: routeMode, at: Date.now() });
@@ -1428,7 +1440,7 @@ export default definePluginEntry({
                     selectedModel: decision.selected_model,
                 });
             }
-            const sender = resolveSenderForSession(ctx.sessionKey ?? sessionRef) ?? (ctx.senderId ? { senderId: String(ctx.senderId), channelId: ctx.channelId ? String(ctx.channelId) : undefined, at: Date.now() } : null) ?? resolveDirectSenderFallback(ctx);
+            const sender = resolveSenderForSession(ctx.sessionKey ?? sessionRef) ?? (ctx.senderId ? { senderId: String(ctx.senderId), channelId: ctx.channelId ? String(ctx.channelId) : undefined } : null);
             if (decision.decision_id) {
                 if (sender) {
                     await sendTelegramFeedbackCard(api, sender.senderId, decision, sourceTag, { messagePreview: routingText });

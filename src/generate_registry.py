@@ -39,6 +39,31 @@ except ImportError:
 FAMILIES_FILE    = POLICIES_ROOT / "families.yaml"
 OVERRIDES_FILE   = POLICIES_ROOT / "overrides.yaml"
 
+COPILOT_INCLUDED_FREE_MODELS = {
+    "gpt-5-mini",
+    "gpt-4.1",
+    "gpt-4o",
+}
+
+
+def resolve_is_free(provider: str, model_id: str, key: str, manual: dict | None) -> bool | None:
+    if isinstance(manual, dict) and "is_free" in manual:
+        value = manual.get("is_free")
+        if value is None:
+            return None
+        return bool(value)
+
+    normalized_key = str(key or "").strip().lower()
+    normalized_model_id = str(model_id or "").strip().lower()
+
+    if provider == "nvidia":
+        return True
+    if provider == "openrouter" and ":free" in normalized_key:
+        return True
+    if provider == "github-copilot" and normalized_model_id in COPILOT_INCLUDED_FREE_MODELS:
+        return True
+    return None
+
 
 def load_json(path: Path) -> dict:
     raw = path.read_text()
@@ -70,7 +95,7 @@ def extract_provider(key: str) -> tuple[str, str]:
 def _benchmark_entry_is_usable(entry: dict) -> bool:
     if not entry:
         return False
-    if not any(k in entry for k in ("coding", "review", "reasoning", "summarize", "fast", "cost", "context", "vision", "tools", "multilingual")):
+    if not any(k in entry for k in ("coding", "review", "reasoning", "summarize", "fast", "cost", "eco", "context", "vision", "tools", "multilingual")):
         return False
     source = str(entry.get("_source") or "").strip()
     if not source or source == "catalog-only":
@@ -133,6 +158,7 @@ def resolve_scores(
         "summarize": 0.70,
         "fast": 0.70,
         "cost": 0.70,
+        "eco": 0.70,
         "context": 0.70,
         "vision": 0.50,
         "tools": 0.70,
@@ -249,8 +275,12 @@ def normalize(
         # Apply manual overrides
         manual = (overrides.get("overrides") or {}).get(key, {})
         for k, v in manual.items():
+            if k == "is_free":
+                continue
             scores[k] = v
             score_source[k] = "override:manual"
+
+        features["is_free"] = resolve_is_free(provider, model_id, key, manual)
 
         models.append({
             "id": key,

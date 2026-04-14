@@ -24,7 +24,7 @@ except ImportError:
 from .types import ClassifierOutput, PreSignals, RoutingDecision
 from .health import load_provider_health
 from .scorer import score_models
-from .db import ensure_schema, load_model_stats, write_decision
+from .db import ensure_schema, load_model_stats, load_model_metadata, write_decision
 from .paths import REGISTRY_FILE, POLICIES_ROOT
 
 ROOT = Path(__file__).parent.parent
@@ -123,6 +123,21 @@ class Router:
         elif effective_route_mode == "balanced":
             # balanced preserves classifier cost_profile as provided by caller
             pass
+        elif effective_route_mode == "eco":
+            # Explicit mode should dominate: force eco/efficient routing behavior.
+            effective_classifier = replace(
+                effective_classifier,
+                task_type="eco",
+                cost_profile="eco",
+            )
+        elif effective_route_mode == "free":
+            # Explicit mode should dominate: prefer cheap/free routing while the
+            # scorer hard-filters to features.is_free == True.
+            effective_classifier = replace(
+                effective_classifier,
+                task_type="fast_utility",
+                cost_profile="cheap",
+            )
 
         # Load fresh health and learned stats on each call
         # (cheap reads; health file is small, DB lookup is indexed)
@@ -136,9 +151,23 @@ class Router:
             if self._use_routing_policy
             else None
         )
+        live_registry = self._registry
+        if effective_route_mode == "free":
+            metadata = load_model_metadata()
+            if metadata:
+                live_registry = []
+                for model in self._registry:
+                    model_copy = dict(model)
+                    features = dict(model_copy.get("features") or {})
+                    override = metadata.get(model_copy.get("id", ""), {})
+                    if "is_free" in override:
+                        features["is_free"] = override.get("is_free")
+                    model_copy["features"] = features
+                    live_registry.append(model_copy)
+
         scored = score_models(
             classifier=effective_classifier,
-            models=self._registry,
+            models=live_registry,
             provider_health=provider_health,
             learned_stats=learned_stats,
             policy_weights=policy_weights,
@@ -159,7 +188,7 @@ class Router:
         fallbacks = _build_fallback_chain(eligible, primary_provider=primary.provider, limit=5)
 
         reason = _build_reason(primary, classifier, effective_classifier, pre_signals)
-        if effective_route_mode in {"auto", "balanced", "fast", "reasoning", "off"}:
+        if effective_route_mode in {"auto", "balanced", "fast", "reasoning", "eco", "free", "off"}:
             reason.append(f"route mode: {effective_route_mode}")
 
         decision = RoutingDecision(

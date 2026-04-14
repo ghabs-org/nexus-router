@@ -6,6 +6,7 @@ Usage:
   python -m src.cli route --task coding --complexity high
   python -m src.cli route --task vision --has-image
   python -m src.cli route --task summarization --long-context
+  python -m src.cli route --task eco
   python -m src.cli explain
   python -m src.cli stats
 """
@@ -102,7 +103,7 @@ def main():
     p_route = sub.add_parser("route", help="Route a request to the best model")
     p_route.add_argument("--task", default="general_chat",
                          choices=["coding","code_review","reasoning","summarization",
-                                  "fast_utility","long_context","vision","general_chat"])
+                                  "fast_utility","long_context","vision","general_chat","eco"])
     p_route.add_argument("--subtype", default=None)
     p_route.add_argument("--complexity", default="medium", choices=["low","medium","high"])
     p_route.add_argument("--cost-profile", default="balanced", choices=["cheap","balanced","premium"])

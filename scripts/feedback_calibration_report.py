@@ -5,6 +5,7 @@ Read-only utility for nightly checks:
 - feedback volume
 - wrong-rate by task
 - model preference signal by task/model
+- optional per-source breakdown
 
 Does NOT mutate router state.
 """
@@ -25,8 +26,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--db", default=str(DB_PATH), help="Path to router.sqlite")
     parser.add_argument(
         "--source-type",
-        default="standalone",
-        help="Filter to routing_decisions.source_type (default: standalone)",
+        default="raw-user",
+        help="Optional filter to routing_decisions.source_type (default: raw-user)",
     )
     parser.add_argument(
         "--mode",
@@ -35,6 +36,91 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--limit", type=int, default=5000, help="Max joined feedback rows to inspect")
     return parser.parse_args()
+
+
+def _new_task_stats() -> defaultdict[str, dict[str, int]]:
+    return defaultdict(lambda: {"total": 0, "wrong": 0, "correct": 0, "unlabelled": 0})
+
+
+def _new_model_task() -> defaultdict[str, dict[str, object]]:
+    return defaultdict(lambda: {"samples": 0, "score_sum": 0.0, "last_feedback_at": ""})
+
+
+def _ingest_row(r: sqlite3.Row, task_stats, model_task) -> None:
+    task = r["task_type"] or "unknown"
+    model = r["model_id"] or "unknown"
+    verdict = (r["verdict"] or "").strip().lower()
+    model_verdict = (r["model_verdict"] or "").strip().lower()
+
+    task_stats[task]["total"] += 1
+    if verdict == "wrong":
+        task_stats[task]["wrong"] += 1
+    elif verdict == "correct":
+        task_stats[task]["correct"] += 1
+
+    # Feedback rows without explicit model_verdict are treated as unlabelled for
+    # model-task signal purposes, matching the previous report semantics.
+    is_unlabelled = not model_verdict
+    if is_unlabelled:
+        task_stats[task]["unlabelled"] += 1
+
+    if model_verdict == "good":
+        score = 1.0
+    elif model_verdict == "neutral":
+        score = 0.4
+    elif model_verdict in {"bad", "too_cheap", "too_powerful"}:
+        score = 0.0
+    else:
+        score = 0.75 if verdict == "correct" else 0.0
+
+    if not is_unlabelled:
+        key = f"{task}::{model}"
+        model_task[key]["samples"] += 1
+        model_task[key]["score_sum"] += score
+        created_at = str(r["created_at"] or "")
+        if created_at and created_at > str(model_task[key].get("last_feedback_at") or ""):
+            model_task[key]["last_feedback_at"] = created_at
+
+
+def _finalize_summary(task_stats, model_task, *, feedback_total: int) -> dict:
+    by_task = []
+    total_unlabelled = 0
+    for task, s in sorted(task_stats.items(), key=lambda kv: kv[1]["total"], reverse=True):
+        total = max(1, s["total"])
+        total_unlabelled += s["unlabelled"]
+        by_task.append(
+            {
+                "task": task,
+                "samples": s["total"],
+                "wrong_rate": round(s["wrong"] / total, 4),
+                "correct_rate": round(s["correct"] / total, 4),
+                "unlabelled": s["unlabelled"],
+            }
+        )
+
+    by_model_task = []
+    for key, s in sorted(model_task.items(), key=lambda kv: kv[1]["samples"], reverse=True):
+        task, model = key.split("::", 1)
+        samples = max(1, s["samples"])
+        mean_score = s["score_sum"] / samples
+        centered = (mean_score - 0.5) * 2.0
+        by_model_task.append(
+            {
+                "task": task,
+                "model": model,
+                "samples": s["samples"],
+                "mean_score": round(mean_score, 4),
+                "centered_signal": round(centered, 4),
+                "last_feedback_at": s.get("last_feedback_at") or None,
+            }
+        )
+
+    return {
+        "feedback_total": int(feedback_total or 0),
+        "unlabelled_feedback_count": total_unlabelled,
+        "task_summary": by_task,
+        "model_task_signals_top": by_model_task[:50],
+    }
 
 
 def main() -> None:
@@ -47,8 +133,9 @@ def main() -> None:
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
 
-    task_stats = defaultdict(lambda: {"total": 0, "wrong": 0, "correct": 0, "unlabelled": 0})
-    model_task = defaultdict(lambda: {"samples": 0, "score_sum": 0.0, "last_feedback_at": ""})
+    overall_task_stats = _new_task_stats()
+    overall_model_task = _new_model_task()
+    source_buckets: dict[str, dict[str, object]] = {}
 
     decision_columns = {row["name"] for row in conn.execute("PRAGMA table_info(routing_decisions)").fetchall()}
     mode_expr = (
@@ -108,78 +195,41 @@ def main() -> None:
     ).fetchall()
 
     for r in rows:
-        task = r["task_type"] or "unknown"
-        model = r["model_id"] or "unknown"
-        verdict = (r["verdict"] or "").strip().lower()
-        model_verdict = (r["model_verdict"] or "").strip().lower()
+        _ingest_row(r, overall_task_stats, overall_model_task)
 
-        task_stats[task]["total"] += 1
-        if verdict == "wrong":
-            task_stats[task]["wrong"] += 1
-        elif verdict == "correct":
-            task_stats[task]["correct"] += 1
-
-        # Track whether this feedback row has explicit labels
-        preferred_model = str(r["model_id"] or "").strip()
-        has_explicit_label = bool(
-            preferred_model and preferred_model != (r["model_id"] or "")  # always False (same field)
-        ) or bool(model_verdict)
-        # Re-derive: unlabelled = no model_verdict and no preferred_model on the feedback row
-        # (we can't distinguish here since the query already resolves model_id;
-        #  use model_verdict as the primary signal)
-        is_unlabelled = not model_verdict
-        if is_unlabelled:
-            task_stats[task]["unlabelled"] += 1
-
-        # Keep scoring aligned with db.py aggregation semantics.
-        # Only include in model_task signals when model_verdict is present (explicit signal).
-        if model_verdict == "good":
-            score = 1.0
-        elif model_verdict == "neutral":
-            score = 0.4
-        elif model_verdict in {"bad", "too_cheap", "too_powerful"}:
-            score = 0.0
-        else:
-            score = 0.75 if verdict == "correct" else 0.0
-
-        # Only aggregate model/task preference signals for explicitly labelled rows
-        if not is_unlabelled:
-            key = f"{task}::{model}"
-            model_task[key]["samples"] += 1
-            model_task[key]["score_sum"] += score
-            created_at = str(r["created_at"] or "")
-            if created_at and created_at > str(model_task[key].get("last_feedback_at") or ""):
-                model_task[key]["last_feedback_at"] = created_at
-
-    by_task = []
-    total_unlabelled = 0
-    for task, s in sorted(task_stats.items(), key=lambda kv: kv[1]["total"], reverse=True):
-        total = max(1, s["total"])
-        total_unlabelled += s["unlabelled"]
-        by_task.append(
+        source_type = str(r["source_type"] or "standalone")
+        bucket = source_buckets.setdefault(
+            source_type,
             {
-                "task": task,
-                "samples": s["total"],
-                "wrong_rate": round(s["wrong"] / total, 4),
-                "correct_rate": round(s["correct"] / total, 4),
-                "unlabelled": s["unlabelled"],
-            }
+                "task_stats": _new_task_stats(),
+                "model_task": _new_model_task(),
+                "feedback_total": 0,
+                "latest_feedback_at": None,
+            },
         )
+        bucket["feedback_total"] += 1
+        created_at = str(r["created_at"] or "") or None
+        if created_at and (not bucket["latest_feedback_at"] or created_at > bucket["latest_feedback_at"]):
+            bucket["latest_feedback_at"] = created_at
+        _ingest_row(r, bucket["task_stats"], bucket["model_task"])
 
-    by_model_task = []
-    for key, s in sorted(model_task.items(), key=lambda kv: kv[1]["samples"], reverse=True):
-        task, model = key.split("::", 1)
-        samples = max(1, s["samples"])
-        mean_score = s["score_sum"] / samples
-        centered = (mean_score - 0.5) * 2.0
-        by_model_task.append(
+    overall = _finalize_summary(overall_task_stats, overall_model_task, feedback_total=int(total_feedback or 0))
+
+    source_summary = []
+    by_source = {}
+    for source_type, bucket in sorted(source_buckets.items(), key=lambda kv: kv[1]["feedback_total"], reverse=True):
+        finalized = _finalize_summary(
+            bucket["task_stats"],
+            bucket["model_task"],
+            feedback_total=int(bucket["feedback_total"] or 0),
+        )
+        finalized["latest_feedback_at"] = bucket["latest_feedback_at"]
+        by_source[source_type] = finalized
+        source_summary.append(
             {
-                "task": task,
-                "model": model,
-                "samples": s["samples"],
-                "mean_score": round(mean_score, 4),
-                "centered_signal": round(centered, 4),
-                "last_feedback_at": s.get("last_feedback_at") or None,
+                "source_type": source_type,
+                "feedback_total": finalized["feedback_total"],
+                "latest_feedback_at": bucket["latest_feedback_at"],
             }
         )
 
@@ -192,11 +242,13 @@ def main() -> None:
             "limit": args.limit,
         },
         "feedback_samples": len(rows),
-        "feedback_total": int(total_feedback or 0),
+        "feedback_total": overall["feedback_total"],
         "orphan_feedback_excluded": int((total_feedback or 0) - len(rows)),
-        "unlabelled_feedback_count": total_unlabelled,
-        "task_summary": by_task,
-        "model_task_signals_top": by_model_task[:50],
+        "unlabelled_feedback_count": overall["unlabelled_feedback_count"],
+        "task_summary": overall["task_summary"],
+        "model_task_signals_top": overall["model_task_signals_top"],
+        "source_summary": source_summary,
+        "by_source": by_source,
     }
     print(json.dumps(report, indent=2))
 

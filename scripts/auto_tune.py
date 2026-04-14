@@ -176,6 +176,7 @@ def apply_adjustments(adjustments: Dict[str, Dict[str, float]], args) -> Dict[st
 
 def main(argv=None):
     p = argparse.ArgumentParser()
+    p.set_defaults(apply=False, guarded_apply=False)
     p.add_argument("--dry-run", dest="apply", action="store_false", help="preview only (default)")
     p.add_argument("--apply", dest="apply", action="store_true", help="apply changes (dangerous)")
     p.add_argument("--guarded-apply", dest="guarded_apply", action="store_true", help="attempt a guarded apply: gates must pass to persist")
@@ -256,27 +257,31 @@ def main(argv=None):
         if num_changes > args.max_changes:
             gates_pass = False
             reasons.append(f"num_changes ({num_changes}) > max_changes ({args.max_changes})")
-        # simple critical drift heuristic: if report has key 'critical_drift' True or any centered_signal abs>0.9
-        critical = report.get("critical_drift", False)
-        if not critical:
-            for row in report.get("model_task_signals_top", []):
-                if abs(float(row.get("centered_signal", 0.0))) > 0.9:
-                    critical = True
-                    break
+        # Guarded apply should only block on an explicit upstream critical-drift signal.
+        # Do not infer critical drift from centered_signal alone: in this dataset,
+        # explicit model feedback is often one-sided negative, which legitimately
+        # produces centered_signal=-1.0 for many rows and would otherwise block
+        # every bounded nightly tuning run.
+        critical = bool(report.get("critical_drift", False))
         if critical:
             gates_pass = False
             reasons.append("critical drift detected")
 
     # decide whether to actually apply
-    will_apply = args.apply or (args.guarded_apply and gates_pass)
+    will_apply = bool(args.apply or (args.guarded_apply and gates_pass))
 
-    result = apply_adjustments(adjustments, args)
+    class _ApplyArgs:
+        def __init__(self, base_args, apply: bool):
+            self.apply = apply
+            self.cooldown_days = base_args.cooldown_days
+
+    result = apply_adjustments(adjustments, _ApplyArgs(args, will_apply))
 
     # prepare concise summary for notifications
     recommendations_count = sum(len(m) for m in adjustments.values())
     applied_count = len(result.get("applied", []))
     snapshot_path = None
-    if args.apply and applied_count:
+    if will_apply and applied_count:
         # last snapshot entry in journal could be parsed, but we recorded in apply_adjustments
         # For simplicity, list backups dir for latest
         if SNAP_DIR.exists():
