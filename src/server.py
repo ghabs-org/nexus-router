@@ -362,7 +362,7 @@ class RouterHandler(BaseHTTPRequestHandler):
             # Apply free-only filter: when the plugin sends free_only=true, override
             # route_mode to 'free' so the scorer hard-filters to is_free==true models.
             free_only = bool(body.get('free_only') or False)
-            if free_only and normalized_route_mode not in {'off', 'free'}:
+            if free_only and normalized_route_mode not in {'off', 'free', 'reasoning', 'fast', 'eco'}:
                 route_mode = 'free'
                 normalized_route_mode = 'free'
 
