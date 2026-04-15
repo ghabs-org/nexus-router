@@ -99,51 +99,45 @@ class Router:
         pre_signals  = pre_signals or PreSignals()
         nexus_context = nexus_context or {}
 
-        # Start with the raw classifier; only apply the light-chat downgrade
-        # when the caller has NOT explicitly requested 'reasoning' mode.
-        effective_classifier = classifier
-        effective_route_mode = (route_mode or "auto").strip().lower()
-        if effective_route_mode != "reasoning":
-            effective_classifier = _adapt_classifier_for_light_chat(classifier, pre_signals)
+        # 1. Determine effective route mode
+        normalized_route_mode = str(route_mode or "auto").strip().lower()
 
-        if effective_route_mode == "reasoning":
-            # Explicit mode should dominate: force reasoning-first routing behavior.
+        # 2. Determine base classifier (explicitly requested or fallback)
+        effective_classifier = classifier
+
+        # 3. Apply explicit route mode precedence over classifier
+        if normalized_route_mode == "reasoning":
+            # Reasoning dominates: force reasoning-first behavior and skip light-chat downgrade
             effective_classifier = replace(
                 effective_classifier,
                 task_type="reasoning",
                 cost_profile="premium",
             )
-        elif effective_route_mode == "fast":
-            # Explicit mode should dominate: force fast/cheap routing behavior.
+        elif normalized_route_mode == "fast":
             effective_classifier = replace(
                 effective_classifier,
                 task_type="fast_utility",
                 cost_profile="cheap",
             )
-        elif effective_route_mode == "auto":
-            # Auto should mean: trust the classifier/task signal and let the
-            # scorer choose the most appropriate model overall.
-            # Do not remap cost_profile here; explicit modes (fast/reasoning)
-            # are the place for hard policy biasing.
-            pass
-        elif effective_route_mode == "balanced":
-            # balanced preserves classifier cost_profile as provided by caller
-            pass
-        elif effective_route_mode == "eco":
-            # Explicit mode should dominate: force eco/efficient routing behavior.
+        elif normalized_route_mode == "eco":
             effective_classifier = replace(
                 effective_classifier,
                 task_type="eco",
                 cost_profile="eco",
             )
-        elif effective_route_mode == "free":
-            # Explicit mode should dominate: prefer cheap/free routing while the
-            # scorer hard-filters to features.is_free == True.
+        elif normalized_route_mode == "free":
+            # If explicit 'free' mode (legacy/manual), map to cheap
             effective_classifier = replace(
                 effective_classifier,
                 task_type="fast_utility",
                 cost_profile="cheap",
             )
+        else:
+            # Auto/balanced: apply light-chat downgrade heuristics
+            effective_classifier = _adapt_classifier_for_light_chat(classifier, pre_signals)
+
+        # 4. Perform routing with hard-filtered free_only if requested
+        # (Router.score will handle the is_free filtering)
 
         # Load fresh health and learned stats on each call
         # (cheap reads; health file is small, DB lookup is indexed)
