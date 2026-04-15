@@ -1,0 +1,15 @@
+routing:
+  fast_utility:
+    preference_adjustments:
+      google-gemini-cli/gemini-2.5-flash: -0.03
+      google-gemini-cli/gemini-2.0-flash: -0.03
+      google-gemini-cli/gemini-3.1-pro-preview: -0.03
+      github-copilot/gpt-5.4-mini: -0.03
+  reasoning:
+    preference_adjustments:
+      google-gemini-cli/gemini-2.5-flash: -0.03
+      google-gemini-cli/gemini-3.1-pro-preview: -0.03
+  general_chat:
+    preference_adjustments:
+      google-gemini-cli/gemini-2.5-flash: -0.03
+      google-gemini-cli/gemini-2.0-flash: -0.03

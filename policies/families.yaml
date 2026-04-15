@@ -55,11 +55,6 @@ families:
         overrides:
           coding: 0.93
           tools: 0.91
-      - match: "gpt-5.3-codex-spark$"
-        overrides:
-          coding: 0.88
-          fast: 0.84
-          cost: 0.76
       - match: "gpt-5.2(-codex)?$"
         overrides:
           coding: 0.89
