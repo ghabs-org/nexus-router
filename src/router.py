@@ -152,7 +152,7 @@ class Router:
             else None
         )
         live_registry = self._registry
-        if effective_route_mode == "free":
+        if normalized_route_mode == "free":
             metadata = load_model_metadata()
             if metadata:
                 live_registry = []
