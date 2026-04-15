@@ -172,7 +172,7 @@ class Router:
             learned_stats=learned_stats,
             policy_weights=policy_weights,
             routing_policy=routing_policy,
-            route_mode=effective_route_mode,
+            route_mode=normalized_route_mode,
         )
 
         eligible = [s for s in scored if not s.excluded]
@@ -188,8 +188,8 @@ class Router:
         fallbacks = _build_fallback_chain(eligible, primary_provider=primary.provider, limit=5)
 
         reason = _build_reason(primary, classifier, effective_classifier, pre_signals)
-        if effective_route_mode in {"auto", "balanced", "fast", "reasoning", "eco", "free", "off"}:
-            reason.append(f"route mode: {effective_route_mode}")
+        if normalized_route_mode in {"auto", "balanced", "fast", "reasoning", "eco", "free", "off"}:
+            reason.append(f"route mode: {normalized_route_mode}")
 
         decision = RoutingDecision(
             task_type=effective_classifier.task_type,
@@ -224,7 +224,7 @@ class Router:
                 nexus_step_id=nexus_context.get("nexus_step_id"),
                 nexus_issue_id=nexus_context.get("nexus_issue_id"),
                 nexus_project=nexus_context.get("nexus_project"),
-                route_mode=effective_route_mode,
+                route_mode=normalized_route_mode,
                 mode=mode,
                 source_type=(source_type or 'standalone'),
                 source_tag=source_tag,
