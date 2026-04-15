@@ -100,10 +100,11 @@ class Router:
         nexus_context = nexus_context or {}
 
         
+        
         # 1. Determine effective route mode
         normalized_route_mode = str(route_mode or "auto").strip().lower()
 
-        # 2. Hard-force task based on explicit route_mode
+        # 2. Hard-force task based on explicit route_mode (precedence)
         if normalized_route_mode == "reasoning":
             effective_classifier = replace(classifier, task_type="reasoning", cost_profile="premium")
         elif normalized_route_mode == "fast":
