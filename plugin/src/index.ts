@@ -1440,7 +1440,9 @@ export default definePluginEntry({
     if (arg === "feedback") {
       const last = resolveLastDecisionForContext(ctx, conversationKey);
       if (!last || !last.decisionId) {
-        return { text: "No recent routing decision found. Send a message first, then use /route feedback to request a feedback card." };
+        const suppressed = isFeedbackSuppressed(ctx.sessionKey);
+        const statusText = suppressed ? 'Feedback cards are currently OFF for this session.' : 'Feedback cards are currently ON for this session.';
+        return { text: `No recent routing decision found. ${statusText} Send a message first, then use /route feedback to request a feedback card (or /route feedback on|off to toggle).` };
       }
       const sender = resolveSenderForSession(ctx.sessionKey) ?? (ctx.senderId ? { senderId: String(ctx.senderId) } : null);
       if (!sender?.senderId) {
