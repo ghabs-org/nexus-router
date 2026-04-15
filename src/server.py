@@ -358,6 +358,21 @@ class RouterHandler(BaseHTTPRequestHandler):
             )
 
             normalized_route_mode = str(route_mode or "auto").strip().lower()
+
+            # Apply free-only filter: when the plugin sends free_only=true, override
+            # route_mode to 'free' so the scorer hard-filters to is_free==true models.
+            free_only = bool(body.get('free_only') or False)
+            if free_only and normalized_route_mode not in {'off', 'free'}:
+                route_mode = 'free'
+                normalized_route_mode = 'free'
+
+
+# Apply free-only filter: when the plugin sends free_only=true, override
+# route_mode to "free" so the scorer hard-filters to is_free==true models.
+free_only = bool(body.get("free_only") or False)
+if free_only and normalized_route_mode not in {"off", "free"}:
+    route_mode = "free"
+    normalized_route_mode = "free"
             if classifier is None:
                 classifier = ClassifierOutput(
                     task_type="general_chat",
@@ -527,13 +542,14 @@ class RouterHandler(BaseHTTPRequestHandler):
             key = str(body.get("key") or "").strip()
             mode = str(body.get("mode") or "").strip().lower()
             scope = str(body.get("scope") or "conversation").strip().lower()
+            free_filter = bool(body.get("free_filter") or False)
             if not key:
                 _json_response(self, 400, {"error": "key required"})
                 return
             if mode not in {"auto", "balanced", "fast", "reasoning", "eco", "free", "off"}:
                 _json_response(self, 400, {"error": "mode must be auto|balanced|fast|reasoning|eco|free|off"})
                 return
-            set_route_mode_preference(key, mode, scope)
+            set_route_mode_preference(key, mode, scope, free_filter)
             pref = get_route_mode_preference(key, scope)
             _json_response(self, 200, {"ok": True, "preference": pref})
         except Exception as e:
