@@ -99,43 +99,22 @@ class Router:
         pre_signals  = pre_signals or PreSignals()
         nexus_context = nexus_context or {}
 
+        
         # 1. Determine effective route mode
         normalized_route_mode = str(route_mode or "auto").strip().lower()
 
-        # 2. Determine base classifier (explicitly requested or fallback)
-        effective_classifier = classifier
-
-        # 3. Apply explicit route mode precedence over classifier
+        # 2. Hard-force task based on explicit route_mode
         if normalized_route_mode == "reasoning":
-            # Reasoning dominates: force reasoning-first behavior and skip light-chat downgrade
-            effective_classifier = replace(
-                effective_classifier,
-                task_type="reasoning",
-                cost_profile="premium",
-            )
+            effective_classifier = replace(classifier, task_type="reasoning", cost_profile="premium")
         elif normalized_route_mode == "fast":
-            effective_classifier = replace(
-                effective_classifier,
-                task_type="fast_utility",
-                cost_profile="cheap",
-            )
+            effective_classifier = replace(classifier, task_type="fast_utility", cost_profile="cheap")
         elif normalized_route_mode == "eco":
-            effective_classifier = replace(
-                effective_classifier,
-                task_type="eco",
-                cost_profile="eco",
-            )
+            effective_classifier = replace(classifier, task_type="eco", cost_profile="eco")
         elif normalized_route_mode == "free":
-            # If explicit 'free' mode (legacy/manual), map to cheap
-            effective_classifier = replace(
-                effective_classifier,
-                task_type="fast_utility",
-                cost_profile="cheap",
-            )
+            effective_classifier = replace(classifier, task_type="fast_utility", cost_profile="cheap")
         else:
-            # Auto/balanced: apply light-chat downgrade heuristics
+            # Only apply heuristics for auto/balanced
             effective_classifier = _adapt_classifier_for_light_chat(classifier, pre_signals)
-
         # 4. Perform routing with hard-filtered free_only if requested
         # (Router.score will handle the is_free filtering)
 
