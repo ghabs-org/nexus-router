@@ -82,6 +82,7 @@ class Router:
         mode: Optional[str] = None,
         message_text: Optional[str] = None,
         classifier_source: Optional[str] = None,
+        free_only: bool = False,
     ) -> RoutingDecision:
         """
         Route a request to the best available model.
