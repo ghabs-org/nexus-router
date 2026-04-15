@@ -99,8 +99,13 @@ class Router:
         pre_signals  = pre_signals or PreSignals()
         nexus_context = nexus_context or {}
 
-        effective_classifier = _adapt_classifier_for_light_chat(classifier, pre_signals)
+        # Start with the raw classifier; only apply the light-chat downgrade
+        # when the caller has NOT explicitly requested 'reasoning' mode.
+        effective_classifier = classifier
         effective_route_mode = (route_mode or "auto").strip().lower()
+        if effective_route_mode != "reasoning":
+            effective_classifier = _adapt_classifier_for_light_chat(classifier, pre_signals)
+
         if effective_route_mode == "reasoning":
             # Explicit mode should dominate: force reasoning-first routing behavior.
             effective_classifier = replace(
