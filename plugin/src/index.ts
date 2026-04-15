@@ -545,7 +545,7 @@ async function sendTelegramFeedbackCard(
         await debugLog(`[feedback-card] sent decision=${decisionId} to=${targetSenderId} message_id=${result?.messageId ?? "?"} via=telegram_runtime`);
         return true;
       } catch (err) {
-        await debugLog(`[feedback-card] telegram_runtime failed decision=${decisionId} to=${targetSenderId} error=${err?.message ?? String(err)}; falling back to bridge`);
+        await debugLog(`[feedback-card] telegram_runtime failed decision=${decisionId} to=${targetSenderId} error=${(err as any)?.message ?? String(err)}; falling back to bridge`);
         // fall through to bridge path
       }
     }
@@ -1422,7 +1422,8 @@ export default definePluginEntry({
       if (firstToken === 'feedback' && (secondToken === 'on' || secondToken === 'off')) {
         const suppressed = secondToken === 'off';
         rememberFeedbackSuppressed(ctx.sessionKey, suppressed);
-        return { text: suppressed ? '⛔ Feedback cards disabled for this session.' : '✅ Feedback cards enabled for this session.' };
+        const currentState = isFeedbackSuppressed(ctx.sessionKey) ? 'OFF' : 'ON';
+        return { text: (suppressed ? '⛔ Feedback cards disabled for this session.' : '✅ Feedback cards enabled for this session.') + ` Current: ${currentState}.` };
       }
       
       if (!firstToken || firstToken === "help" || firstToken === "?") {
@@ -1444,9 +1445,9 @@ export default definePluginEntry({
 
     if (arg === "feedback") {
       const last = resolveLastDecisionForContext(ctx, conversationKey);
+      const suppressed = isFeedbackSuppressed(ctx.sessionKey);
+      const statusText = suppressed ? 'Feedback cards are currently OFF for this session.' : 'Feedback cards are currently ON for this session.';
       if (!last || !last.decisionId) {
-        const suppressed = isFeedbackSuppressed(ctx.sessionKey);
-        const statusText = suppressed ? 'Feedback cards are currently OFF for this session.' : 'Feedback cards are currently ON for this session.';
         return { text: `No recent routing decision found. ${statusText} Send a message first, then use /route feedback to request a feedback card (or /route feedback on|off to toggle).` };
       }
       const sender = resolveSenderForSession(ctx.sessionKey) ?? (ctx.senderId ? { senderId: String(ctx.senderId) } : null);
@@ -1466,7 +1467,8 @@ export default definePluginEntry({
         reply_context_used: last.replyContextUsed,
       };
       const sent = await sendTelegramFeedbackCard(api, sender.senderId, syntheticDecision, last.sourceTag, { messagePreview: last.promptText, sessionKey: ctx.sessionKey });
-      return { text: sent ? "Feedback card sent." : "Failed to send feedback card (rate limited or bridge error)." };
+      const currentState = suppressed ? 'OFF' : 'ON';
+      return { text: (sent ? `Feedback card sent.` : `Failed to send feedback card (rate limited or bridge error).`) + ` Current: ${currentState}.` };
     }
 
 
