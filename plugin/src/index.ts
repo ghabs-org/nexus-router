@@ -535,14 +535,19 @@ async function sendTelegramFeedbackCard(
   try {
     const telegram = api?.runtime?.telegram;
     if (telegram?.sendMessageTelegram) {
-      const result = await telegram.sendMessageTelegram(targetSenderId, text, {
-        buttons: buildFeedbackKeyboard(decisionId),
-        textMode: "plain",
-        cfg: api?.config?.loadConfig?.(),
-      });
-      rememberFeedbackPrompt(decisionId);
-      await debugLog(`[feedback-card] sent decision=${decisionId} to=${targetSenderId} message_id=${result?.messageId ?? "?"} via=telegram_runtime`);
-      return true;
+      try {
+        const result = await telegram.sendMessageTelegram(targetSenderId, text, {
+          buttons: buildFeedbackKeyboard(decisionId),
+          textMode: "plain",
+          cfg: api?.config?.loadConfig?.(),
+        });
+        rememberFeedbackPrompt(decisionId);
+        await debugLog(`[feedback-card] sent decision=${decisionId} to=${targetSenderId} message_id=${result?.messageId ?? "?"} via=telegram_runtime`);
+        return true;
+      } catch (err) {
+        await debugLog(`[feedback-card] telegram_runtime failed decision=${decisionId} to=${targetSenderId} error=${err?.message ?? String(err)}; falling back to bridge`);
+        // fall through to bridge path
+      }
     }
 
     const bridgePayload = {
