@@ -132,7 +132,7 @@ class Router:
             else None
         )
         live_registry = self._registry
-        if normalized_route_mode == "free":
+        if free_only or normalized_route_mode == "free":
             metadata = load_model_metadata()
             if metadata:
                 live_registry = []
@@ -153,6 +153,7 @@ class Router:
             policy_weights=policy_weights,
             routing_policy=routing_policy,
             route_mode=normalized_route_mode,
+            free_only=(free_only or normalized_route_mode == "free"),
         )
 
         eligible = [s for s in scored if not s.excluded]
@@ -274,25 +275,25 @@ def _adapt_classifier_for_light_chat(
         pre_signals.has_url,
     ])
 
-    # Explicitly low-complexity chat can be treated as fast utility, but only
-    # when confidence is not strongly anchoring the turn as meaningful chat.
+    # Be conservative with fast_utility downgrades.
+    # If the classifier itself is weak/noisy, over-downgrading creates far more
+    # damage than leaving the turn as general_chat.
     if (
         classifier.complexity == "low"
-        and classifier.confidence < 0.90
+        and classifier.confidence < 0.55
         and not has_rich_signals
-        and pre_signals.estimated_tokens <= 80
-        and pre_signals.message_length <= 240
+        and pre_signals.estimated_tokens <= 24
+        and pre_signals.message_length <= 72
     ):
         return replace(classifier, task_type="fast_utility", cost_profile="cheap")
 
-    # Weak/ambiguous general chat with no rich signals and very short text can
-    # still downgrade to fast_utility.
+    # Extremely weak, tiny, structure-free chat can still downgrade.
     if (
         classifier.complexity in (None, "medium")
-        and classifier.confidence <= 0.70
+        and classifier.confidence <= 0.45
         and not has_rich_signals
-        and pre_signals.estimated_tokens <= 80
-        and pre_signals.message_length <= 240
+        and pre_signals.estimated_tokens <= 16
+        and pre_signals.message_length <= 48
     ):
         return replace(classifier, task_type="fast_utility", complexity="low", cost_profile="cheap")
 

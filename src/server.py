@@ -399,6 +399,7 @@ class RouterHandler(BaseHTTPRequestHandler):
                 source_tag=str(source_tag).strip() if source_tag is not None else None,
                 message_text=message,
                 classifier_source=classifier_source,
+                free_only=free_only,
             )
 
             # --- DEBUG: Print timestamp before writing decision ---

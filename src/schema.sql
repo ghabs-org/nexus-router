@@ -148,6 +148,7 @@ CREATE TABLE IF NOT EXISTS route_mode_preferences (
   pref_key              TEXT NOT NULL,
   scope                 TEXT NOT NULL DEFAULT 'conversation',
   mode                  TEXT NOT NULL,
+  free_filter           INTEGER NOT NULL DEFAULT 0,
   updated_at            TEXT NOT NULL,
   PRIMARY KEY (scope, pref_key)
 );

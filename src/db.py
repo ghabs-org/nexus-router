@@ -58,6 +58,7 @@ def ensure_schema():
     _ensure_feedback_table_compat(conn)
     _ensure_routing_decisions_compat(conn)
     _ensure_model_metadata_compat(conn)
+    _ensure_route_mode_preferences_compat(conn)
     conn.commit()
     conn.close()
 
@@ -80,6 +81,18 @@ def _ensure_feedback_table_compat(conn: sqlite3.Connection) -> None:
     for column, column_type in expected.items():
         if column not in columns:
             conn.execute(f"ALTER TABLE route_feedback ADD COLUMN {column} {column_type}")
+
+
+def _ensure_route_mode_preferences_compat(conn: sqlite3.Connection) -> None:
+    columns = {row["name"] for row in conn.execute("PRAGMA table_info(route_mode_preferences)").fetchall()}
+    if not columns:
+        return
+    expected = {
+        "free_filter": "INTEGER NOT NULL DEFAULT 0",
+    }
+    for column, column_type in expected.items():
+        if column not in columns:
+            conn.execute(f"ALTER TABLE route_mode_preferences ADD COLUMN {column} {column_type}")
 
 
 def _ensure_routing_decisions_compat(conn: sqlite3.Connection) -> None:
@@ -511,7 +524,7 @@ def _load_feedback_preferences(conn: sqlite3.Connection) -> dict[str, dict[str, 
     return grouped
 
 
-def set_route_mode_preference(pref_key: str, mode: str, scope: str = "conversation") -> None:
+def set_route_mode_preference(pref_key: str, mode: str, scope: str = "conversation", free_filter: bool = False) -> None:
     pref_key = str(pref_key or "").strip()
     mode = str(mode or "").strip().lower()
     scope = str(scope or "conversation").strip().lower()
@@ -526,19 +539,19 @@ def set_route_mode_preference(pref_key: str, mode: str, scope: str = "conversati
     try:
         conn.execute(
             """
-            INSERT INTO route_mode_preferences (pref_key, scope, mode, updated_at)
-            VALUES (?, ?, ?, ?)
+            INSERT INTO route_mode_preferences (pref_key, scope, mode, free_filter, updated_at)
+            VALUES (?, ?, ?, ?, ?)
             ON CONFLICT(scope, pref_key)
-            DO UPDATE SET mode=excluded.mode, updated_at=excluded.updated_at
+            DO UPDATE SET mode=excluded.mode, free_filter=excluded.free_filter, updated_at=excluded.updated_at
             """,
-            (pref_key, scope, mode, _now_iso()),
+            (pref_key, scope, mode, int(bool(free_filter)), _now_iso()),
         )
         conn.commit()
     finally:
         conn.close()
 
 
-def get_route_mode_preference(pref_key: str, scope: str = "conversation") -> Optional[dict[str, str]]:
+def get_route_mode_preference(pref_key: str, scope: str = "conversation") -> Optional[dict[str, Any]]:
     pref_key = str(pref_key or "").strip()
     scope = str(scope or "conversation").strip().lower()
     if not pref_key:
@@ -546,10 +559,14 @@ def get_route_mode_preference(pref_key: str, scope: str = "conversation") -> Opt
     conn = _connect()
     try:
         row = conn.execute(
-            "SELECT pref_key, scope, mode, updated_at FROM route_mode_preferences WHERE pref_key=? AND scope=?",
+            "SELECT pref_key, scope, mode, free_filter, updated_at FROM route_mode_preferences WHERE pref_key=? AND scope=?",
             (pref_key, scope),
         ).fetchone()
-        return dict(row) if row else None
+        if not row:
+            return None
+        payload = dict(row)
+        payload["free_filter"] = bool(payload.get("free_filter"))
+        return payload
     finally:
         conn.close()
 

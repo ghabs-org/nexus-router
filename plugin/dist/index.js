@@ -20,7 +20,7 @@ const DEFAULT_COST = "balanced";
 const PLUGIN_VERSION = "0.1.0";
 const RECENT_MESSAGE_TTL_MS = 5 * 60 * 1000;
 const AUTO_ESCALATE_CONFIDENCE = 0.70;
-const ROUTE_MODES = new Set(["auto", "balanced", "fast", "reasoning", "eco", "free", "off"]);
+const ROUTE_MODES = new Set(["auto", "balanced", "fast", "reasoning", "eco", "off"]);
 const ROUTE_DEDUPE_WINDOW_MS = 20_000;
 const ROUTE_BURST_WINDOW_MS = 5_000;
 const ROUTE_BURST_MAX_CALLS = 4;
@@ -48,7 +48,7 @@ async function debugLog(line) {
         // ignore debug logging failures
     }
 }
-async function routeRequest(url, prompt, costProfile, timeoutMs, routeMode, conversationContext, useLlmClassifier, sourceType, sourceTag, provenanceMode) {
+async function routeRequest(url, prompt, costProfile, timeoutMs, routeMode, conversationContext, useLlmClassifier, sourceType, sourceTag, provenanceMode, freeFilter) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
@@ -69,6 +69,7 @@ async function routeRequest(url, prompt, costProfile, timeoutMs, routeMode, conv
                 source_tag: sourceTag,
                 conversation_context: conversationContext,
                 use_llm_classifier: useLlmClassifier ?? false,
+                free_only: freeFilter ?? false,
             }),
             signal: controller.signal,
         });
@@ -113,6 +114,24 @@ const pendingOutcomeQueueBySessionId = new Map();
 const recentRouteCacheBySession = new Map();
 const recentSenderBySession = new Map();
 const recentFeedbackPromptByDecisionId = new Map();
+const recentFeedbackSuppressedBySession = new Map();
+function rememberFeedbackSuppressed(sessionKey, suppressed) {
+    if (!sessionKey)
+        return;
+    recentFeedbackSuppressedBySession.set(sessionKey, { at: Date.now(), suppressed });
+}
+function isFeedbackSuppressed(sessionKey) {
+    if (!sessionKey)
+        return false;
+    const entry = recentFeedbackSuppressedBySession.get(sessionKey);
+    if (!entry)
+        return false;
+    if (Date.now() - entry.at > RECENT_MESSAGE_TTL_MS) {
+        recentFeedbackSuppressedBySession.delete(sessionKey);
+        return false;
+    }
+    return entry.suppressed;
+}
 const routeBurstBySession = new Map();
 const recentSlashCommandBySession = new Map();
 const recentStartupBySession = new Map();
@@ -127,7 +146,7 @@ function rememberRecentUserMessage(sessionKey, text) {
 }
 // Route mode is an explicit user preference. Keep it sticky for the life of the
 // session/conversation instead of silently expiring back to the default.
-const STICKY_ROUTE_MODES = new Set(["auto", "balanced", "fast", "reasoning", "eco", "free", "off"]);
+const STICKY_ROUTE_MODES = new Set(["auto", "balanced", "fast", "reasoning", "eco", "off"]);
 export function isShortFollowUpForContextualRouting(text) {
     const trimmed = (text ?? "").trim();
     if (!trimmed)
@@ -150,25 +169,27 @@ export function shouldUseContextualLlmClassifier(routeMode, conversationContext,
         return false;
     return true;
 }
-function rememberRouteMode(sessionKey, mode) {
+function rememberRouteMode(sessionKey, mode, freeFilter) {
     if (!sessionKey || !ROUTE_MODES.has(mode))
         return;
     recentRouteModes.set(sessionKey, {
         mode,
         at: Date.now(),
         sticky: STICKY_ROUTE_MODES.has(mode),
+        freeFilter: freeFilter ?? false,
     });
 }
-function rememberConversationRouteMode(conversationKey, mode) {
+function rememberConversationRouteMode(conversationKey, mode, freeFilter) {
     if (!conversationKey || !ROUTE_MODES.has(mode))
         return;
     recentConversationRouteModes.set(conversationKey, {
         mode,
         at: Date.now(),
         sticky: STICKY_ROUTE_MODES.has(mode),
+        freeFilter: freeFilter ?? false,
     });
 }
-async function persistRouteModePreference(routerUrl, key, mode, scope = "conversation") {
+async function persistRouteModePreference(routerUrl, key, mode, scope = "conversation", freeFilter = false) {
     const trimmedKey = key.trim();
     if (!trimmedKey)
         return;
@@ -179,7 +200,7 @@ async function persistRouteModePreference(routerUrl, key, mode, scope = "convers
                 "Content-Type": "application/json",
                 "Editor-Version": PLUGIN_VERSION,
             },
-            body: JSON.stringify({ key: trimmedKey, mode, scope }),
+            body: JSON.stringify({ key: trimmedKey, mode, scope, free_filter: freeFilter }),
         });
     }
     catch {
@@ -329,6 +350,11 @@ function shouldSuppressFeedbackCardForText(messagePreview) {
     return false;
 }
 async function sendTelegramFeedbackCard(api, targetSenderId, decision, sourceTag, opts) {
+    const sessionKey = opts?.sessionKey;
+    if (sessionKey && isFeedbackSuppressed(sessionKey)) {
+        await debugLog('[feedback-card] suppressed by /route feedback off');
+        return false;
+    }
     const decisionId = String(decision.decision_id || "").trim();
     if (!decisionId || hasRecentFeedbackPrompt(decisionId)) {
         return false;
@@ -360,14 +386,20 @@ async function sendTelegramFeedbackCard(api, targetSenderId, decision, sourceTag
     try {
         const telegram = api?.runtime?.telegram;
         if (telegram?.sendMessageTelegram) {
-            const result = await telegram.sendMessageTelegram(targetSenderId, text, {
-                buttons: buildFeedbackKeyboard(decisionId),
-                textMode: "plain",
-                cfg: api?.config?.loadConfig?.(),
-            });
-            rememberFeedbackPrompt(decisionId);
-            await debugLog(`[feedback-card] sent decision=${decisionId} to=${targetSenderId} message_id=${result?.messageId ?? "?"} via=telegram_runtime`);
-            return true;
+            try {
+                const result = await telegram.sendMessageTelegram(targetSenderId, text, {
+                    buttons: buildFeedbackKeyboard(decisionId),
+                    textMode: "plain",
+                    cfg: api?.config?.loadConfig?.(),
+                });
+                rememberFeedbackPrompt(decisionId);
+                await debugLog(`[feedback-card] sent decision=${decisionId} to=${targetSenderId} message_id=${result?.messageId ?? "?"} via=telegram_runtime`);
+                return true;
+            }
+            catch (err) {
+                await debugLog(`[feedback-card] telegram_runtime failed decision=${decisionId} to=${targetSenderId} error=${err?.message ?? String(err)}; falling back to bridge`);
+                // fall through to bridge path
+            }
         }
         const bridgePayload = {
             telegram_user_id: targetSenderId,
@@ -921,8 +953,8 @@ function resolveCostProfileForRouteMode(mode, defaultProfile) {
             return defaultProfile;
     }
 }
-function buildRouteInteractiveReply(mode, scopeLabel = "this conversation") {
-    const label = mode ?? "auto";
+function buildRouteInteractiveReply(mode, scopeLabel = "this conversation", freeFilter) {
+    const label = `${mode ?? "auto"}${freeFilter && mode !== "free" ? " free" : ""}`;
     return {
         text: `⚙️ Routing mode: ${label} (${scopeLabel}).`,
         interactive: {
@@ -959,20 +991,25 @@ function buildRouteHelpText(currentMode) {
         `- fast: stronger cost bias; prefers cheaper/faster models`,
         `- reasoning: stronger-model bias for planning/trade-off tasks`,
         `- eco: bias toward more efficient/lower-footprint models`,
-        `- free: only consider models explicitly marked is_free=true`,
+        `Modifiers:`,
+        `- free: only consider models marked is_free=true (combine with any mode)`,
         `- off: bypass router overrides`,
         ``,
         `Commands:`,
         `- /route status → show current session mode`,
         `- /route last → show last routing decision (short form)`,
         `- /route explain → show richer diagnostics (context + escalation + classifier source)`,
-        `- /route compare [fast balanced reasoning eco free] → compare modes on the last prompt`,
+        `- /route feedback → request a feedback card for the last routing decision`,
+        `- /route feedback on|off → enable/disable feedback cards for this session`,
+        `- /route compare [fast balanced reasoning eco] → compare modes on the last prompt`,
         ``,
         `Examples:`,
         `- /route fast`,
         `- /route reasoning`,
         `- /route eco`,
+        `- /route auto free`,
         `- /route free`,
+        `  (shorthand for /route auto free)`,
         `- /route compare`,
     ].join("\n");
 }
@@ -1023,7 +1060,7 @@ async function resolveRouteModeDetailsFromContext(api, ctx) {
         const entry = getRecentConversationRouteModeEntry(key);
         if (!entry)
             return;
-        candidates.push({ mode: entry.mode, source, key, at: entry.at });
+        candidates.push({ mode: entry.mode, source, key, at: entry.at, freeFilter: entry.freeFilter });
     };
     const addSessionCandidate = (key) => {
         if (!key || seen.has(`session:${key}`))
@@ -1032,7 +1069,7 @@ async function resolveRouteModeDetailsFromContext(api, ctx) {
         const entry = getRecentRouteModeEntry(key);
         if (!entry)
             return;
-        candidates.push({ mode: entry.mode, source: "session", key, at: entry.at });
+        candidates.push({ mode: entry.mode, source: "session", key, at: entry.at, freeFilter: entry.freeFilter });
     };
     addSessionCandidate(ctx?.sessionKey);
     const conversationKey = buildConversationKeyFromContext(ctx);
@@ -1054,19 +1091,19 @@ async function resolveRouteModeDetailsFromContext(api, ctx) {
     if (conversationKey) {
         const persistedConversation = await loadPersistedRouteModePreference(routerUrl, conversationKey, "conversation");
         if (persistedConversation) {
-            candidates.push({ mode: persistedConversation.mode, source: "conversation", key: conversationKey, at: Date.parse(persistedConversation.updated_at) || 0 });
+            candidates.push({ mode: persistedConversation.mode, source: "conversation", key: conversationKey, at: Date.parse(persistedConversation.updated_at) || 0, freeFilter: Boolean(persistedConversation.free_filter) });
         }
     }
     if (ctx?.sessionKey) {
         const persistedSession = await loadPersistedRouteModePreference(routerUrl, ctx.sessionKey, "session");
         if (persistedSession) {
-            candidates.push({ mode: persistedSession.mode, source: "session", key: ctx.sessionKey, at: Date.parse(persistedSession.updated_at) || 0 });
+            candidates.push({ mode: persistedSession.mode, source: "session", key: ctx.sessionKey, at: Date.parse(persistedSession.updated_at) || 0, freeFilter: Boolean(persistedSession.free_filter) });
         }
     }
     if (channelKey) {
         const persistedChannel = await loadPersistedRouteModePreference(routerUrl, channelKey, "channel");
         if (persistedChannel) {
-            candidates.push({ mode: persistedChannel.mode, source: "channel", key: channelKey, at: Date.parse(persistedChannel.updated_at) || 0 });
+            candidates.push({ mode: persistedChannel.mode, source: "channel", key: channelKey, at: Date.parse(persistedChannel.updated_at) || 0, freeFilter: Boolean(persistedChannel.free_filter) });
         }
     }
     candidates.sort((a, b) => b.at - a.at);
@@ -1075,13 +1112,26 @@ async function resolveRouteModeDetailsFromContext(api, ctx) {
         return { mode: "auto", source: "default" };
     }
     if (ctx?.sessionKey && resolved.source !== "session") {
-        rememberRouteMode(ctx.sessionKey, resolved.mode);
+        rememberRouteMode(ctx.sessionKey, resolved.mode, resolved.freeFilter);
     }
     return {
         mode: resolved.mode,
         source: resolved.source,
         key: resolved.key,
+        freeFilter: resolved.freeFilter,
     };
+}
+function resolveFreeFilterFromContext(ctx) {
+    const sessionEntry = ctx?.sessionKey ? getRecentRouteModeEntry(ctx.sessionKey) : null;
+    if (sessionEntry?.freeFilter)
+        return true;
+    const conversationKey = buildConversationKeyFromContext(ctx);
+    if (conversationKey) {
+        const convEntry = getRecentConversationRouteModeEntry(conversationKey);
+        if (convEntry?.freeFilter)
+            return true;
+    }
+    return false;
 }
 async function resolveRouteModeFromContext(api, ctx) {
     return (await resolveRouteModeDetailsFromContext(api, ctx)).mode;
@@ -1137,27 +1187,64 @@ export default definePluginEntry({
             handler: async (ctx) => {
                 const rawArgs = ctx.args?.trim() ?? "";
                 const loweredArgs = rawArgs.toLowerCase();
-                const arg = loweredArgs;
-                const normalized = arg && ROUTE_MODES.has(arg) ? arg : undefined;
+                const tokens = loweredArgs.split(/\s+/).filter(Boolean);
+                const firstToken = tokens[0] ?? "";
+                const secondToken = tokens[1] ?? "";
+                // Parse: /route [mode] [free] or /route feedback on|off
+                const hasFreeModifier = tokens.includes('free');
+                const modeToken = tokens.find((t) => ROUTE_MODES.has(t)) ?? '';
+                const arg = firstToken; // Keep for compatibility with existing checks
                 const conversationKey = buildConversationKeyFromContext(ctx) ?? [ctx.channelId ?? ctx.channel, ctx.accountId ?? "default", ctx.from ?? ctx.to ?? "", ctx.messageThreadId ?? ""].join(":");
                 const sessionKeyForConversation = conversationKey ? resolveSessionKeyForConversation(conversationKey) ?? undefined : undefined;
                 const modeResolution = await resolveRouteModeDetailsFromContext(api, ctx);
                 const currentMode = modeResolution.mode;
-                if (!arg || arg === "help" || arg === "?") {
-                    return {
-                        text: buildRouteHelpText(currentMode),
-                        interactive: buildRouteInteractiveReply(currentMode, "this conversation").interactive,
-                    };
+                // Handle /route feedback on|off FIRST
+                if (firstToken === 'feedback' && (secondToken === 'on' || secondToken === 'off')) {
+                    const suppressed = secondToken === 'off';
+                    rememberFeedbackSuppressed(ctx.sessionKey, suppressed);
+                    const currentState = isFeedbackSuppressed(ctx.sessionKey) ? 'OFF' : 'ON';
+                    return { text: (suppressed ? '⛔ Feedback cards disabled for this session.' : '✅ Feedback cards enabled for this session.') + ` Current: ${currentState}.` };
                 }
-                if (arg === "status") {
-                    const scopeLabel = modeResolution.source === "default"
-                        ? "default"
-                        : `resolved from ${modeResolution.source}`;
-                    return buildRouteInteractiveReply(currentMode, scopeLabel);
+                if (!firstToken || firstToken === "help" || firstToken === "?") {
+                    return { text: buildRouteHelpText(currentMode), interactive: buildRouteInteractiveReply(currentMode, "this conversation", modeResolution.freeFilter).interactive };
                 }
+                if (firstToken === "status") {
+                    const scopeLabel = modeResolution.source === "default" ? "default" : `resolved from ${modeResolution.source}`;
+                    return buildRouteInteractiveReply(currentMode, scopeLabel, modeResolution.freeFilter);
+                }
+                // Handle /route free as shorthand for /route auto free
+                const effectiveMode = hasFreeModifier && !modeToken ? 'auto' : modeToken;
+                const normalized = effectiveMode && ROUTE_MODES.has(effectiveMode) ? effectiveMode : undefined;
                 if (arg === "last") {
                     const last = resolveLastDecisionForContext(ctx, conversationKey);
                     return buildRouteLastReply(last);
+                }
+                if (arg === "feedback") {
+                    const last = resolveLastDecisionForContext(ctx, conversationKey);
+                    const suppressed = isFeedbackSuppressed(ctx.sessionKey);
+                    const statusText = suppressed ? 'Feedback cards are currently OFF for this session.' : 'Feedback cards are currently ON for this session.';
+                    if (!last || !last.decisionId) {
+                        return { text: `No recent routing decision found. ${statusText} Send a message first, then use /route feedback to request a feedback card (or /route feedback on|off to toggle).` };
+                    }
+                    const sender = resolveSenderForSession(ctx.sessionKey) ?? (ctx.senderId ? { senderId: String(ctx.senderId) } : null);
+                    if (!sender?.senderId) {
+                        return { text: "Cannot send feedback card: sender not resolved for this session." };
+                    }
+                    const syntheticDecision = {
+                        decision_id: last.decisionId,
+                        task_type: last.taskType,
+                        confidence: last.confidence,
+                        selected_model: last.selectedModel,
+                        selected_provider: last.selectedProvider,
+                        fallbacks: last.fallbacks,
+                        score: last.score,
+                        reason: last.reason,
+                        classifier_source: last.classifierSource,
+                        reply_context_used: last.replyContextUsed,
+                    };
+                    const sent = await sendTelegramFeedbackCard(api, sender.senderId, syntheticDecision, last.sourceTag, { messagePreview: last.promptText, sessionKey: ctx.sessionKey });
+                    const currentState = suppressed ? 'OFF' : 'ON';
+                    return { text: (sent ? `Feedback card sent.` : `Failed to send feedback card (rate limited or bridge error).`) + ` Current: ${currentState}.` };
                 }
                 if (arg === "explain") {
                     const last = resolveLastDecisionForContext(ctx, conversationKey);
@@ -1176,23 +1263,23 @@ export default definePluginEntry({
                     };
                 }
                 const routeModeSessionKey = sessionKeyForConversation ?? ctx.conversationId ?? ctx.sessionKey ?? ctx.channelId ?? ctx.senderId ?? "";
-                rememberRouteMode(routeModeSessionKey, normalized);
+                rememberRouteMode(routeModeSessionKey, normalized, hasFreeModifier);
                 if (ctx.sessionKey && ctx.sessionKey !== routeModeSessionKey)
-                    rememberRouteMode(ctx.sessionKey, normalized);
-                rememberConversationRouteMode(conversationKey, normalized);
+                    rememberRouteMode(ctx.sessionKey, normalized, hasFreeModifier);
+                rememberConversationRouteMode(conversationKey, normalized, hasFreeModifier);
                 // Also store with a channel-only key so before_model_resolve can find the mode
                 // even when its hook ctx does not carry the full from/to/thread fields.
                 const channelOnlyKey = ctx.channelId ?? ctx.channel ?? "";
                 if (channelOnlyKey && channelOnlyKey !== conversationKey) {
-                    rememberConversationRouteMode(channelOnlyKey, normalized);
+                    rememberConversationRouteMode(channelOnlyKey, normalized, hasFreeModifier);
                 }
                 if (conversationKey)
-                    await persistRouteModePreference(routerUrl, conversationKey, normalized, "conversation");
+                    await persistRouteModePreference(routerUrl, conversationKey, normalized, "conversation", hasFreeModifier);
                 if (ctx.sessionKey)
-                    await persistRouteModePreference(routerUrl, ctx.sessionKey, normalized, "session");
+                    await persistRouteModePreference(routerUrl, ctx.sessionKey, normalized, "session", hasFreeModifier);
                 if (channelOnlyKey)
-                    await persistRouteModePreference(routerUrl, channelOnlyKey, normalized, "channel");
-                return buildRouteInteractiveReply(normalized, "this conversation");
+                    await persistRouteModePreference(routerUrl, channelOnlyKey, normalized, "channel", hasFreeModifier);
+                return buildRouteInteractiveReply(normalized, "this conversation", hasFreeModifier);
             },
         });
         api.on("before_dispatch", (event, ctx) => {
@@ -1263,6 +1350,7 @@ export default definePluginEntry({
             const startupReason = source === "compiled-prompt" ? takeRecentStartupReason(ctx.sessionKey) : null;
             const sourceTag = buildSourceTag(ctx, source, routingText, startupReason);
             const routeMode = await resolveRouteModeFromContext(api, ctx);
+            const freeFilter = resolveFreeFilterFromContext(ctx);
             const firstPassCostProfile = resolveCostProfileForRouteMode(routeMode, costProfile);
             const sessionRef = String(ctx?.sessionKey ?? ctx?.sessionId ?? ctx?.conversationId ?? "");
             const dedupeText = routingText.trim();
@@ -1283,7 +1371,7 @@ export default definePluginEntry({
                 return;
             }
             if (routeMode === "off") {
-                const shadowResult = await routeRequest(routerUrl, routingText, firstPassCostProfile, timeoutMs, routeMode, conversationContext, shouldUseLlmClassifier, source, sourceTag, "shadow");
+                const shadowResult = await routeRequest(routerUrl, routingText, firstPassCostProfile, timeoutMs, routeMode, conversationContext, shouldUseLlmClassifier, source, sourceTag, "shadow", freeFilter);
                 const shadowDecision = shadowResult.decision;
                 if (!shadowDecision) {
                     const failure = describeRouteRequestFailure(shadowResult, timeoutMs);
@@ -1369,6 +1457,38 @@ export default definePluginEntry({
                     }
                     else {
                         await debugLog(`[hook-result] source=${source} source_tag=${sourceTag} route=${routeMode} dedupe-hit model=${cached.selectedModel}`);
+                        // Ensure feedback card is still offered for cached overrides when possible.
+                        // In queued/busy session cases the main routing decision may have already
+                        // been recorded earlier; try to reuse the last recorded decision for this
+                        // session or conversation to send a feedback card. This addresses cases
+                        // where before_model_resolve returns early due to dedupe but a feedback
+                        // card was expected for the follow-up message.
+                        try {
+                            const lastDecision = (ctx.sessionKey && recentLastDecisionBySession.get(ctx.sessionKey))
+                                || (conversationKey && takeLastDecisionForConversation(conversationKey))
+                                || recentLastDecisionGlobal;
+                            const sender = resolveSenderForSession(ctx.sessionKey ?? sessionRef) ?? (ctx.senderId ? { senderId: String(ctx.senderId) } : null);
+                            if (lastDecision && lastDecision.decisionId && sender?.senderId) {
+                                // Build a minimal RouteResponse-like object from LastRouteDecision
+                                const syntheticDecision = {
+                                    decision_id: lastDecision.decisionId,
+                                    task_type: lastDecision.taskType,
+                                    confidence: lastDecision.confidence,
+                                    selected_model: lastDecision.selectedModel,
+                                    selected_provider: lastDecision.selectedProvider,
+                                    fallbacks: lastDecision.fallbacks,
+                                    score: lastDecision.score,
+                                    reason: lastDecision.reason,
+                                    classifier_source: lastDecision.classifierSource,
+                                    reply_context_used: lastDecision.replyContextUsed,
+                                };
+                                // Fire-and-forget; do not block routing on notification success
+                                void sendTelegramFeedbackCard(api, sender.senderId, syntheticDecision, sourceTag, { messagePreview: routingText });
+                            }
+                        }
+                        catch (err) {
+                            // best-effort only
+                        }
                         return cachedOverride;
                     }
                 }
@@ -1381,7 +1501,7 @@ export default definePluginEntry({
             let finalMode = routeMode;
             let finalCostProfile = firstPassCostProfile;
             if (routeMode === "auto") {
-                const autoResult = await routeRequest(routerUrl, routingText, firstPassCostProfile, timeoutMs, routeMode, conversationContext, shouldUseLlmClassifier, source, sourceTag, "route");
+                const autoResult = await routeRequest(routerUrl, routingText, firstPassCostProfile, timeoutMs, routeMode, conversationContext, shouldUseLlmClassifier, source, sourceTag, "route", freeFilter);
                 decision = autoResult.decision;
                 if (!decision) {
                     const failure = describeRouteRequestFailure(autoResult, timeoutMs);
@@ -1392,7 +1512,7 @@ export default definePluginEntry({
                 }
             }
             else {
-                const directResult = await routeRequest(routerUrl, routingText, firstPassCostProfile, timeoutMs, routeMode, conversationContext, shouldUseLlmClassifier, source, sourceTag, "route");
+                const directResult = await routeRequest(routerUrl, routingText, firstPassCostProfile, timeoutMs, routeMode, conversationContext, shouldUseLlmClassifier, source, sourceTag, "route", freeFilter);
                 decision = directResult.decision;
                 if (!decision) {
                     const failure = describeRouteRequestFailure(directResult, timeoutMs);
@@ -1443,7 +1563,7 @@ export default definePluginEntry({
             const sender = resolveSenderForSession(ctx.sessionKey ?? sessionRef) ?? (ctx.senderId ? { senderId: String(ctx.senderId), channelId: ctx.channelId ? String(ctx.channelId) : undefined } : null);
             if (decision.decision_id) {
                 if (sender) {
-                    await sendTelegramFeedbackCard(api, sender.senderId, decision, sourceTag, { messagePreview: routingText });
+                    await sendTelegramFeedbackCard(api, sender.senderId, decision, sourceTag, { messagePreview: routingText, sessionKey: ctx.sessionKey });
                 }
                 else {
                     await debugLog(`[feedback-card] skipped decision=${decision.decision_id} reason=missing_sender session=${ctx.sessionKey ?? sessionRef ?? ""}`);

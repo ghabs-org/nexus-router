@@ -75,6 +75,7 @@ def score_models(
     policy_weights: Optional[dict] = None,
     routing_policy: Optional[dict] = None,
     route_mode: Optional[str] = None,
+    free_only: bool = False,
 ) -> list[ModelScore]:
     """
     Score all candidate models and return a ranked list.
@@ -131,8 +132,8 @@ def score_models(
             ))
             continue
 
-        # Free mode: only allow models explicitly marked free.
-        if (route_mode or "").strip().lower() == "free" and features.get("is_free") is not True:
+        # Free filter: only allow models explicitly marked free.
+        if free_only and features.get("is_free") is not True:
             excluded.append(ModelScore(
                 model_id=model_id, provider=provider,
                 total_score=0.0, task_fit=0.0, health=0.0,
