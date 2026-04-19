@@ -1489,6 +1489,11 @@ export default definePluginEntry({
                         catch (err) {
                             // best-effort only
                         }
+                        recentRouteCacheBySession.set(sessionRef, {
+                            text: dedupeText,
+                            mode: routeMode,
+                            at: Date.now(),
+                        });
                         return cachedOverride;
                     }
                 }

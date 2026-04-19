@@ -1739,6 +1739,11 @@ const routeMode = await resolveRouteModeFromContext(api, ctx); const freeFilter 
               // best-effort only
             }
 
+            recentRouteCacheBySession.set(sessionRef, {
+              text: dedupeText,
+              mode: routeMode,
+              at: Date.now(),
+            });
             return cachedOverride;
           }
         } else {
