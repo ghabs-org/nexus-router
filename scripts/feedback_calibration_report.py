@@ -15,11 +15,14 @@ from __future__ import annotations
 import argparse
 import json
 import sqlite3
+import sys
 from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
+import tempfile
 
 DB_PATH = Path.home() / ".local/state/nexus-router/data/router.sqlite"
+ROOT = Path(__file__).resolve().parents[1]
 
 
 def parse_args() -> argparse.Namespace:
@@ -122,6 +125,43 @@ def _finalize_summary(task_stats, model_task, *, feedback_total: int) -> dict:
         "task_summary": by_task,
         "model_task_signals_top": by_model_task[:50],
     }
+
+
+def _training_export_summary() -> dict[str, object] | None:
+    export_script = ROOT / "scripts" / "export_classifier_training_data.py"
+    if not export_script.exists():
+        return None
+
+    with tempfile.TemporaryDirectory(prefix="router-calibration-") as tmpdir:
+        export_path = Path(tmpdir) / "training.jsonl"
+        payload = {
+            "export_output_path": str(export_path),
+            "records_written": 0,
+            "rows_scanned": 0,
+            "label_distribution": {},
+            "rare_labels": [],
+        }
+        import subprocess
+        result = subprocess.run(
+            [sys.executable, str(export_script), "--output", str(export_path), "--min-samples", "1"],
+            cwd=str(ROOT),
+            capture_output=True,
+            text=True,
+        )
+        payload["command_ok"] = result.returncode == 0
+        payload["stdout"] = result.stdout
+        payload["stderr"] = result.stderr
+        if result.returncode != 0:
+            return payload
+        marker = "Summary JSON:"
+        if marker in result.stdout:
+            try:
+                summary_text = result.stdout.split(marker, 1)[1].strip()
+                parsed = json.loads(summary_text)
+                payload.update(parsed)
+            except Exception:
+                pass
+        return payload
 
 
 def main() -> None:
@@ -234,6 +274,8 @@ def main() -> None:
             }
         )
 
+    training_export = _training_export_summary()
+
     report = {
         "ok": True,
         "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -247,6 +289,9 @@ def main() -> None:
         "feedback_total": overall["feedback_total"],
         "orphan_feedback_excluded": int((total_feedback or 0) - len(rows)),
         "unlabelled_feedback_count": overall["unlabelled_feedback_count"],
+        "training_export": training_export,
+        "training_rows_used": int((training_export or {}).get("records_written") or 0),
+        "training_rows_scanned": int((training_export or {}).get("rows_scanned") or 0),
         "task_summary": overall["task_summary"],
         "model_task_signals_top": overall["model_task_signals_top"],
         "source_summary": source_summary,

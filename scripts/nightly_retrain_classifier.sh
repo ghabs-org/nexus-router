@@ -9,9 +9,10 @@ DATA_DIR="$STATE_ROOT/artifacts/router-classifier/data"
 REPORT_DIR="$STATE_ROOT/reports"
 LOG_DIR="$STATE_ROOT/logs"
 STAMP_DIR="$STATE_ROOT/retrain"
-EXPORT_PATH="${NEXUS_ROUTER_TRAINING_EXPORT:-/tmp/router-training-nightly.jsonl}"
+EXPORT_PATH="${NEXUS_ROUTER_TRAINING_EXPORT:-$DATA_DIR/export.jsonl}"
 TRAIN_FILE="$DATA_DIR/train.jsonl"
 EVAL_FILE="$DATA_DIR/eval.jsonl"
+SPLIT_SUMMARY="$REPORT_DIR/training-split-$(date -u +%F).json"
 
 mkdir -p "$DATA_DIR" "$REPORT_DIR" "$LOG_DIR" "$STAMP_DIR"
 LOG_FILE="$LOG_DIR/nightly-retrain-classifier-$(date -u +%F).log"
@@ -33,11 +34,13 @@ cd "$ROOT_DIR"
 $PYTHON_BIN scripts/feedback_calibration_report.py > "$REPORT_DIR/calibration-$(date -u +%F).json"
 $PYTHON_BIN scripts/export_classifier_training_data.py --output "$EXPORT_PATH" --min-samples 1
 
-$PYTHON_BIN - <<'PY'
-import json, random, pathlib
-src = pathlib.Path("/tmp/router-training-nightly.jsonl")
-out_dir = pathlib.Path.home() / ".local/state/nexus-router/artifacts/router-classifier/data"
-out_dir.mkdir(parents=True, exist_ok=True)
+EXPORT_PATH="$EXPORT_PATH" TRAIN_FILE="$TRAIN_FILE" EVAL_FILE="$EVAL_FILE" SPLIT_SUMMARY="$SPLIT_SUMMARY" $PYTHON_BIN - <<'PY'
+import json, os, random, pathlib
+src = pathlib.Path(os.environ["EXPORT_PATH"])
+train_path = pathlib.Path(os.environ["TRAIN_FILE"])
+eval_path = pathlib.Path(os.environ["EVAL_FILE"])
+summary_path = pathlib.Path(os.environ["SPLIT_SUMMARY"])
+train_path.parent.mkdir(parents=True, exist_ok=True)
 rows=[]
 with src.open() as f:
     for line in f:
@@ -50,9 +53,11 @@ random.Random(42).shuffle(rows)
 split=max(1, int(len(rows)*0.85))
 train=rows[:split]
 eval_=rows[split:]
-(out_dir/'train.jsonl').write_text('\n'.join(json.dumps(r) for r in train)+'\n')
-(out_dir/'eval.jsonl').write_text('\n'.join(json.dumps(r) for r in eval_)+'\n')
-print({'total': len(rows), 'train': len(train), 'eval': len(eval_)})
+train_path.write_text('\n'.join(json.dumps(r) for r in train)+'\n')
+eval_path.write_text('\n'.join(json.dumps(r) for r in eval_)+'\n')
+summary = {'total': len(rows), 'train': len(train), 'eval': len(eval_), 'export_path': str(src), 'train_file': str(train_path), 'eval_file': str(eval_path)}
+summary_path.write_text(json.dumps(summary, indent=2) + '\n')
+print(summary)
 PY
 
 if [[ "$DRY_RUN" == "--dry-run" ]]; then
@@ -63,6 +68,10 @@ fi
 $PYTHON_BIN scripts/train_router_classifier.py
 $PYTHON_BIN scripts/export_router_classifier_onnx.py
 bash "$ROOT_DIR/scripts/refresh_registry.sh"
+
+if command -v docker >/dev/null 2>&1; then
+  docker compose -f "$ROOT_DIR/deploy/docker-compose.yml" up -d nexus-router
+fi
 
 echo "$(date -u +%FT%TZ)" > "$STAMP_DIR/last_success_utc.txt"
 echo "[nightly-retrain] done $(date -u +%FT%TZ)"

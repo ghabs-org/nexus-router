@@ -54,7 +54,7 @@ def _is_low_information_text(text: str) -> bool:
     return normalized in trivial
 
 
-def export(output_path: str, min_samples: int = 1) -> None:
+def export(output_path: str, min_samples: int = 1) -> dict[str, object]:
     conn = _connect()
     try:
         rows = conn.execute(
@@ -119,6 +119,14 @@ def export(output_path: str, min_samples: int = 1) -> None:
                 label_counts[label] += 1
                 written += 1
 
+    summary = {
+        "output_path": str(Path(output_path).resolve()),
+        "rows_scanned": len(rows),
+        "records_written": written,
+        "label_distribution": dict(sorted(label_counts.items(), key=lambda x: (-x[1], x[0]))),
+        "rare_labels": [],
+    }
+
     print(f"Exported {written} records to {output_path}")
     print("\nLabel distribution:")
     for label, count in sorted(label_counts.items(), key=lambda x: -x[1]):
@@ -126,8 +134,11 @@ def export(output_path: str, min_samples: int = 1) -> None:
         print(f"  {label:20s} {count:5d}  {bar}")
 
     rare = [lbl for lbl, c in label_counts.items() if c < min_samples]
+    summary["rare_labels"] = rare
     if rare:
         print(f"\n⚠ Labels with < {min_samples} samples (may need augmentation): {rare}")
+
+    return summary
 
 
 def main() -> None:
@@ -136,7 +147,9 @@ def main() -> None:
     parser.add_argument("--min-samples", type=int, default=10,
                         help="Warn if any label has fewer than this many samples")
     args = parser.parse_args()
-    export(args.output, args.min_samples)
+    summary = export(args.output, args.min_samples)
+    print("\nSummary JSON:")
+    print(json.dumps(summary, indent=2, sort_keys=True))
 
 
 if __name__ == "__main__":
