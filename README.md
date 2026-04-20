@@ -153,7 +153,7 @@ Routing order is now:
 5. generic fallback
 
 The router response and logs now surface classifier provenance via:
-- `classifier_source` (`explicit`, `local`, `heuristic`, `llm`, `fallback`)
+- `classifier_source` (`local`, `heuristic`, `fallback`)
 - `classifier_provider`
 - `classifier_model`
 - `classifier_debug` (local confidence / margin / artifact availability)

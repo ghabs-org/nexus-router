@@ -109,6 +109,7 @@ const DEFAULT_URL         = "http://127.0.0.1:7771";
 const DEFAULT_BRIDGE_URL  = "http://127.0.0.1:8091";
 const DEFAULT_CONFIDENCE  = 0.60;
 const DEFAULT_TIMEOUT_MS  = 10000;
+const SHADOW_TIMEOUT_MS   = 60000;
 const DEFAULT_COST        = "balanced";
 const PLUGIN_VERSION      = "0.1.0";
 const RECENT_MESSAGE_TTL_MS = 5 * 60 * 1000;
@@ -1611,10 +1612,11 @@ const routeMode = await resolveRouteModeFromContext(api, ctx); const freeFilter 
       }
 
       if (routeMode === "off") {
-        const shadowResult = await routeRequest(routerUrl, routingText, firstPassCostProfile, timeoutMs, routeMode, conversationContext, shouldUseLlmClassifier, source, sourceTag, "shadow", freeFilter);
+        const shadowTimeoutMs = Math.max(timeoutMs, SHADOW_TIMEOUT_MS);
+        const shadowResult = await routeRequest(routerUrl, routingText, firstPassCostProfile, shadowTimeoutMs, routeMode, conversationContext, shouldUseLlmClassifier, source, sourceTag, "shadow", freeFilter);
         const shadowDecision = shadowResult.decision;
         if (!shadowDecision) {
-          const failure = describeRouteRequestFailure(shadowResult, timeoutMs);
+          const failure = describeRouteRequestFailure(shadowResult, shadowTimeoutMs);
           await debugLog(`[hook-result] source=${source} source_tag=${sourceTag} route=${routeMode} shadow_failed ${failure}`);
           return;
         }

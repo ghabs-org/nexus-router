@@ -16,6 +16,7 @@ import argparse
 import json
 import sqlite3
 from collections import defaultdict
+from datetime import datetime, timezone
 from pathlib import Path
 
 DB_PATH = Path.home() / ".local/state/nexus-router/data/router.sqlite"
@@ -235,7 +236,8 @@ def main() -> None:
 
     report = {
         "ok": True,
-        "db": str(db_path),
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "db": str(db_path.resolve()),
         "filters": {
             "source_type": args.source_type,
             "mode": args.mode,

@@ -8,12 +8,16 @@ Usage:
     python scripts/export_classifier_training_data.py [--output training_data.jsonl] [--min-samples N]
 
 Output: JSONL file, one record per line:
-    {"text": "...", "label": "coding", "classifier_source": "llm", "confidence": 0.82}
+    {"text": "...", "label": "coding", "classifier_source": "local", "confidence": 0.82}
+
+Training labels are resolved as:
+  - `route_feedback.corrected_task` when present and non-empty
+  - otherwise `routing_decisions.task_type`
 
 Only includes records where:
   - message_text is present (non-null, non-empty)
-  - classifier_source is "llm" or "explicit" (trusted labels)
-  - task_type is a known label
+  - classifier_source is "local"
+  - resolved label is a known label
 """
 from __future__ import annotations
 
@@ -21,6 +25,7 @@ import argparse
 import json
 import sys
 from collections import Counter
+import re
 from pathlib import Path
 
 ROOT = Path(__file__).parent.parent
@@ -36,20 +41,49 @@ except ImportError:
 VALID_LABELS = set(ROUTER_TASK_LABELS)
 
 
+def _is_low_information_text(text: str) -> bool:
+    normalized = re.sub(r"\s+", " ", (text or "").strip().lower())
+    if not normalized:
+        return True
+    if len(normalized) <= 12:
+        return True
+    trivial = {
+        "ok", "okay", "ok thanks", "thanks", "thank you", "yes", "yes please",
+        "done", "great", "hello", "hello?", "hi", "sure",
+    }
+    return normalized in trivial
+
+
 def export(output_path: str, min_samples: int = 1) -> None:
     conn = _connect()
     try:
         rows = conn.execute(
             """
-            SELECT message_text, task_type, classifier_source,
-                   classifier_confidence, has_code, has_image, has_diff,
-                   has_logs, estimated_tokens
-            FROM routing_decisions
-            WHERE message_text IS NOT NULL
-              AND TRIM(message_text) != ''
-              AND classifier_source IN ('llm', 'explicit')
-              AND task_type IS NOT NULL
-            ORDER BY created_at DESC
+            SELECT
+                   rd.message_text,
+                   COALESCE(NULLIF(rf.corrected_task, ''), rd.task_type) AS task_type,
+                   rd.classifier_source,
+                   rd.classifier_confidence,
+                   rd.has_code,
+                   rd.has_image,
+                   rd.has_diff,
+                   rd.has_logs,
+                   rd.estimated_tokens
+            FROM routing_decisions rd
+            LEFT JOIN (
+                SELECT decision_id, corrected_task, MAX(created_at) AS created_at
+                FROM route_feedback
+                WHERE corrected_task IS NOT NULL AND TRIM(corrected_task) != ''
+                GROUP BY decision_id
+            ) latest_rf ON latest_rf.decision_id = rd.id
+            LEFT JOIN route_feedback rf
+              ON rf.decision_id = latest_rf.decision_id
+             AND rf.created_at = latest_rf.created_at
+            WHERE rd.message_text IS NOT NULL
+              AND TRIM(rd.message_text) != ''
+              AND rd.classifier_source = 'local'
+              AND COALESCE(NULLIF(rf.corrected_task, ''), rd.task_type) IS NOT NULL
+            ORDER BY rd.created_at DESC
             """
         ).fetchall()
     finally:
@@ -63,8 +97,11 @@ def export(output_path: str, min_samples: int = 1) -> None:
             label = row["task_type"]
             if label not in VALID_LABELS:
                 continue
+            text = row["message_text"].strip()
+            if label == "reasoning" and _is_low_information_text(text):
+                continue
             record = {
-                "text": row["message_text"].strip(),
+                "text": text,
                 "label": label,
                 "classifier_source": row["classifier_source"],
                 "confidence": float(row["classifier_confidence"] or 0.0),
@@ -76,9 +113,11 @@ def export(output_path: str, min_samples: int = 1) -> None:
                     "estimated_tokens": int(row["estimated_tokens"] or 0),
                 },
             }
-            f.write(json.dumps(record) + "\n")
-            label_counts[label] += 1
-            written += 1
+            repeat = 2 if label == "reasoning" else 1
+            for _ in range(repeat):
+                f.write(json.dumps(record) + "\n")
+                label_counts[label] += 1
+                written += 1
 
     print(f"Exported {written} records to {output_path}")
     print("\nLabel distribution:")

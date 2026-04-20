@@ -14,6 +14,7 @@ import argparse
 import json
 import os
 import sys
+import inspect
 from pathlib import Path
 
 from datasets import Dataset
@@ -130,14 +131,13 @@ def main() -> int:
         )
         return 0
 
-    training_args = TrainingArguments(
+    training_kwargs = dict(
         output_dir=args.output_dir,
         per_device_train_batch_size=args.batch_size,
         per_device_eval_batch_size=args.batch_size,
         learning_rate=args.learning_rate,
         weight_decay=args.weight_decay,
         num_train_epochs=args.epochs,
-        eval_strategy="epoch",
         save_strategy="epoch",
         logging_strategy="steps",
         logging_steps=10,
@@ -146,6 +146,13 @@ def main() -> int:
         load_best_model_at_end=False,
         remove_unused_columns=True,
     )
+    training_params = inspect.signature(TrainingArguments.__init__).parameters
+    if "evaluation_strategy" in training_params:
+        training_kwargs["evaluation_strategy"] = "epoch"
+    elif "eval_strategy" in training_params:
+        training_kwargs["eval_strategy"] = "epoch"
+
+    training_args = TrainingArguments(**training_kwargs)
 
     trainer = Trainer(
         model=model,

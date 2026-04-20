@@ -22,6 +22,7 @@ if str(ROOT) not in sys.path:
 
 from src.local_classifier_labels import (  # noqa: E402
     DEFAULT_HF_CACHE_DIR,
+    DEFAULT_MODEL_NAME,
     DEFAULT_ONNX_DIR,
     DEFAULT_OUTPUT_DIR,
 )
@@ -48,7 +49,10 @@ def main() -> int:
         checkpoint_dir,
         export=True,
     )
-    tokenizer = AutoTokenizer.from_pretrained(checkpoint_dir, cache_dir=args.cache_dir)
+    try:
+        tokenizer = AutoTokenizer.from_pretrained(checkpoint_dir, cache_dir=args.cache_dir)
+    except Exception:
+        tokenizer = AutoTokenizer.from_pretrained(DEFAULT_MODEL_NAME, cache_dir=args.cache_dir)
     model.save_pretrained(onnx_dir)
     tokenizer.save_pretrained(onnx_dir)
 

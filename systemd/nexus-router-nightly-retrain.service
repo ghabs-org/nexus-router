@@ -1,0 +1,12 @@
+[Unit]
+Description=Nexus Router nightly classifier retrain/export/deploy
+After=network.target
+
+[Service]
+EnvironmentFile=/etc/ghabs/env
+Type=oneshot
+WorkingDirectory=/home/ubuntu/git/ghabs/nexus-router
+ExecStart=/usr/bin/env bash /home/ubuntu/git/ghabs/nexus-router/scripts/nightly_retrain_classifier.sh
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=nexus-router-nightly-retrain

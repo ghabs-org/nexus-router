@@ -163,6 +163,7 @@ CREATE TABLE IF NOT EXISTS provider_health_state (
   consecutive_rate_limits    INTEGER DEFAULT 0,
   rate_limit_cooldown_until  TEXT,
   latency_ms_p50             REAL,
+  latency_updated_at         TEXT,
   last_failure_at            TEXT,
   last_check_at              TEXT,
   health_score               REAL DEFAULT 1

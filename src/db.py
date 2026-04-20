@@ -652,9 +652,9 @@ def upsert_provider_health_state(provider: str, state: dict[str, Any]) -> None:
             INSERT INTO provider_health_state (
               provider, auth, quota, quota_remaining_ratio,
               recent_error_rate, rate_limit_risk, consecutive_rate_limits,
-              rate_limit_cooldown_until, latency_ms_p50, last_failure_at,
+              rate_limit_cooldown_until, latency_ms_p50, latency_updated_at, last_failure_at,
               last_check_at, health_score
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(provider)
             DO UPDATE SET
               auth=excluded.auth,
@@ -665,6 +665,7 @@ def upsert_provider_health_state(provider: str, state: dict[str, Any]) -> None:
               consecutive_rate_limits=excluded.consecutive_rate_limits,
               rate_limit_cooldown_until=excluded.rate_limit_cooldown_until,
               latency_ms_p50=excluded.latency_ms_p50,
+              latency_updated_at=excluded.latency_updated_at,
               last_failure_at=excluded.last_failure_at,
               last_check_at=excluded.last_check_at,
               health_score=excluded.health_score
@@ -679,6 +680,7 @@ def upsert_provider_health_state(provider: str, state: dict[str, Any]) -> None:
                 state.get("consecutive_rate_limits", 0),
                 state.get("rate_limit_cooldown_until"),
                 state.get("latency_ms_p50"),
+                state.get("latency_updated_at"),
                 state.get("last_failure_at"),
                 state.get("last_check_at"),
                 state.get("health_score", 1.0),
@@ -689,9 +691,22 @@ def upsert_provider_health_state(provider: str, state: dict[str, Any]) -> None:
         conn.close()
 
 
+def _ensure_provider_health_state_compat(conn: sqlite3.Connection) -> None:
+    columns = {row["name"] for row in conn.execute("PRAGMA table_info(provider_health_state)").fetchall()}
+    if not columns:
+        return
+    expected = {
+        "latency_updated_at": "TEXT",
+    }
+    for column, column_type in expected.items():
+        if column not in columns:
+            conn.execute(f"ALTER TABLE provider_health_state ADD COLUMN {column} {column_type}")
+
+
 def load_provider_health_state(providers: Optional[list[str]] = None) -> dict[str, dict[str, Any]]:
     conn = _connect()
     try:
+        _ensure_provider_health_state_compat(conn)
         try:
             if providers:
                 placeholders = ",".join("?" for _ in providers)

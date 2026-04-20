@@ -280,20 +280,20 @@ def _adapt_classifier_for_light_chat(
     # damage than leaving the turn as general_chat.
     if (
         classifier.complexity == "low"
-        and classifier.confidence < 0.55
+        and classifier.confidence < 0.35
         and not has_rich_signals
-        and pre_signals.estimated_tokens <= 24
-        and pre_signals.message_length <= 72
+        and pre_signals.estimated_tokens <= 6
+        and pre_signals.message_length <= 20
     ):
         return replace(classifier, task_type="fast_utility", cost_profile="cheap")
 
     # Extremely weak, tiny, structure-free chat can still downgrade.
     if (
         classifier.complexity in (None, "medium")
-        and classifier.confidence <= 0.45
+        and classifier.confidence <= 0.25
         and not has_rich_signals
-        and pre_signals.estimated_tokens <= 16
-        and pre_signals.message_length <= 48
+        and pre_signals.estimated_tokens <= 4
+        and pre_signals.message_length <= 12
     ):
         return replace(classifier, task_type="fast_utility", complexity="low", cost_profile="cheap")
 

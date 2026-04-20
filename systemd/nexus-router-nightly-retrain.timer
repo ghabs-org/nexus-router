@@ -1,0 +1,11 @@
+[Unit]
+Description=Run Nexus Router nightly classifier retrain/export/deploy
+
+[Timer]
+OnCalendar=*-*-* 02:00:00 UTC
+AccuracySec=5m
+Unit=nexus-router-nightly-retrain.service
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -20,6 +20,8 @@ RATE_LIMIT_SOFT_BAN_WINDOWS = {
     2: timedelta(minutes=15),
 }
 RATE_LIMIT_SOFT_BAN_MAX = timedelta(hours=1)
+LATENCY_FRESHNESS_WINDOW = timedelta(minutes=30)
+LATENCY_STALE_DECAY_WINDOW = timedelta(hours=6)
 
 
 def _now_iso() -> str:
@@ -80,6 +82,7 @@ def load_provider_health(providers: Optional[list[str]] = None) -> dict[str, Pro
             "latencyMsP50": data.get("latency_ms_p50"),
             "lastFailureAt": data.get("last_failure_at"),
             "lastCheckAt": data.get("last_check_at"),
+            "latencyUpdatedAt": data.get("latency_updated_at"),
         }
         payload["healthScore"] = _compute_health_score(payload)
         if abs(float(data.get("health_score") or 0.0) - payload["healthScore"]) > 1e-9:
@@ -94,6 +97,7 @@ def load_provider_health(providers: Optional[list[str]] = None) -> dict[str, Pro
                 "latency_ms_p50": payload["latencyMsP50"],
                 "last_failure_at": payload["lastFailureAt"],
                 "last_check_at": payload["lastCheckAt"],
+                "latency_updated_at": payload["latencyUpdatedAt"],
                 "health_score": payload["healthScore"],
             })
             data = load_provider_health_state([pid]).get(pid, data)
@@ -109,7 +113,10 @@ def _compute_health_score(data: dict) -> float:
     latency = data.get("latencyMsP50")
     quota_ratio = data.get("quotaRemainingRatio")
     last_check_at = data.get("lastCheckAt")
+    latency_updated_at = data.get("latencyUpdatedAt") or last_check_at
     cooldown_until = _parse_iso8601(data.get("rateLimitCooldownUntil"))
+
+    latency_penalty_latency = latency
 
     if auth in AUTH_STATUSES_BLOCKED:
         return 0.0
@@ -142,16 +149,30 @@ def _compute_health_score(data: dict) -> float:
     score -= min(float(err or 0.0) * 0.40, 0.40)
     score -= min(float(ratelimit or 0.0) * 0.25, 0.25)
 
-    if latency and latency > 5000:
-        score -= min((latency - 5000) / 20000, 0.10)
+    latency_check_dt = _parse_iso8601(latency_updated_at)
+    if latency_check_dt:
+        try:
+            latency_age = _now_dt() - latency_check_dt
+            if latency_age > LATENCY_FRESHNESS_WINDOW:
+                if latency_age >= LATENCY_STALE_DECAY_WINDOW:
+                    latency_penalty_latency = None
+                elif latency_penalty_latency is not None:
+                    decay_progress = (latency_age - LATENCY_FRESHNESS_WINDOW) / (LATENCY_STALE_DECAY_WINDOW - LATENCY_FRESHNESS_WINDOW)
+                    latency_penalty_latency = float(latency_penalty_latency) * max(0.0, 1.0 - decay_progress)
+        except Exception:
+            pass
 
     if last_check_at:
         try:
-            age_seconds = (_now_dt() - datetime.fromisoformat(last_check_at)).total_seconds()
+            last_check_dt = datetime.fromisoformat(last_check_at)
+            age_seconds = (_now_dt() - last_check_dt).total_seconds()
             if age_seconds > 1800:
                 score -= min((age_seconds - 1800) / 21600, 0.15)
         except Exception:
             pass
+
+    if latency_penalty_latency and latency_penalty_latency > 5000:
+        score -= min((latency_penalty_latency - 5000) / 20000, 0.10)
 
     return round(max(score, 0.0), 4)
 
@@ -176,6 +197,7 @@ def record_observation(
         "consecutive_rate_limits": int(existing.get("consecutive_rate_limits") or 0),
         "rate_limit_cooldown_until": existing.get("rate_limit_cooldown_until"),
         "latency_ms_p50": existing.get("latency_ms_p50"),
+        "latency_updated_at": existing.get("latency_updated_at"),
         "last_failure_at": existing.get("last_failure_at"),
         "last_check_at": _now_iso(),
     }
@@ -221,10 +243,13 @@ def record_observation(
 
     if latency_ms is not None:
         prev = existing.get("latency_ms_p50")
-        if prev is None:
+        prev_latency_updated_at = _parse_iso8601(existing.get("latency_updated_at") or existing.get("last_check_at"))
+        latency_stale = not prev_latency_updated_at or (_now_dt() - prev_latency_updated_at) > LATENCY_STALE_DECAY_WINDOW
+        if prev is None or latency_stale:
             pdata["latency_ms_p50"] = latency_ms
         else:
             pdata["latency_ms_p50"] = round(0.3 * latency_ms + 0.7 * float(prev), 1)
+        pdata["latency_updated_at"] = _now_iso()
 
     payload_for_score = {
         "auth": pdata["auth"],
@@ -237,6 +262,7 @@ def record_observation(
         "latencyMsP50": pdata.get("latency_ms_p50"),
         "lastFailureAt": pdata.get("last_failure_at"),
         "lastCheckAt": pdata.get("last_check_at"),
+        "latencyUpdatedAt": pdata.get("latency_updated_at"),
     }
     pdata["health_score"] = _compute_health_score(payload_for_score)
 
