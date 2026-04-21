@@ -101,6 +101,7 @@ def _finalize_summary(task_stats, model_task, *, feedback_total: int) -> dict:
                 "unlabelled": s["unlabelled"],
             }
         )
+    by_task.sort(key=lambda item: (item["wrong_rate"], item["samples"]), reverse=True)
 
     by_model_task = []
     for key, s in sorted(model_task.items(), key=lambda kv: kv[1]["samples"], reverse=True):
