@@ -13,6 +13,7 @@ Does NOT mutate router state.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import sqlite3
 import sys
@@ -128,10 +129,93 @@ def _finalize_summary(task_stats, model_task, *, feedback_total: int) -> dict:
     }
 
 
-def _training_export_summary() -> dict[str, object] | None:
+def _feedback_fingerprint(conn: sqlite3.Connection, where_sql: str, params: list[object]) -> dict[str, object]:
+    row = conn.execute(
+        f"""
+        SELECT
+          COUNT(*) AS feedback_total,
+          MAX(rf.created_at) AS latest_feedback_at,
+          COUNT(DISTINCT COALESCE(NULLIF(rf.corrected_task, ''), rd.task_type, 'unknown')) AS distinct_labels,
+          COUNT(DISTINCT COALESCE(rf.preferred_model, rd.selected_model, 'unknown')) AS distinct_models,
+          SUM(
+            LENGTH(COALESCE(rf.verdict, '')) +
+            LENGTH(COALESCE(rf.model_verdict, '')) +
+            LENGTH(COALESCE(rf.corrected_task, '')) +
+            LENGTH(COALESCE(rf.preferred_model, '')) +
+            LENGTH(COALESCE(rf.reason_tag, ''))
+          ) AS field_length_sum
+        FROM route_feedback rf
+        JOIN routing_decisions rd ON rd.id = rf.decision_id
+        {where_sql}
+        """,
+        params,
+    ).fetchone()
+    raw = "|".join(
+        [
+            str(row["feedback_total"] or 0),
+            str(row["latest_feedback_at"] or ""),
+            str(row["distinct_labels"] or 0),
+            str(row["distinct_models"] or 0),
+            str(row["field_length_sum"] or 0),
+        ]
+    )
+    return {
+        "feedback_total": int(row["feedback_total"] or 0),
+        "latest_feedback_at": row["latest_feedback_at"],
+        "distinct_labels": int(row["distinct_labels"] or 0),
+        "distinct_models": int(row["distinct_models"] or 0),
+        "field_length_sum": int(row["field_length_sum"] or 0),
+        "signature": hashlib.sha256(raw.encode("utf-8")).hexdigest(),
+    }
+
+
+def _load_previous_report(report_path: Path) -> dict[str, object] | None:
+    try:
+        if report_path.exists():
+            return json.loads(report_path.read_text())
+    except Exception:
+        return None
+    return None
+
+
+def _should_skip_training(conn: sqlite3.Connection, where_sql: str, params: list[object]) -> tuple[bool, dict[str, object], dict[str, object] | None]:
+    previous_path = Path.home() / ".local" / "state" / "nexus-router" / "reports" / f"calibration-{datetime.now(timezone.utc).date().isoformat()}.json"
+    previous_report = _load_previous_report(previous_path)
+    fingerprint = _feedback_fingerprint(conn, where_sql, params)
+    if not previous_report:
+        return False, fingerprint, None
+    previous_feedback_total = int(previous_report.get("feedback_total") or 0)
+    previous_latest_feedback_at = ((previous_report.get("feedback_fingerprint") or {}).get("latest_feedback_at") or previous_report.get("latest_feedback_at"))
+    previous_signature = ((previous_report.get("feedback_fingerprint") or {}).get("signature"))
+    skip = (
+        previous_feedback_total == fingerprint["feedback_total"]
+        and previous_latest_feedback_at == fingerprint["latest_feedback_at"]
+        and previous_signature == fingerprint["signature"]
+    )
+    return skip, fingerprint, previous_report
+
+
+def _training_export_summary(conn: sqlite3.Connection, where_sql: str, params: list[object]) -> dict[str, object] | None:
     export_script = ROOT / "scripts" / "export_classifier_training_data.py"
     if not export_script.exists():
         return None
+
+    skip_training, fingerprint, previous_report = _should_skip_training(conn, where_sql, params)
+    if skip_training:
+        previous_training = (previous_report or {}).get("training_export") or {}
+        return {
+            "export_output_path": previous_training.get("export_output_path"),
+            "records_written": int(previous_training.get("records_written") or previous_report.get("training_rows_used") or 0),
+            "rows_scanned": int(previous_training.get("rows_scanned") or previous_report.get("training_rows_scanned") or 0),
+            "label_distribution": previous_training.get("label_distribution") or {},
+            "rare_labels": previous_training.get("rare_labels") or [],
+            "command_ok": True,
+            "stdout": "",
+            "stderr": "",
+            "skipped": True,
+            "skip_reason": "feedback fingerprint unchanged",
+            "feedback_fingerprint": fingerprint,
+        }
 
     with tempfile.TemporaryDirectory(prefix="router-calibration-") as tmpdir:
         export_path = Path(tmpdir) / "training.jsonl"
@@ -141,6 +225,8 @@ def _training_export_summary() -> dict[str, object] | None:
             "rows_scanned": 0,
             "label_distribution": {},
             "rare_labels": [],
+            "skipped": False,
+            "feedback_fingerprint": fingerprint,
         }
         import subprocess
         result = subprocess.run(
@@ -275,7 +361,7 @@ def main() -> None:
             }
         )
 
-    training_export = _training_export_summary()
+    training_export = _training_export_summary(conn, where_sql, params)
 
     report = {
         "ok": True,
@@ -293,6 +379,7 @@ def main() -> None:
         "training_export": training_export,
         "training_rows_used": int((training_export or {}).get("records_written") or 0),
         "training_rows_scanned": int((training_export or {}).get("rows_scanned") or 0),
+        "feedback_fingerprint": (training_export or {}).get("feedback_fingerprint"),
         "task_summary": overall["task_summary"],
         "model_task_signals_top": overall["model_task_signals_top"],
         "source_summary": source_summary,
