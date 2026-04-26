@@ -9,19 +9,26 @@ routing:
   coding:
     description: "Code generation, implementation, bug fixing, refactoring"
     candidates:
-      - model: openai-codex/gpt-5.4
+      - model: openai-codex/gpt-5.5
         priority: 1
-      - model: openai-codex/gpt-5.3-codex
+      - model: nvidia/qwen/qwen3-coder-480b-a35b-instruct
         priority: 2
-      - model: github-copilot/gpt-5.3-codex
+      - model: openai-codex/gpt-5.4
         priority: 3
-      - model: github-copilot/gpt-5.4
+      - model: openrouter/qwen/qwen3-coder:free
         priority: 4
-      - model: github-copilot/claude-sonnet-4.6
+      - model: openai-codex/gpt-5.3-codex
         priority: 5
-      - model: openai-codex/gpt-5.4-mini
+      - model: github-copilot/gpt-5.3-codex
         priority: 6
-
+      - model: github-copilot/gpt-5.4
+        priority: 7
+      - model: github-copilot/claude-sonnet-4.6
+        priority: 8
+      - model: nvidia/deepseek-ai/deepseek-v4-pro
+        priority: 9
+      - model: openai-codex/gpt-5.4-mini
+        priority: 10
   code_review:
     description: "Code review, diff analysis, PR audit, quality feedback"
     candidates:
@@ -29,27 +36,35 @@ routing:
         priority: 1
       - model: github-copilot/claude-opus-4.6
         priority: 2
-      - model: openai-codex/gpt-5.4
+      - model: openai-codex/gpt-5.5
         priority: 3
-      - model: github-copilot/gpt-5.4
+      - model: nvidia/deepseek-ai/deepseek-v4-pro
         priority: 4
-      - model: google-gemini-cli/gemini-3.1-pro-preview
+      - model: openai-codex/gpt-5.4
         priority: 5
-
+      - model: github-copilot/gpt-5.4
+        priority: 6
+      - model: nvidia/qwen/qwen3-coder-480b-a35b-instruct
+        priority: 7
+      - model: google-gemini-cli/gemini-3.1-pro-preview
+        priority: 8
   reasoning:
     description: "Planning, strategy, comparison, decision-making, architecture"
     candidates:
-      - model: github-copilot/claude-sonnet-4.6
+      - model: openai-codex/gpt-5.5
         priority: 1
-      - model: github-copilot/claude-opus-4.6
+      - model: github-copilot/claude-sonnet-4.6
         priority: 2
-      - model: google-gemini-cli/gemini-3.1-pro-preview
+      - model: github-copilot/claude-opus-4.6
         priority: 3
-      - model: openai-codex/gpt-5.4
+      - model: nvidia/deepseek-ai/deepseek-v4-pro
         priority: 4
-      - model: github-copilot/gpt-5.4
+      - model: google-gemini-cli/gemini-3.1-pro-preview
         priority: 5
-
+      - model: openai-codex/gpt-5.4
+        priority: 6
+      - model: github-copilot/gpt-5.4
+        priority: 7
   summarization:
     description: "Summarize, extract, distill, TL;DR, synthesis of large content"
     candidates:
@@ -59,96 +74,92 @@ routing:
         priority: 2
       - model: github-copilot/claude-sonnet-4.6
         priority: 3
-      - model: openai-codex/gpt-5.4-mini
+      - model: openai-codex/gpt-5.5
         priority: 4
-      - model: google-gemini-cli/gemini-2.5-flash
+      - model: nvidia/deepseek-ai/deepseek-v4-pro
         priority: 5
-
+      - model: openai-codex/gpt-5.4-mini
+        priority: 6
+      - model: google-gemini-cli/gemini-2.5-flash
+        priority: 7
   fast_utility:
     description: "Quick lookups, simple rewrites, short answers, minor edits"
     candidates:
-      - model: openai-codex/gpt-5.4-mini
+      - model: nvidia/deepseek-ai/deepseek-v4-flash
         priority: 1
-      - model: google-gemini-cli/gemini-3-flash-preview
+      - model: openai-codex/gpt-5.4-mini
         priority: 2
-      - model: google-gemini-cli/gemini-2.5-flash
+      - model: google-gemini-cli/gemini-3-flash-preview
         priority: 3
-      - model: github-copilot/gpt-5.4-mini
+      - model: google-gemini-cli/gemini-2.5-flash
         priority: 4
-      - model: github-copilot/gpt-5-mini
+      - model: github-copilot/gpt-5.4-mini
         priority: 5
-
+      - model: github-copilot/gpt-5-mini
+        priority: 6
+      - model: openrouter/qwen/qwen3-coder:free
+        priority: 7
   long_context:
     description: "Large documents, many files, long transcripts, multi-section analysis"
     min_context: 200000
     candidates:
-      - model: google-gemini-cli/gemini-3.1-pro-preview
+      - model: openai-codex/gpt-5.5
         priority: 1
-      - model: github-copilot/gemini-3.1-pro-preview
+      - model: google-gemini-cli/gemini-3.1-pro-preview
         priority: 2
-      - model: github-copilot/claude-sonnet-4.6
+      - model: github-copilot/gemini-3.1-pro-preview
         priority: 3
-      - model: github-copilot/claude-opus-4.6
+      - model: nvidia/qwen/qwen3-coder-480b-a35b-instruct
         priority: 4
-
+      - model: openrouter/qwen/qwen3-coder:free
+        priority: 5
+      - model: github-copilot/claude-sonnet-4.6
+        priority: 6
+      - model: github-copilot/claude-opus-4.6
+        priority: 7
   vision:
     description: "Image understanding, screenshots, diagrams, photos"
     requires_vision: true
     candidates:
       - model: google-gemini-cli/gemini-3.1-pro-preview
         priority: 1
-      - model: github-copilot/claude-sonnet-4.6
+      - model: openai-codex/gpt-5.5
         priority: 2
-      - model: github-copilot/gemini-3.1-pro-preview
+      - model: github-copilot/claude-sonnet-4.6
         priority: 3
-      - model: openai-codex/gpt-5.4
+      - model: github-copilot/gemini-3.1-pro-preview
         priority: 4
-
+      - model: openai-codex/gpt-5.4
+        priority: 5
   general_chat:
     description: "Conversational, general questions, advice, non-specialized tasks"
     candidates:
-      - model: openai-codex/gpt-5.4
+      - model: openai-codex/gpt-5.5
         priority: 1
-      - model: github-copilot/claude-sonnet-4.6
+      - model: openai-codex/gpt-5.4
         priority: 2
-      - model: google-gemini-cli/gemini-3.1-pro-preview
+      - model: github-copilot/claude-sonnet-4.6
         priority: 3
-      - model: openai-codex/gpt-5.4-mini
+      - model: google-gemini-cli/gemini-3.1-pro-preview
         priority: 4
-
+      - model: nvidia/deepseek-ai/deepseek-v4-flash
+        priority: 5
+      - model: openai-codex/gpt-5.4-mini
+        priority: 6
   eco:
     description: "Environmentally friendly, efficient, small-footprint models"
     candidates:
-      - model: google-gemini-cli/gemini-3-flash-preview
+      - model: nvidia/deepseek-ai/deepseek-v4-flash
         priority: 1
-      - model: openai-codex/gpt-5.4-mini
+      - model: openrouter/qwen/qwen3-coder:free
         priority: 2
-      - model: google-gemini-cli/gemini-2.5-flash
+      - model: nvidia/qwen/qwen3-coder-480b-a35b-instruct
         priority: 3
-      - model: github-copilot/gpt-5.4-mini
+      - model: google-gemini-cli/gemini-3-flash-preview
         priority: 4
-
-# Scoring formula weights
-scoring:
-  weights:
-    task_fit: 0.50       # how well model fits task type
-    health: 0.20         # current provider health / auth / quota
-    preference: 0.10     # explicit user/policy preference
-    learned: 0.10        # historical performance for this task
-    cost: 0.05           # cost efficiency
-    speed: 0.05          # latency preference
-  health_hard_cutoff: 0.30  # models below this health score are excluded
-
-feedback:
-  model_preference:
-    enabled: true
-    max_bump: 0.04
-    max_penalty: 0.30
-    min_samples: 3
-    decay_window_days: 30
-    hard_exclude_enabled: true
-    hard_exclude_min_samples: 10
-    hard_exclude_centered_score_lte: -0.8
-  adapters:
-    telegram_enabled: true
-    discord_enabled: false
+      - model: openai-codex/gpt-5.4-mini
+        priority: 5
+      - model: google-gemini-cli/gemini-2.5-flash
+        priority: 6
+      - model: github-copilot/gpt-5.4-mini
+        priority: 7

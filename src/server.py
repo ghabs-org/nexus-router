@@ -251,7 +251,7 @@ class RouterHandler(BaseHTTPRequestHandler):
     def _handle_route(self, body: dict):
         try:
             message = body.get("message", "")
-            has_image = bool(body.get("has_image", False))
+            has_image = bool(body.get("has_image", body.get("has_image_attachment", False)))
             cost_profile = body.get("cost_profile", "balanced")
             use_llm = bool(body.get("use_llm_classifier", False))
             classifier_model = body.get("classifier_model")

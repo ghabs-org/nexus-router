@@ -3,7 +3,63 @@
 # These override family defaults from families.yaml for specific edge cases
 # or known deviations from the family pattern.
 
-overrides: {}
+overrides:
+  openai-codex/gpt-5.5:
+    coding: 0.97
+    review: 0.84
+    reasoning: 0.88
+    summarize: 0.78
+    fast: 0.64
+    cost: 0.52
+    tools: 0.94
+
+  openrouter/qwen/qwen3-coder:free:
+    coding: 0.84
+    review: 0.80
+    reasoning: 0.78
+    summarize: 0.74
+    fast: 0.62
+    cost: 1.00
+    eco: 0.96
+    tools: 0.74
+    multilingual: 0.88
+    is_free: true
+
+  nvidia/qwen/qwen3-coder-480b-a35b-instruct:
+    coding: 0.86
+    review: 0.82
+    reasoning: 0.80
+    summarize: 0.76
+    fast: 0.66
+    cost: 1.00
+    eco: 0.95
+    tools: 0.78
+    multilingual: 0.88
+    is_free: true
+
+  nvidia/deepseek-ai/deepseek-v4-pro:
+    coding: 0.84
+    review: 0.83
+    reasoning: 0.88
+    summarize: 0.80
+    fast: 0.58
+    cost: 1.00
+    eco: 0.92
+    tools: 0.76
+    multilingual: 0.82
+    is_free: true
+
+  nvidia/deepseek-ai/deepseek-v4-flash:
+    coding: 0.78
+    review: 0.76
+    reasoning: 0.76
+    summarize: 0.76
+    fast: 0.86
+    cost: 1.00
+    eco: 0.96
+    tools: 0.72
+    multilingual: 0.80
+    is_free: true
 
 # Example:
 # overrides:
