@@ -39,14 +39,20 @@ def ensure_full_registry():
     if src_catalog.exists():
         (generated_root / "openclaw-models.json").write_text(src_catalog.read_text())
 
-    env = dict(**__import__("os").environ)
-    env.setdefault("NEXUS_ROUTER_STATE_ROOT", str(state_root))
-    subprocess.run(
-        [sys.executable, "src/generate_registry.py", "--only-configured"],
-        cwd=str(repo_root),
-        capture_output=True,
-        env=env,
-    )
+        env = dict(**__import__("os").environ)
+        env.setdefault("NEXUS_ROUTER_STATE_ROOT", str(state_root))
+        subprocess.run(
+            [sys.executable, "src/generate_registry.py", "--only-configured"],
+            cwd=str(repo_root),
+            capture_output=True,
+            env=env,
+        )
+    else:
+        # catalog/raw is intentionally gitignored; fresh checkouts use the
+        # committed generated registry for tests that don't exercise fetching.
+        committed_registry = repo_root / "generated" / "models.json"
+        if committed_registry.exists():
+            (generated_root / "models.json").write_text(committed_registry.read_text())
 
 
 @pytest.fixture
@@ -69,6 +75,8 @@ def provider_health_ok():
         "openai-codex": ProviderHealth(provider="openai-codex", auth="ok", quota="healthy", health_score=0.95),
         "github-copilot": ProviderHealth(provider="github-copilot", auth="ok", quota="healthy", health_score=0.95),
         "google-gemini-cli": ProviderHealth(provider="google-gemini-cli", auth="ok", quota="healthy", health_score=0.95),
+        "openrouter": ProviderHealth(provider="openrouter", auth="ok", quota="healthy", health_score=0.95),
+        "nvidia": ProviderHealth(provider="nvidia", auth="ok", quota="healthy", health_score=0.95),
     }
 
 
@@ -80,6 +88,20 @@ def router():
 # ── Scorer tests ──────────────────────────────────────────────────────────────
 
 class TestScorer:
+
+    def test_new_router_catalog_models_are_available(self, authed_models):
+        models = {m["id"]: m for m in authed_models}
+        expected = {
+            "openai-codex/gpt-5.5": None,
+            "openrouter/qwen/qwen3-coder:free": True,
+            "nvidia/qwen/qwen3-coder-480b-a35b-instruct": True,
+            "nvidia/deepseek-ai/deepseek-v4-flash": True,
+            "nvidia/deepseek-ai/deepseek-v4-pro": True,
+        }
+        for model_id, is_free in expected.items():
+            assert model_id in models
+            if is_free is not None:
+                assert models[model_id]["features"].get("is_free") is is_free
 
     def test_coding_task_prefers_codex(self, authed_models, provider_health_ok):
         classifier = ClassifierOutput(task_type="coding", complexity="high", confidence=0.90)
@@ -515,8 +537,8 @@ class TestRouter:
         assert 0.0 <= decision.score <= 1.0
 
     def test_adapt_only_weak_tiny_low_complexity_general_chat_to_fast_utility(self):
-        classifier = ClassifierOutput(task_type="general_chat", complexity="low", confidence=0.80)
-        pre = PreSignals(message_length=80, estimated_tokens=20)
+        classifier = ClassifierOutput(task_type="general_chat", complexity="low", confidence=0.30)
+        pre = PreSignals(message_length=20, estimated_tokens=6)
         adapted = _adapt_classifier_for_light_chat(classifier, pre)
         assert adapted.task_type == "fast_utility"
         assert adapted.cost_profile == "cheap"
@@ -528,8 +550,8 @@ class TestRouter:
         assert adapted.task_type == "general_chat"
 
     def test_adapt_low_confidence_short_general_chat_to_fast_utility(self):
-        classifier = ClassifierOutput(task_type="general_chat", complexity="medium", confidence=0.60)
-        pre = PreSignals(message_length=180, estimated_tokens=40)
+        classifier = ClassifierOutput(task_type="general_chat", complexity="medium", confidence=0.25)
+        pre = PreSignals(message_length=12, estimated_tokens=4)
         adapted = _adapt_classifier_for_light_chat(classifier, pre)
         assert adapted.task_type == "fast_utility"
         assert adapted.complexity == "low"

@@ -25,6 +25,8 @@ MANAGED_PROVIDERS = [
     "openai-codex",
     "github-copilot",
     "google-gemini-cli",
+    "openrouter",
+    "nvidia",
 ]
 
 

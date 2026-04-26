@@ -1,6 +1,6 @@
 {
-  "generatedAt": "2026-04-15T14:52:28.609098+00:00",
-  "totalModels": 822,
+  "generatedAt": "2026-04-26T18:38:23.327520+00:00",
+  "totalModels": 834,
   "filter": {
     "onlyConfigured": false,
     "providers": null
@@ -89,7 +89,7 @@
       "scoreSource": {
         "coding": "global:default",
         "review": "global:default",
-        "reasoning": "benchmark:artificialanalysis+catalog-only",
+        "reasoning": "benchmark:artificialanalysis",
         "summarize": "global:default",
         "fast": "global:default",
         "cost": "global:default",
@@ -135,7 +135,7 @@
       "scoreSource": {
         "coding": "global:default",
         "review": "global:default",
-        "reasoning": "benchmark:artificialanalysis+catalog-only",
+        "reasoning": "benchmark:artificialanalysis",
         "summarize": "global:default",
         "fast": "global:default",
         "cost": "global:default",
@@ -182,7 +182,7 @@
       "scoreSource": {
         "coding": "global:default",
         "review": "global:default",
-        "reasoning": "benchmark:artificialanalysis+catalog-only",
+        "reasoning": "benchmark:artificialanalysis",
         "summarize": "global:default",
         "fast": "global:default",
         "cost": "global:default",
@@ -229,7 +229,7 @@
       "scoreSource": {
         "coding": "global:default",
         "review": "global:default",
-        "reasoning": "benchmark:artificialanalysis+catalog-only",
+        "reasoning": "benchmark:artificialanalysis",
         "summarize": "global:default",
         "fast": "global:default",
         "cost": "global:default",
@@ -886,7 +886,7 @@
       "scoreSource": {
         "coding": "global:default",
         "review": "global:default",
-        "reasoning": "benchmark:artificialanalysis+catalog-only",
+        "reasoning": "benchmark:artificialanalysis",
         "summarize": "global:default",
         "fast": "global:default",
         "cost": "global:default",
@@ -932,7 +932,7 @@
       "scoreSource": {
         "coding": "global:default",
         "review": "global:default",
-        "reasoning": "benchmark:artificialanalysis+catalog-only",
+        "reasoning": "benchmark:artificialanalysis",
         "summarize": "global:default",
         "fast": "global:default",
         "cost": "global:default",
@@ -978,7 +978,7 @@
       "scoreSource": {
         "coding": "global:default",
         "review": "global:default",
-        "reasoning": "benchmark:artificialanalysis+catalog-only",
+        "reasoning": "benchmark:artificialanalysis",
         "summarize": "global:default",
         "fast": "global:default",
         "cost": "global:default",
@@ -2133,7 +2133,7 @@
       "scores": {
         "coding": 0.7,
         "review": 0.7,
-        "reasoning": 0.777,
+        "reasoning": 0.7,
         "summarize": 0.7,
         "fast": 0.7,
         "cost": 0.7,
@@ -2146,7 +2146,7 @@
       "scoreSource": {
         "coding": "global:default",
         "review": "global:default",
-        "reasoning": "benchmark:artificialanalysis+catalog-only",
+        "reasoning": "global:default",
         "summarize": "global:default",
         "fast": "global:default",
         "cost": "global:default",
@@ -2378,7 +2378,7 @@
       "scoreSource": {
         "coding": "global:default",
         "review": "global:default",
-        "reasoning": "benchmark:artificialanalysis+catalog-only",
+        "reasoning": "benchmark:artificialanalysis",
         "summarize": "global:default",
         "fast": "global:default",
         "cost": "global:default",
@@ -2424,7 +2424,7 @@
       "scoreSource": {
         "coding": "global:default",
         "review": "global:default",
-        "reasoning": "benchmark:artificialanalysis+catalog-only",
+        "reasoning": "benchmark:artificialanalysis",
         "summarize": "global:default",
         "fast": "global:default",
         "cost": "global:default",
@@ -3072,7 +3072,7 @@
       "scoreSource": {
         "coding": "global:default",
         "review": "global:default",
-        "reasoning": "benchmark:artificialanalysis+catalog-only",
+        "reasoning": "benchmark:artificialanalysis",
         "summarize": "global:default",
         "fast": "global:default",
         "cost": "global:default",
@@ -3164,7 +3164,7 @@
       "scoreSource": {
         "coding": "global:default",
         "review": "global:default",
-        "reasoning": "benchmark:artificialanalysis+catalog-only",
+        "reasoning": "benchmark:artificialanalysis",
         "summarize": "global:default",
         "fast": "global:default",
         "cost": "global:default",
@@ -6820,7 +6820,7 @@
       "scoreSource": {
         "coding": "global:default",
         "review": "global:default",
-        "reasoning": "benchmark:artificialanalysis+catalog-only",
+        "reasoning": "benchmark:artificialanalysis",
         "summarize": "global:default",
         "fast": "global:default",
         "cost": "global:default",
@@ -6866,7 +6866,7 @@
       "scoreSource": {
         "coding": "global:default",
         "review": "global:default",
-        "reasoning": "benchmark:artificialanalysis+catalog-only",
+        "reasoning": "benchmark:artificialanalysis",
         "summarize": "global:default",
         "fast": "global:default",
         "cost": "global:default",
@@ -6977,7 +6977,7 @@
       "features": {
         "supportsVision": true,
         "supportsTools": true,
-        "contextWindow": 128000,
+        "contextWindow": 144000,
         "inputModalities": [
           "text",
           "image"
@@ -7024,7 +7024,7 @@
       "features": {
         "supportsVision": true,
         "supportsTools": true,
-        "contextWindow": 128000,
+        "contextWindow": 160000,
         "inputModalities": [
           "text",
           "image"
@@ -7086,7 +7086,7 @@
       "scores": {
         "coding": 0.88,
         "review": 0.96,
-        "reasoning": 0.84,
+        "reasoning": 0.896,
         "summarize": 0.92,
         "fast": 0.52,
         "cost": 0.35,
@@ -7165,7 +7165,7 @@
       "features": {
         "supportsVision": true,
         "supportsTools": true,
-        "contextWindow": 128000,
+        "contextWindow": 144000,
         "inputModalities": [
           "text",
           "image"
@@ -7227,7 +7227,7 @@
       "scores": {
         "coding": 0.86,
         "review": 0.92,
-        "reasoning": 0.799,
+        "reasoning": 0.875,
         "summarize": 0.89,
         "fast": 0.68,
         "cost": 0.55,
@@ -7274,7 +7274,7 @@
       "scores": {
         "coding": 0.82,
         "review": 0.665,
-        "reasoning": 0.836,
+        "reasoning": 0.822,
         "summarize": 0.6318,
         "fast": 0.72,
         "cost": 0.6,
@@ -7319,30 +7319,30 @@
         "local": false
       },
       "scores": {
-        "coding": 0.82,
-        "review": 0.82,
+        "coding": 0.7,
+        "review": 0.7,
         "reasoning": 0.812,
-        "summarize": 0.84,
-        "fast": 0.88,
-        "cost": 0.82,
+        "summarize": 0.7,
+        "fast": 0.7,
+        "cost": 0.7,
         "eco": 0.7,
-        "context": 0.88,
-        "vision": 0.72,
-        "tools": 0.82,
-        "multilingual": 0.8
+        "context": 0.8,
+        "vision": 0.5,
+        "tools": 0.7,
+        "multilingual": 0.75
       },
       "scoreSource": {
-        "coding": "family:default",
-        "review": "family:default",
-        "reasoning": "benchmark:artificialanalysis+catalog-only",
-        "summarize": "pattern:gemini-3-flash-preview$",
-        "fast": "pattern:gemini-3-flash-preview$",
-        "cost": "pattern:gemini-3-flash-preview$",
-        "eco": "global:default",
-        "context": "pattern:gemini-3-flash-preview$",
-        "vision": "family:default",
-        "tools": "family:default",
-        "multilingual": "family:default"
+        "coding": "graduated:63_outcomes",
+        "review": "graduated:63_outcomes",
+        "reasoning": "benchmark:artificialanalysis",
+        "summarize": "graduated:63_outcomes",
+        "fast": "graduated:63_outcomes",
+        "cost": "graduated:63_outcomes",
+        "eco": "graduated:63_outcomes",
+        "context": "derived:context_window",
+        "vision": "graduated:63_outcomes",
+        "tools": "graduated:63_outcomes",
+        "multilingual": "graduated:63_outcomes"
       }
     },
     {
@@ -7426,17 +7426,17 @@
         "multilingual": 0.75
       },
       "scoreSource": {
-        "coding": "graduated:32_outcomes",
-        "review": "graduated:32_outcomes",
+        "coding": "graduated:30_outcomes",
+        "review": "graduated:30_outcomes",
         "reasoning": "benchmark:artificialanalysis",
-        "summarize": "graduated:32_outcomes",
-        "fast": "graduated:32_outcomes",
-        "cost": "graduated:32_outcomes",
-        "eco": "graduated:32_outcomes",
+        "summarize": "graduated:30_outcomes",
+        "fast": "graduated:30_outcomes",
+        "cost": "graduated:30_outcomes",
+        "eco": "graduated:30_outcomes",
         "context": "derived:context_window",
-        "vision": "graduated:32_outcomes",
-        "tools": "graduated:32_outcomes",
-        "multilingual": "graduated:32_outcomes"
+        "vision": "graduated:30_outcomes",
+        "tools": "graduated:30_outcomes",
+        "multilingual": "graduated:30_outcomes"
       }
     },
     {
@@ -7475,7 +7475,7 @@
       "scoreSource": {
         "coding": "pattern:gpt-4\\.1$",
         "review": "family:default",
-        "reasoning": "benchmark:artificialanalysis+catalog-only",
+        "reasoning": "benchmark:artificialanalysis",
         "summarize": "family:default",
         "fast": "family:default",
         "cost": "pattern:gpt-4\\.1$",
@@ -7569,7 +7569,7 @@
       "scoreSource": {
         "coding": "pattern:gpt-5(-mini)?$",
         "review": "family:default",
-        "reasoning": "benchmark:artificialanalysis+catalog-only",
+        "reasoning": "benchmark:artificialanalysis",
         "summarize": "family:default",
         "fast": "pattern:gpt-5(-mini)?$",
         "cost": "pattern:gpt-5(-mini)?$",
@@ -7588,7 +7588,7 @@
       "features": {
         "supportsVision": true,
         "supportsTools": true,
-        "contextWindow": 128000,
+        "contextWindow": 264000,
         "inputModalities": [
           "text",
           "image"
@@ -7608,7 +7608,7 @@
         "fast": 0.84,
         "cost": 0.8,
         "eco": 0.7,
-        "context": 0.8,
+        "context": 0.9,
         "vision": 0.72,
         "tools": 0.82,
         "multilingual": 0.8
@@ -7616,7 +7616,7 @@
       "scoreSource": {
         "coding": "pattern:gpt-5(-mini)?$",
         "review": "family:default",
-        "reasoning": "benchmark:artificialanalysis+catalog-only",
+        "reasoning": "benchmark:artificialanalysis",
         "summarize": "family:default",
         "fast": "pattern:gpt-5(-mini)?$",
         "cost": "pattern:gpt-5(-mini)?$",
@@ -7663,7 +7663,7 @@
       "scoreSource": {
         "coding": "pattern:gpt-5\\.1.*",
         "review": "family:default",
-        "reasoning": "benchmark:artificialanalysis+catalog-only",
+        "reasoning": "benchmark:artificialanalysis",
         "summarize": "family:default",
         "fast": "family:default",
         "cost": "family:default",
@@ -7710,7 +7710,7 @@
       "scoreSource": {
         "coding": "pattern:gpt-5\\.1.*",
         "review": "family:default",
-        "reasoning": "benchmark:artificialanalysis+catalog-only",
+        "reasoning": "benchmark:artificialanalysis",
         "summarize": "family:default",
         "fast": "family:default",
         "cost": "family:default",
@@ -7804,7 +7804,7 @@
       "scoreSource": {
         "coding": "pattern:gpt-5\\.1.*",
         "review": "family:default",
-        "reasoning": "benchmark:artificialanalysis+catalog-only",
+        "reasoning": "benchmark:artificialanalysis",
         "summarize": "family:default",
         "fast": "family:default",
         "cost": "family:default",
@@ -7851,7 +7851,7 @@
       "scoreSource": {
         "coding": "pattern:gpt-5\\.2(-codex)?$",
         "review": "family:default",
-        "reasoning": "benchmark:artificialanalysis+catalog-only",
+        "reasoning": "benchmark:artificialanalysis",
         "summarize": "family:default",
         "fast": "family:default",
         "cost": "family:default",
@@ -7930,30 +7930,30 @@
         "local": false
       },
       "scores": {
-        "coding": 0.7,
-        "review": 0.7,
+        "coding": 0.91,
+        "review": 0.82,
         "reasoning": 0.915,
-        "summarize": 0.7,
-        "fast": 0.7,
-        "cost": 0.7,
+        "summarize": 0.78,
+        "fast": 0.72,
+        "cost": 0.6,
         "eco": 0.7,
         "context": 0.9,
-        "vision": 0.5,
-        "tools": 0.7,
-        "multilingual": 0.75
+        "vision": 0.72,
+        "tools": 0.89,
+        "multilingual": 0.8
       },
       "scoreSource": {
-        "coding": "graduated:46_outcomes",
-        "review": "graduated:46_outcomes",
+        "coding": "pattern:gpt-5\\.3-codex$",
+        "review": "family:default",
         "reasoning": "benchmark:inherited:openai-codex/gpt-5.3-codex",
-        "summarize": "graduated:46_outcomes",
-        "fast": "graduated:46_outcomes",
-        "cost": "graduated:46_outcomes",
-        "eco": "graduated:46_outcomes",
+        "summarize": "family:default",
+        "fast": "family:default",
+        "cost": "family:default",
+        "eco": "global:default",
         "context": "derived:context_window",
-        "vision": "graduated:46_outcomes",
-        "tools": "graduated:46_outcomes",
-        "multilingual": "graduated:46_outcomes"
+        "vision": "family:default",
+        "tools": "pattern:gpt-5\\.3-codex$",
+        "multilingual": "family:default"
       }
     },
     {
@@ -8007,7 +8007,7 @@
       "id": "github-copilot/gpt-5.4-mini",
       "provider": "github-copilot",
       "modelId": "gpt-5.4-mini",
-      "name": "GPT-5.4 mini",
+      "name": "GPT-5.4 Mini",
       "features": {
         "supportsVision": true,
         "supportsTools": true,
@@ -8024,30 +8024,30 @@
         "local": false
       },
       "scores": {
-        "coding": 0.7,
-        "review": 0.7,
+        "coding": 0.82,
+        "review": 0.82,
         "reasoning": 0.875,
-        "summarize": 0.7,
-        "fast": 0.7,
-        "cost": 0.7,
+        "summarize": 0.78,
+        "fast": 0.88,
+        "cost": 0.83,
         "eco": 0.7,
         "context": 0.9,
-        "vision": 0.5,
-        "tools": 0.7,
-        "multilingual": 0.75
+        "vision": 0.72,
+        "tools": 0.82,
+        "multilingual": 0.8
       },
       "scoreSource": {
-        "coding": "graduated:90_outcomes",
-        "review": "graduated:90_outcomes",
+        "coding": "pattern:gpt-5\\.4-mini$",
+        "review": "family:default",
         "reasoning": "benchmark:inherited:openai-codex/gpt-5.4-mini",
-        "summarize": "graduated:90_outcomes",
-        "fast": "graduated:90_outcomes",
-        "cost": "graduated:90_outcomes",
-        "eco": "graduated:90_outcomes",
+        "summarize": "family:default",
+        "fast": "pattern:gpt-5\\.4-mini$",
+        "cost": "pattern:gpt-5\\.4-mini$",
+        "eco": "global:default",
         "context": "derived:context_window",
-        "vision": "graduated:90_outcomes",
-        "tools": "graduated:90_outcomes",
-        "multilingual": "graduated:90_outcomes"
+        "vision": "family:default",
+        "tools": "family:default",
+        "multilingual": "family:default"
       }
     },
     {
@@ -8085,7 +8085,7 @@
       "scoreSource": {
         "coding": "pattern:grok-code-fast-1$",
         "review": "family:default",
-        "reasoning": "benchmark:artificialanalysis+catalog-only",
+        "reasoning": "benchmark:artificialanalysis",
         "summarize": "family:default",
         "fast": "pattern:grok-code-fast-1$",
         "cost": "pattern:grok-code-fast-1$",
@@ -8541,7 +8541,7 @@
       "scores": {
         "coding": 0.76,
         "review": 0.5886,
-        "reasoning": 0.623,
+        "reasoning": 0.636,
         "summarize": 0.5591,
         "fast": 0.88,
         "cost": 0.88,
@@ -8586,30 +8586,30 @@
         "local": false
       },
       "scores": {
-        "coding": 0.7,
-        "review": 0.7,
+        "coding": 0.76,
+        "review": 0.78,
         "reasoning": 0.594,
-        "summarize": 0.7,
-        "fast": 0.7,
-        "cost": 0.7,
+        "summarize": 0.86,
+        "fast": 0.9,
+        "cost": 0.86,
         "eco": 0.7,
-        "context": 0.96,
-        "vision": 0.5,
-        "tools": 0.7,
-        "multilingual": 0.75
+        "context": 0.92,
+        "vision": 0.86,
+        "tools": 0.8,
+        "multilingual": 0.88
       },
       "scoreSource": {
-        "coding": "graduated:157_outcomes",
-        "review": "graduated:157_outcomes",
+        "coding": "family:default",
+        "review": "family:default",
         "reasoning": "benchmark:artificialanalysis",
-        "summarize": "graduated:157_outcomes",
-        "fast": "graduated:157_outcomes",
-        "cost": "graduated:157_outcomes",
-        "eco": "graduated:157_outcomes",
-        "context": "derived:context_window",
-        "vision": "graduated:157_outcomes",
-        "tools": "graduated:157_outcomes",
-        "multilingual": "graduated:157_outcomes"
+        "summarize": "pattern:gemini-2\\.5-flash$",
+        "fast": "pattern:gemini-2\\.5-flash$",
+        "cost": "pattern:gemini-2\\.5-flash$",
+        "eco": "global:default",
+        "context": "pattern:gemini-2\\.5-flash$",
+        "vision": "family:default",
+        "tools": "family:default",
+        "multilingual": "family:default"
       }
     },
     {
@@ -8635,7 +8635,7 @@
       "scores": {
         "coding": 0.76,
         "review": 0.665,
-        "reasoning": 0.836,
+        "reasoning": 0.822,
         "summarize": 0.6318,
         "fast": 0.82,
         "cost": 0.78,
@@ -8680,30 +8680,30 @@
         "local": false
       },
       "scores": {
-        "coding": 0.7,
-        "review": 0.7,
+        "coding": 0.76,
+        "review": 0.78,
         "reasoning": 0.812,
-        "summarize": 0.7,
-        "fast": 0.7,
-        "cost": 0.7,
+        "summarize": 0.88,
+        "fast": 0.9,
+        "cost": 0.85,
         "eco": 0.7,
-        "context": 0.96,
-        "vision": 0.5,
-        "tools": 0.7,
-        "multilingual": 0.75
+        "context": 0.92,
+        "vision": 0.86,
+        "tools": 0.8,
+        "multilingual": 0.88
       },
       "scoreSource": {
-        "coding": "graduated:40_outcomes",
-        "review": "graduated:40_outcomes",
+        "coding": "family:default",
+        "review": "family:default",
         "reasoning": "benchmark:inherited:github-copilot/gemini-3-flash-preview",
-        "summarize": "graduated:40_outcomes",
-        "fast": "graduated:40_outcomes",
-        "cost": "graduated:40_outcomes",
-        "eco": "graduated:40_outcomes",
-        "context": "derived:context_window",
-        "vision": "graduated:40_outcomes",
-        "tools": "graduated:40_outcomes",
-        "multilingual": "graduated:40_outcomes"
+        "summarize": "pattern:gemini-3-flash-preview$",
+        "fast": "pattern:gemini-3-flash-preview$",
+        "cost": "pattern:gemini-3-flash-preview$",
+        "eco": "global:default",
+        "context": "pattern:gemini-3-flash-preview$",
+        "vision": "family:default",
+        "tools": "family:default",
+        "multilingual": "family:default"
       }
     },
     {
@@ -8727,30 +8727,30 @@
         "local": false
       },
       "scores": {
-        "coding": 0.7,
-        "review": 0.7,
-        "reasoning": 0.7,
-        "summarize": 0.7,
-        "fast": 0.7,
-        "cost": 0.7,
+        "coding": 0.76,
+        "review": 0.78,
+        "reasoning": 0.88,
+        "summarize": 0.92,
+        "fast": 0.82,
+        "cost": 0.78,
         "eco": 0.7,
-        "context": 0.96,
-        "vision": 0.5,
-        "tools": 0.7,
-        "multilingual": 0.75
+        "context": 0.94,
+        "vision": 0.88,
+        "tools": 0.8,
+        "multilingual": 0.88
       },
       "scoreSource": {
-        "coding": "graduated:39_outcomes",
-        "review": "graduated:39_outcomes",
-        "reasoning": "graduated:39_outcomes",
-        "summarize": "graduated:39_outcomes",
-        "fast": "graduated:39_outcomes",
-        "cost": "graduated:39_outcomes",
-        "eco": "graduated:39_outcomes",
-        "context": "derived:context_window",
-        "vision": "graduated:39_outcomes",
-        "tools": "graduated:39_outcomes",
-        "multilingual": "graduated:39_outcomes"
+        "coding": "family:default",
+        "review": "family:default",
+        "reasoning": "pattern:gemini-3-pro-preview$",
+        "summarize": "pattern:gemini-3-pro-preview$",
+        "fast": "family:default",
+        "cost": "family:default",
+        "eco": "global:default",
+        "context": "pattern:gemini-3-pro-preview$",
+        "vision": "pattern:gemini-3-pro-preview$",
+        "tools": "family:default",
+        "multilingual": "family:default"
       }
     },
     {
@@ -8787,17 +8787,17 @@
         "multilingual": 0.75
       },
       "scoreSource": {
-        "coding": "graduated:363_outcomes",
-        "review": "graduated:363_outcomes",
+        "coding": "graduated:97_outcomes",
+        "review": "graduated:97_outcomes",
         "reasoning": "benchmark:artificialanalysis",
-        "summarize": "graduated:363_outcomes",
-        "fast": "graduated:363_outcomes",
-        "cost": "graduated:363_outcomes",
-        "eco": "graduated:363_outcomes",
+        "summarize": "graduated:97_outcomes",
+        "fast": "graduated:97_outcomes",
+        "cost": "graduated:97_outcomes",
+        "eco": "graduated:97_outcomes",
         "context": "derived:context_window",
-        "vision": "graduated:363_outcomes",
-        "tools": "graduated:363_outcomes",
-        "multilingual": "graduated:363_outcomes"
+        "vision": "graduated:97_outcomes",
+        "tools": "graduated:97_outcomes",
+        "multilingual": "graduated:97_outcomes"
       }
     },
     {
@@ -8964,7 +8964,7 @@
       "scores": {
         "coding": 0.7,
         "review": 0.5886,
-        "reasoning": 0.623,
+        "reasoning": 0.636,
         "summarize": 0.5591,
         "fast": 0.7,
         "cost": 0.7,
@@ -9199,7 +9199,7 @@
       "scores": {
         "coding": 0.7,
         "review": 0.665,
-        "reasoning": 0.836,
+        "reasoning": 0.822,
         "summarize": 0.6318,
         "fast": 0.7,
         "cost": 0.7,
@@ -9400,7 +9400,7 @@
       "scoreSource": {
         "coding": "global:default",
         "review": "global:default",
-        "reasoning": "benchmark:artificialanalysis+catalog-only",
+        "reasoning": "benchmark:artificialanalysis",
         "summarize": "global:default",
         "fast": "global:default",
         "cost": "global:default",
@@ -9447,7 +9447,7 @@
       "scoreSource": {
         "coding": "global:default",
         "review": "global:default",
-        "reasoning": "benchmark:artificialanalysis+catalog-only",
+        "reasoning": "benchmark:artificialanalysis",
         "summarize": "global:default",
         "fast": "global:default",
         "cost": "global:default",
@@ -9494,7 +9494,7 @@
       "scoreSource": {
         "coding": "global:default",
         "review": "global:default",
-        "reasoning": "benchmark:artificialanalysis+catalog-only",
+        "reasoning": "benchmark:artificialanalysis",
         "summarize": "global:default",
         "fast": "global:default",
         "cost": "global:default",
@@ -9528,7 +9528,7 @@
       "scores": {
         "coding": 0.7,
         "review": 0.5886,
-        "reasoning": 0.623,
+        "reasoning": 0.636,
         "summarize": 0.5591,
         "fast": 0.7,
         "cost": 0.7,
@@ -9588,7 +9588,7 @@
       "scoreSource": {
         "coding": "global:default",
         "review": "global:default",
-        "reasoning": "benchmark:artificialanalysis+catalog-only",
+        "reasoning": "benchmark:artificialanalysis",
         "summarize": "global:default",
         "fast": "global:default",
         "cost": "global:default",
@@ -9682,7 +9682,7 @@
       "scoreSource": {
         "coding": "global:default",
         "review": "global:default",
-        "reasoning": "benchmark:artificialanalysis+catalog-only",
+        "reasoning": "benchmark:artificialanalysis",
         "summarize": "global:default",
         "fast": "global:default",
         "cost": "global:default",
@@ -9776,7 +9776,7 @@
       "scoreSource": {
         "coding": "global:default",
         "review": "global:default",
-        "reasoning": "benchmark:artificialanalysis+catalog-only",
+        "reasoning": "benchmark:artificialanalysis",
         "summarize": "global:default",
         "fast": "global:default",
         "cost": "global:default",
@@ -9917,7 +9917,7 @@
       "scoreSource": {
         "coding": "global:default",
         "review": "global:default",
-        "reasoning": "benchmark:artificialanalysis+catalog-only",
+        "reasoning": "benchmark:artificialanalysis",
         "summarize": "global:default",
         "fast": "global:default",
         "cost": "global:default",
@@ -9951,7 +9951,7 @@
       "scores": {
         "coding": 0.7,
         "review": 0.665,
-        "reasoning": 0.836,
+        "reasoning": 0.822,
         "summarize": 0.6318,
         "fast": 0.7,
         "cost": 0.7,
@@ -10199,7 +10199,7 @@
       "scoreSource": {
         "coding": "global:default",
         "review": "global:default",
-        "reasoning": "benchmark:artificialanalysis+catalog-only",
+        "reasoning": "benchmark:artificialanalysis",
         "summarize": "global:default",
         "fast": "global:default",
         "cost": "global:default",
@@ -10526,7 +10526,7 @@
       "scoreSource": {
         "coding": "global:default",
         "review": "global:default",
-        "reasoning": "benchmark:artificialanalysis+catalog-only",
+        "reasoning": "benchmark:artificialanalysis",
         "summarize": "global:default",
         "fast": "global:default",
         "cost": "global:default",
@@ -10571,9 +10571,9 @@
       },
       "scoreSource": {
         "coding": "global:default",
-        "review": "benchmark:catalog-only+openllm",
-        "reasoning": "benchmark:catalog-only+openllm",
-        "summarize": "benchmark:catalog-only+openllm",
+        "review": "benchmark:openllm",
+        "reasoning": "benchmark:openllm",
+        "summarize": "benchmark:openllm",
         "fast": "global:default",
         "cost": "global:default",
         "eco": "global:default",
@@ -10710,7 +10710,7 @@
       "scoreSource": {
         "coding": "global:default",
         "review": "global:default",
-        "reasoning": "benchmark:artificialanalysis+catalog-only",
+        "reasoning": "benchmark:artificialanalysis",
         "summarize": "global:default",
         "fast": "global:default",
         "cost": "global:default",
@@ -10756,7 +10756,7 @@
       "scoreSource": {
         "coding": "global:default",
         "review": "global:default",
-        "reasoning": "benchmark:artificialanalysis+catalog-only",
+        "reasoning": "benchmark:artificialanalysis",
         "summarize": "global:default",
         "fast": "global:default",
         "cost": "global:default",
@@ -10979,7 +10979,7 @@
         "summarize": 0.7,
         "fast": 0.7,
         "cost": 0.7,
-        "eco": 0.0,
+        "eco": 0.7,
         "context": 0.9,
         "vision": 0.0,
         "tools": 0.7,
@@ -10992,7 +10992,7 @@
         "summarize": "global:default",
         "fast": "global:default",
         "cost": "global:default",
-        "eco": "benchmark:inherited:nvidia/moonshotai/kimi-k2-instruct-0905",
+        "eco": "global:default",
         "context": "derived:context_window",
         "vision": "derived:modality",
         "tools": "global:default",
@@ -11080,7 +11080,7 @@
       "scoreSource": {
         "coding": "global:default",
         "review": "global:default",
-        "reasoning": "benchmark:artificialanalysis+catalog-only",
+        "reasoning": "benchmark:artificialanalysis",
         "summarize": "global:default",
         "fast": "global:default",
         "cost": "global:default",
@@ -11125,9 +11125,9 @@
       },
       "scoreSource": {
         "coding": "global:default",
-        "review": "benchmark:catalog-only+openllm",
-        "reasoning": "benchmark:catalog-only+openllm",
-        "summarize": "benchmark:catalog-only+openllm",
+        "review": "benchmark:openllm",
+        "reasoning": "benchmark:openllm",
+        "summarize": "benchmark:openllm",
         "fast": "global:default",
         "cost": "global:default",
         "eco": "global:default",
@@ -11172,7 +11172,7 @@
       "scoreSource": {
         "coding": "global:default",
         "review": "global:default",
-        "reasoning": "benchmark:artificialanalysis+catalog-only",
+        "reasoning": "benchmark:artificialanalysis",
         "summarize": "global:default",
         "fast": "global:default",
         "cost": "global:default",
@@ -11205,7 +11205,7 @@
       "scores": {
         "coding": 0.7,
         "review": 0.7,
-        "reasoning": 0.83,
+        "reasoning": 0.7,
         "summarize": 0.7,
         "fast": 0.7,
         "cost": 0.7,
@@ -11218,7 +11218,7 @@
       "scoreSource": {
         "coding": "global:default",
         "review": "global:default",
-        "reasoning": "benchmark:artificialanalysis+catalog-only",
+        "reasoning": "global:default",
         "summarize": "global:default",
         "fast": "global:default",
         "cost": "global:default",
@@ -11402,7 +11402,7 @@
       "scoreSource": {
         "coding": "global:default",
         "review": "global:default",
-        "reasoning": "benchmark:artificialanalysis+catalog-only",
+        "reasoning": "benchmark:artificialanalysis",
         "summarize": "global:default",
         "fast": "global:default",
         "cost": "global:default",
@@ -11587,7 +11587,7 @@
       "scoreSource": {
         "coding": "global:default",
         "review": "global:default",
-        "reasoning": "benchmark:artificialanalysis+catalog-only",
+        "reasoning": "benchmark:artificialanalysis",
         "summarize": "global:default",
         "fast": "global:default",
         "cost": "global:default",
@@ -12049,7 +12049,7 @@
       "scoreSource": {
         "coding": "global:default",
         "review": "global:default",
-        "reasoning": "benchmark:artificialanalysis+catalog-only",
+        "reasoning": "benchmark:artificialanalysis",
         "summarize": "global:default",
         "fast": "global:default",
         "cost": "global:default",
@@ -12095,7 +12095,7 @@
       "scoreSource": {
         "coding": "global:default",
         "review": "global:default",
-        "reasoning": "benchmark:artificialanalysis+catalog-only",
+        "reasoning": "benchmark:artificialanalysis",
         "summarize": "global:default",
         "fast": "global:default",
         "cost": "global:default",
@@ -12187,7 +12187,7 @@
       "scoreSource": {
         "coding": "global:default",
         "review": "global:default",
-        "reasoning": "benchmark:inherited:huggingface/MiniMaxAI/MiniMax-M2.1",
+        "reasoning": "benchmark:inherited:minimax/MiniMax-M2.1",
         "summarize": "global:default",
         "fast": "global:default",
         "cost": "global:default",
@@ -12463,7 +12463,7 @@
       "scoreSource": {
         "coding": "global:default",
         "review": "global:default",
-        "reasoning": "benchmark:artificialanalysis+catalog-only",
+        "reasoning": "benchmark:artificialanalysis",
         "summarize": "global:default",
         "fast": "global:default",
         "cost": "global:default",
@@ -12509,7 +12509,7 @@
       "scoreSource": {
         "coding": "global:default",
         "review": "global:default",
-        "reasoning": "benchmark:inherited:huggingface/MiniMaxAI/MiniMax-M2.1",
+        "reasoning": "benchmark:artificialanalysis",
         "summarize": "global:default",
         "fast": "global:default",
         "cost": "global:default",
@@ -12601,7 +12601,7 @@
       "scoreSource": {
         "coding": "global:default",
         "review": "global:default",
-        "reasoning": "benchmark:artificialanalysis+catalog-only",
+        "reasoning": "benchmark:artificialanalysis",
         "summarize": "global:default",
         "fast": "global:default",
         "cost": "global:default",
@@ -12693,7 +12693,7 @@
       "scoreSource": {
         "coding": "global:default",
         "review": "global:default",
-        "reasoning": "benchmark:artificialanalysis+catalog-only",
+        "reasoning": "benchmark:artificialanalysis",
         "summarize": "global:default",
         "fast": "global:default",
         "cost": "global:default",
@@ -12818,7 +12818,7 @@
       "scores": {
         "coding": 0.7,
         "review": 0.7,
-        "reasoning": 0.594,
+        "reasoning": 0.7,
         "summarize": 0.7,
         "fast": 0.7,
         "cost": 0.7,
@@ -12831,7 +12831,7 @@
       "scoreSource": {
         "coding": "global:default",
         "review": "global:default",
-        "reasoning": "benchmark:artificialanalysis+catalog-only",
+        "reasoning": "global:default",
         "summarize": "global:default",
         "fast": "global:default",
         "cost": "global:default",
@@ -12877,7 +12877,7 @@
       "scoreSource": {
         "coding": "global:default",
         "review": "global:default",
-        "reasoning": "benchmark:artificialanalysis+catalog-only",
+        "reasoning": "benchmark:artificialanalysis",
         "summarize": "global:default",
         "fast": "global:default",
         "cost": "global:default",
@@ -12969,7 +12969,7 @@
       "scoreSource": {
         "coding": "global:default",
         "review": "global:default",
-        "reasoning": "benchmark:artificialanalysis+catalog-only",
+        "reasoning": "benchmark:artificialanalysis",
         "summarize": "global:default",
         "fast": "global:default",
         "cost": "global:default",
@@ -13015,7 +13015,7 @@
       "scoreSource": {
         "coding": "global:default",
         "review": "global:default",
-        "reasoning": "benchmark:artificialanalysis+catalog-only",
+        "reasoning": "benchmark:artificialanalysis",
         "summarize": "global:default",
         "fast": "global:default",
         "cost": "global:default",
@@ -13062,7 +13062,7 @@
       "scoreSource": {
         "coding": "global:default",
         "review": "global:default",
-        "reasoning": "benchmark:artificialanalysis+catalog-only",
+        "reasoning": "benchmark:artificialanalysis",
         "summarize": "global:default",
         "fast": "global:default",
         "cost": "global:default",
@@ -13154,7 +13154,7 @@
       "scoreSource": {
         "coding": "global:default",
         "review": "global:default",
-        "reasoning": "benchmark:artificialanalysis+catalog-only",
+        "reasoning": "benchmark:artificialanalysis",
         "summarize": "global:default",
         "fast": "global:default",
         "cost": "global:default",
@@ -13326,7 +13326,7 @@
       "scores": {
         "coding": 0.7,
         "review": 0.7,
-        "reasoning": 0.68,
+        "reasoning": 0.7,
         "summarize": 0.7,
         "fast": 0.7,
         "cost": 0.7,
@@ -13339,7 +13339,7 @@
       "scoreSource": {
         "coding": "global:default",
         "review": "global:default",
-        "reasoning": "benchmark:artificialanalysis+catalog-only",
+        "reasoning": "global:default",
         "summarize": "global:default",
         "fast": "global:default",
         "cost": "global:default",
@@ -13433,7 +13433,7 @@
       "scoreSource": {
         "coding": "global:default",
         "review": "global:default",
-        "reasoning": "benchmark:artificialanalysis+catalog-only",
+        "reasoning": "benchmark:artificialanalysis",
         "summarize": "global:default",
         "fast": "global:default",
         "cost": "global:default",
@@ -13480,7 +13480,7 @@
       "scoreSource": {
         "coding": "global:default",
         "review": "global:default",
-        "reasoning": "benchmark:artificialanalysis+catalog-only",
+        "reasoning": "benchmark:artificialanalysis",
         "summarize": "global:default",
         "fast": "global:default",
         "cost": "global:default",
@@ -13620,7 +13620,7 @@
       "scoreSource": {
         "coding": "global:default",
         "review": "global:default",
-        "reasoning": "benchmark:artificialanalysis+catalog-only",
+        "reasoning": "benchmark:artificialanalysis",
         "summarize": "global:default",
         "fast": "global:default",
         "cost": "global:default",
@@ -13713,7 +13713,7 @@
       "scoreSource": {
         "coding": "global:default",
         "review": "global:default",
-        "reasoning": "benchmark:artificialanalysis+catalog-only",
+        "reasoning": "benchmark:artificialanalysis",
         "summarize": "global:default",
         "fast": "global:default",
         "cost": "global:default",
@@ -13805,7 +13805,7 @@
       "scoreSource": {
         "coding": "global:default",
         "review": "global:default",
-        "reasoning": "benchmark:artificialanalysis+catalog-only",
+        "reasoning": "benchmark:artificialanalysis",
         "summarize": "global:default",
         "fast": "global:default",
         "cost": "global:default",
@@ -14028,7 +14028,7 @@
         "summarize": 0.7,
         "fast": 0.7,
         "cost": 0.7,
-        "eco": 0.8688,
+        "eco": 0.7,
         "context": 0.8,
         "vision": 0.0,
         "tools": 0.7,
@@ -14041,7 +14041,7 @@
         "summarize": "global:default",
         "fast": "global:default",
         "cost": "global:default",
-        "eco": "benchmark:catalog-only+hf_leaderboard",
+        "eco": "global:default",
         "context": "derived:context_window",
         "vision": "derived:modality",
         "tools": "global:default",
@@ -14212,7 +14212,7 @@
         "summarize": 0.7,
         "fast": 0.7,
         "cost": 0.7,
-        "eco": 0.0,
+        "eco": 0.7,
         "context": 0.9,
         "vision": 0.0,
         "tools": 0.7,
@@ -14225,7 +14225,7 @@
         "summarize": "global:default",
         "fast": "global:default",
         "cost": "global:default",
-        "eco": "benchmark:catalog-only+hf_leaderboard",
+        "eco": "global:default",
         "context": "derived:context_window",
         "vision": "derived:modality",
         "tools": "global:default",
@@ -14812,41 +14812,41 @@
         "local": false
       },
       "scores": {
-        "coding": 0.93,
-        "review": 0.78,
+        "coding": 0.7,
+        "review": 0.7,
         "reasoning": 0.915,
-        "summarize": 0.74,
-        "fast": 0.68,
-        "cost": 0.55,
+        "summarize": 0.7,
+        "fast": 0.7,
+        "cost": 0.7,
         "eco": 0.7,
         "context": 0.9,
-        "vision": 0.74,
-        "tools": 0.91,
-        "multilingual": 0.78
+        "vision": 0.5,
+        "tools": 0.7,
+        "multilingual": 0.75
       },
       "scoreSource": {
-        "coding": "pattern:gpt-5.3-codex$",
-        "review": "family:default",
+        "coding": "graduated:49_outcomes",
+        "review": "graduated:49_outcomes",
         "reasoning": "benchmark:artificialanalysis",
-        "summarize": "family:default",
-        "fast": "family:default",
-        "cost": "family:default",
-        "eco": "global:default",
+        "summarize": "graduated:49_outcomes",
+        "fast": "graduated:49_outcomes",
+        "cost": "graduated:49_outcomes",
+        "eco": "graduated:49_outcomes",
         "context": "derived:context_window",
-        "vision": "family:default",
-        "tools": "pattern:gpt-5.3-codex$",
-        "multilingual": "family:default"
+        "vision": "graduated:49_outcomes",
+        "tools": "graduated:49_outcomes",
+        "multilingual": "graduated:49_outcomes"
       }
     },
     {
       "id": "openai-codex/gpt-5.4",
       "provider": "openai-codex",
       "modelId": "gpt-5.4",
-      "name": "GPT-5.4",
+      "name": "gpt-5.4",
       "features": {
         "supportsVision": true,
         "supportsTools": true,
-        "contextWindow": 272000,
+        "contextWindow": 1050000,
         "inputModalities": [
           "text",
           "image"
@@ -14859,30 +14859,30 @@
         "local": false
       },
       "scores": {
-        "coding": 0.96,
-        "review": 0.82,
+        "coding": 0.7,
+        "review": 0.7,
         "reasoning": 0.92,
-        "summarize": 0.74,
-        "fast": 0.68,
-        "cost": 0.55,
+        "summarize": 0.7,
+        "fast": 0.7,
+        "cost": 0.7,
         "eco": 0.7,
-        "context": 0.9,
-        "vision": 0.74,
-        "tools": 0.92,
-        "multilingual": 0.78
+        "context": 0.96,
+        "vision": 0.5,
+        "tools": 0.7,
+        "multilingual": 0.75
       },
       "scoreSource": {
-        "coding": "pattern:gpt-5.4$",
-        "review": "pattern:gpt-5.4$",
+        "coding": "graduated:36_outcomes",
+        "review": "graduated:36_outcomes",
         "reasoning": "benchmark:artificialanalysis",
-        "summarize": "family:default",
-        "fast": "family:default",
-        "cost": "family:default",
-        "eco": "global:default",
+        "summarize": "graduated:36_outcomes",
+        "fast": "graduated:36_outcomes",
+        "cost": "graduated:36_outcomes",
+        "eco": "graduated:36_outcomes",
         "context": "derived:context_window",
-        "vision": "family:default",
-        "tools": "pattern:gpt-5.4$",
-        "multilingual": "family:default"
+        "vision": "graduated:36_outcomes",
+        "tools": "graduated:36_outcomes",
+        "multilingual": "graduated:36_outcomes"
       }
     },
     {
@@ -14906,30 +14906,30 @@
         "local": false
       },
       "scores": {
-        "coding": 0.7,
-        "review": 0.7,
+        "coding": 0.84,
+        "review": 0.78,
         "reasoning": 0.875,
-        "summarize": 0.7,
-        "fast": 0.7,
-        "cost": 0.7,
+        "summarize": 0.74,
+        "fast": 0.88,
+        "cost": 0.82,
         "eco": 0.7,
         "context": 0.9,
-        "vision": 0.5,
-        "tools": 0.7,
-        "multilingual": 0.75
+        "vision": 0.74,
+        "tools": 0.86,
+        "multilingual": 0.78
       },
       "scoreSource": {
-        "coding": "graduated:119_outcomes",
-        "review": "graduated:119_outcomes",
+        "coding": "pattern:gpt-5.4-mini$",
+        "review": "family:default",
         "reasoning": "benchmark:artificialanalysis",
-        "summarize": "graduated:119_outcomes",
-        "fast": "graduated:119_outcomes",
-        "cost": "graduated:119_outcomes",
-        "eco": "graduated:119_outcomes",
+        "summarize": "family:default",
+        "fast": "pattern:gpt-5.4-mini$",
+        "cost": "pattern:gpt-5.4-mini$",
+        "eco": "global:default",
         "context": "derived:context_window",
-        "vision": "graduated:119_outcomes",
-        "tools": "graduated:119_outcomes",
-        "multilingual": "graduated:119_outcomes"
+        "vision": "family:default",
+        "tools": "pattern:gpt-5.4-mini$",
+        "multilingual": "family:default"
       }
     },
     {
@@ -15154,7 +15154,7 @@
       "scoreSource": {
         "coding": "global:default",
         "review": "global:default",
-        "reasoning": "benchmark:artificialanalysis+catalog-only",
+        "reasoning": "benchmark:artificialanalysis",
         "summarize": "global:default",
         "fast": "global:default",
         "cost": "global:default",
@@ -15201,7 +15201,7 @@
       "scoreSource": {
         "coding": "global:default",
         "review": "global:default",
-        "reasoning": "benchmark:artificialanalysis+catalog-only",
+        "reasoning": "benchmark:artificialanalysis",
         "summarize": "global:default",
         "fast": "global:default",
         "cost": "global:default",
@@ -15295,7 +15295,7 @@
       "scoreSource": {
         "coding": "global:default",
         "review": "global:default",
-        "reasoning": "benchmark:artificialanalysis+catalog-only",
+        "reasoning": "benchmark:artificialanalysis",
         "summarize": "global:default",
         "fast": "global:default",
         "cost": "global:default",
@@ -15342,7 +15342,7 @@
       "scoreSource": {
         "coding": "global:default",
         "review": "global:default",
-        "reasoning": "benchmark:artificialanalysis+catalog-only",
+        "reasoning": "benchmark:artificialanalysis",
         "summarize": "global:default",
         "fast": "global:default",
         "cost": "global:default",
@@ -15436,7 +15436,7 @@
       "scoreSource": {
         "coding": "global:default",
         "review": "global:default",
-        "reasoning": "benchmark:artificialanalysis+catalog-only",
+        "reasoning": "benchmark:artificialanalysis",
         "summarize": "global:default",
         "fast": "global:default",
         "cost": "global:default",
@@ -15577,7 +15577,7 @@
       "scoreSource": {
         "coding": "global:default",
         "review": "global:default",
-        "reasoning": "benchmark:artificialanalysis+catalog-only",
+        "reasoning": "benchmark:artificialanalysis",
         "summarize": "global:default",
         "fast": "global:default",
         "cost": "global:default",
@@ -15671,7 +15671,7 @@
       "scoreSource": {
         "coding": "global:default",
         "review": "global:default",
-        "reasoning": "benchmark:artificialanalysis+catalog-only",
+        "reasoning": "benchmark:artificialanalysis",
         "summarize": "global:default",
         "fast": "global:default",
         "cost": "global:default",
@@ -16329,7 +16329,7 @@
       "scoreSource": {
         "coding": "global:default",
         "review": "global:default",
-        "reasoning": "benchmark:artificialanalysis+catalog-only",
+        "reasoning": "benchmark:artificialanalysis",
         "summarize": "global:default",
         "fast": "global:default",
         "cost": "global:default",
@@ -16423,7 +16423,7 @@
       "scoreSource": {
         "coding": "global:default",
         "review": "global:default",
-        "reasoning": "benchmark:artificialanalysis+catalog-only",
+        "reasoning": "benchmark:artificialanalysis",
         "summarize": "global:default",
         "fast": "global:default",
         "cost": "global:default",
@@ -16517,7 +16517,7 @@
       "scoreSource": {
         "coding": "global:default",
         "review": "global:default",
-        "reasoning": "benchmark:artificialanalysis+catalog-only",
+        "reasoning": "benchmark:artificialanalysis",
         "summarize": "global:default",
         "fast": "global:default",
         "cost": "global:default",
@@ -16610,7 +16610,7 @@
       "scoreSource": {
         "coding": "global:default",
         "review": "global:default",
-        "reasoning": "benchmark:artificialanalysis+catalog-only",
+        "reasoning": "benchmark:artificialanalysis",
         "summarize": "global:default",
         "fast": "global:default",
         "cost": "global:default",
@@ -16657,7 +16657,7 @@
       "scoreSource": {
         "coding": "global:default",
         "review": "global:default",
-        "reasoning": "benchmark:artificialanalysis+catalog-only",
+        "reasoning": "benchmark:artificialanalysis",
         "summarize": "global:default",
         "fast": "global:default",
         "cost": "global:default",
@@ -16704,7 +16704,7 @@
       "scoreSource": {
         "coding": "global:default",
         "review": "global:default",
-        "reasoning": "benchmark:artificialanalysis+catalog-only",
+        "reasoning": "benchmark:artificialanalysis",
         "summarize": "global:default",
         "fast": "global:default",
         "cost": "global:default",
@@ -16835,7 +16835,7 @@
         "summarize": 0.7,
         "fast": 0.7,
         "cost": 0.7,
-        "eco": 0.0,
+        "eco": 0.7,
         "context": 0.9,
         "vision": 0.5,
         "tools": 0.7,
@@ -16848,7 +16848,7 @@
         "summarize": "global:default",
         "fast": "global:default",
         "cost": "global:default",
-        "eco": "benchmark:inherited:nvidia/moonshotai/kimi-k2.5",
+        "eco": "global:default",
         "context": "derived:context_window",
         "vision": "global:default",
         "tools": "global:default",
@@ -16877,7 +16877,7 @@
       "scores": {
         "coding": 0.7,
         "review": 0.7,
-        "reasoning": 0.848,
+        "reasoning": 0.7,
         "summarize": 0.7,
         "fast": 0.7,
         "cost": 0.7,
@@ -16890,7 +16890,7 @@
       "scoreSource": {
         "coding": "global:default",
         "review": "global:default",
-        "reasoning": "benchmark:inherited:opencode/minimax-m2.5",
+        "reasoning": "global:default",
         "summarize": "global:default",
         "fast": "global:default",
         "cost": "global:default",
@@ -17029,7 +17029,7 @@
       "scoreSource": {
         "coding": "global:default",
         "review": "global:default",
-        "reasoning": "benchmark:artificialanalysis+catalog-only",
+        "reasoning": "benchmark:artificialanalysis",
         "summarize": "global:default",
         "fast": "global:default",
         "cost": "global:default",
@@ -18194,7 +18194,7 @@
         "summarize": 0.7,
         "fast": 0.7,
         "cost": 0.7,
-        "eco": 0.0,
+        "eco": 0.7,
         "context": 0.9,
         "vision": 0.5,
         "tools": 0.7,
@@ -18207,7 +18207,7 @@
         "summarize": "global:default",
         "fast": "global:default",
         "cost": "global:default",
-        "eco": "benchmark:inherited:nvidia/moonshotai/kimi-k2.5",
+        "eco": "global:default",
         "context": "derived:context_window",
         "vision": "global:default",
         "tools": "global:default",
@@ -18329,7 +18329,7 @@
       "scores": {
         "coding": 0.7,
         "review": 0.7,
-        "reasoning": 0.848,
+        "reasoning": 0.7,
         "summarize": 0.7,
         "fast": 0.7,
         "cost": 0.7,
@@ -18342,7 +18342,7 @@
       "scoreSource": {
         "coding": "global:default",
         "review": "global:default",
-        "reasoning": "benchmark:artificialanalysis+catalog-only",
+        "reasoning": "global:default",
         "summarize": "global:default",
         "fast": "global:default",
         "cost": "global:default",
@@ -18981,7 +18981,7 @@
       "scores": {
         "coding": 0.7,
         "review": 0.7,
-        "reasoning": 0.656,
+        "reasoning": 0.772,
         "summarize": 0.7,
         "fast": 0.7,
         "cost": 0.7,
@@ -19628,8 +19628,8 @@
         "is_free": null
       },
       "availability": {
-        "authed": false,
-        "available": false,
+        "authed": true,
+        "available": true,
         "local": false
       },
       "scores": {
@@ -21461,9 +21461,9 @@
       },
       "scoreSource": {
         "coding": "global:default",
-        "review": "benchmark:catalog-only+openllm",
-        "reasoning": "benchmark:catalog-only+openllm",
-        "summarize": "benchmark:catalog-only+openllm",
+        "review": "benchmark:openllm",
+        "reasoning": "benchmark:openllm",
+        "summarize": "benchmark:openllm",
         "fast": "global:default",
         "cost": "global:default",
         "eco": "global:default",
@@ -21507,9 +21507,9 @@
       },
       "scoreSource": {
         "coding": "global:default",
-        "review": "benchmark:catalog-only+openllm",
-        "reasoning": "benchmark:catalog-only+openllm",
-        "summarize": "benchmark:catalog-only+openllm",
+        "review": "benchmark:openllm",
+        "reasoning": "benchmark:openllm",
+        "summarize": "benchmark:openllm",
         "fast": "global:default",
         "cost": "global:default",
         "eco": "global:default",
@@ -21553,9 +21553,9 @@
       },
       "scoreSource": {
         "coding": "global:default",
-        "review": "benchmark:catalog-only+openllm",
-        "reasoning": "benchmark:catalog-only+openllm",
-        "summarize": "benchmark:catalog-only+openllm",
+        "review": "benchmark:openllm",
+        "reasoning": "benchmark:openllm",
+        "summarize": "benchmark:openllm",
         "fast": "global:default",
         "cost": "global:default",
         "eco": "global:default",
@@ -21580,8 +21580,8 @@
         "is_free": true
       },
       "availability": {
-        "authed": false,
-        "available": false,
+        "authed": true,
+        "available": true,
         "local": false
       },
       "scores": {
@@ -21591,7 +21591,7 @@
         "summarize": 0.7,
         "fast": 0.7,
         "cost": 0.7,
-        "eco": 0.8688,
+        "eco": 0.7,
         "context": 0.65,
         "vision": 0.0,
         "tools": 0.7,
@@ -21604,7 +21604,7 @@
         "summarize": "global:default",
         "fast": "global:default",
         "cost": "global:default",
-        "eco": "benchmark:catalog-only+hf_leaderboard",
+        "eco": "global:default",
         "context": "derived:context_window",
         "vision": "derived:modality",
         "tools": "global:default",
@@ -22341,7 +22341,7 @@
       "scoreSource": {
         "coding": "global:default",
         "review": "global:default",
-        "reasoning": "benchmark:artificialanalysis+catalog-only",
+        "reasoning": "benchmark:artificialanalysis",
         "summarize": "global:default",
         "fast": "global:default",
         "cost": "global:default",
@@ -22387,7 +22387,7 @@
       "scoreSource": {
         "coding": "global:default",
         "review": "global:default",
-        "reasoning": "benchmark:artificialanalysis+catalog-only",
+        "reasoning": "benchmark:artificialanalysis",
         "summarize": "global:default",
         "fast": "global:default",
         "cost": "global:default",
@@ -22432,9 +22432,9 @@
       },
       "scoreSource": {
         "coding": "global:default",
-        "review": "benchmark:catalog-only+openllm",
-        "reasoning": "benchmark:catalog-only+openllm",
-        "summarize": "benchmark:catalog-only+openllm",
+        "review": "benchmark:openllm",
+        "reasoning": "benchmark:openllm",
+        "summarize": "benchmark:openllm",
         "fast": "global:default",
         "cost": "global:default",
         "eco": "global:default",
@@ -22666,7 +22666,7 @@
       "scoreSource": {
         "coding": "global:default",
         "review": "global:default",
-        "reasoning": "benchmark:artificialanalysis+catalog-only",
+        "reasoning": "benchmark:artificialanalysis",
         "summarize": "global:default",
         "fast": "global:default",
         "cost": "global:default",
@@ -23260,7 +23260,7 @@
         "summarize": 0.7,
         "fast": 0.7,
         "cost": 0.7,
-        "eco": 0.0,
+        "eco": 0.7,
         "context": 0.9,
         "vision": 0.5,
         "tools": 0.7,
@@ -23273,7 +23273,7 @@
         "summarize": "global:default",
         "fast": "global:default",
         "cost": "global:default",
-        "eco": "benchmark:inherited:nvidia/moonshotai/kimi-k2.5",
+        "eco": "global:default",
         "context": "derived:context_window",
         "vision": "global:default",
         "tools": "global:default",
@@ -23453,7 +23453,7 @@
       "scoreSource": {
         "coding": "global:default",
         "review": "global:default",
-        "reasoning": "benchmark:artificialanalysis+catalog-only",
+        "reasoning": "benchmark:artificialanalysis",
         "summarize": "global:default",
         "fast": "global:default",
         "cost": "global:default",
@@ -23684,7 +23684,7 @@
       "scoreSource": {
         "coding": "global:default",
         "review": "global:default",
-        "reasoning": "benchmark:artificialanalysis+catalog-only",
+        "reasoning": "benchmark:artificialanalysis",
         "summarize": "global:default",
         "fast": "global:default",
         "cost": "global:default",
@@ -26391,9 +26391,9 @@
       },
       "scoreSource": {
         "coding": "global:default",
-        "review": "benchmark:artificialanalysis+catalog-only+openllm",
-        "reasoning": "benchmark:artificialanalysis+catalog-only+openllm",
-        "summarize": "benchmark:artificialanalysis+catalog-only+openllm",
+        "review": "benchmark:artificialanalysis+openllm",
+        "reasoning": "benchmark:artificialanalysis+openllm",
+        "summarize": "benchmark:artificialanalysis+openllm",
         "fast": "global:default",
         "cost": "global:default",
         "eco": "global:default",
@@ -26437,9 +26437,9 @@
       },
       "scoreSource": {
         "coding": "global:default",
-        "review": "benchmark:catalog-only+openllm",
-        "reasoning": "benchmark:catalog-only+openllm",
-        "summarize": "benchmark:catalog-only+openllm",
+        "review": "benchmark:openllm",
+        "reasoning": "benchmark:openllm",
+        "summarize": "benchmark:openllm",
         "fast": "global:default",
         "cost": "global:default",
         "eco": "global:default",
@@ -27431,35 +27431,35 @@
         "is_free": true
       },
       "availability": {
-        "authed": false,
-        "available": false,
+        "authed": true,
+        "available": true,
         "local": false
       },
       "scores": {
-        "coding": 0.7,
-        "review": 0.7,
-        "reasoning": 0.7,
-        "summarize": 0.7,
-        "fast": 0.7,
-        "cost": 0.7,
-        "eco": 0.7,
+        "coding": 0.84,
+        "review": 0.8,
+        "reasoning": 0.78,
+        "summarize": 0.74,
+        "fast": 0.62,
+        "cost": 1.0,
+        "eco": 0.96,
         "context": 0.9,
         "vision": 0.0,
-        "tools": 0.7,
-        "multilingual": 0.75
+        "tools": 0.74,
+        "multilingual": 0.88
       },
       "scoreSource": {
-        "coding": "global:default",
-        "review": "global:default",
-        "reasoning": "global:default",
-        "summarize": "global:default",
-        "fast": "global:default",
-        "cost": "global:default",
-        "eco": "global:default",
+        "coding": "override:manual",
+        "review": "override:manual",
+        "reasoning": "override:manual",
+        "summarize": "override:manual",
+        "fast": "override:manual",
+        "cost": "override:manual",
+        "eco": "override:manual",
         "context": "derived:context_window",
         "vision": "derived:modality",
-        "tools": "global:default",
-        "multilingual": "global:default"
+        "tools": "override:manual",
+        "multilingual": "override:manual"
       }
     },
     {
@@ -29910,7 +29910,7 @@
       "scoreSource": {
         "coding": "global:default",
         "review": "global:default",
-        "reasoning": "benchmark:artificialanalysis+catalog-only",
+        "reasoning": "benchmark:artificialanalysis",
         "summarize": "global:default",
         "fast": "global:default",
         "cost": "global:default",
@@ -29956,7 +29956,7 @@
       "scoreSource": {
         "coding": "global:default",
         "review": "global:default",
-        "reasoning": "benchmark:artificialanalysis+catalog-only",
+        "reasoning": "benchmark:artificialanalysis",
         "summarize": "global:default",
         "fast": "global:default",
         "cost": "global:default",
@@ -30002,7 +30002,7 @@
       "scoreSource": {
         "coding": "global:default",
         "review": "global:default",
-        "reasoning": "benchmark:artificialanalysis+catalog-only",
+        "reasoning": "benchmark:artificialanalysis",
         "summarize": "global:default",
         "fast": "global:default",
         "cost": "global:default",
@@ -30141,7 +30141,7 @@
       "scoreSource": {
         "coding": "global:default",
         "review": "global:default",
-        "reasoning": "benchmark:artificialanalysis+catalog-only",
+        "reasoning": "benchmark:artificialanalysis",
         "summarize": "global:default",
         "fast": "global:default",
         "cost": "global:default",
@@ -30312,7 +30312,7 @@
       "scores": {
         "coding": 0.7,
         "review": 0.7,
-        "reasoning": 0.764,
+        "reasoning": 0.861,
         "summarize": 0.7,
         "fast": 0.7,
         "cost": 0.7,
@@ -30325,7 +30325,7 @@
       "scoreSource": {
         "coding": "global:default",
         "review": "global:default",
-        "reasoning": "benchmark:artificialanalysis+catalog-only",
+        "reasoning": "benchmark:artificialanalysis",
         "summarize": "global:default",
         "fast": "global:default",
         "cost": "global:default",
@@ -30371,7 +30371,7 @@
       "scoreSource": {
         "coding": "global:default",
         "review": "global:default",
-        "reasoning": "benchmark:artificialanalysis+catalog-only",
+        "reasoning": "benchmark:artificialanalysis",
         "summarize": "global:default",
         "fast": "global:default",
         "cost": "global:default",
@@ -30605,7 +30605,7 @@
       "scoreSource": {
         "coding": "global:default",
         "review": "global:default",
-        "reasoning": "benchmark:artificialanalysis+catalog-only",
+        "reasoning": "benchmark:artificialanalysis",
         "summarize": "global:default",
         "fast": "global:default",
         "cost": "global:default",
@@ -30780,7 +30780,7 @@
       "scores": {
         "coding": 0.7,
         "review": 0.7,
-        "reasoning": 0.656,
+        "reasoning": 0.772,
         "summarize": 0.7,
         "fast": 0.7,
         "cost": 0.7,
@@ -30793,7 +30793,7 @@
       "scoreSource": {
         "coding": "global:default",
         "review": "global:default",
-        "reasoning": "benchmark:artificialanalysis+catalog-only",
+        "reasoning": "benchmark:artificialanalysis",
         "summarize": "global:default",
         "fast": "global:default",
         "cost": "global:default",
@@ -31307,7 +31307,7 @@
       "scoreSource": {
         "coding": "global:default",
         "review": "global:default",
-        "reasoning": "benchmark:artificialanalysis+catalog-only",
+        "reasoning": "benchmark:artificialanalysis",
         "summarize": "global:default",
         "fast": "global:default",
         "cost": "global:default",
@@ -31399,7 +31399,7 @@
       "scoreSource": {
         "coding": "global:default",
         "review": "global:default",
-        "reasoning": "benchmark:artificialanalysis+catalog-only",
+        "reasoning": "benchmark:artificialanalysis",
         "summarize": "global:default",
         "fast": "global:default",
         "cost": "global:default",
@@ -31491,7 +31491,7 @@
       "scoreSource": {
         "coding": "global:default",
         "review": "global:default",
-        "reasoning": "benchmark:artificialanalysis+catalog-only",
+        "reasoning": "benchmark:artificialanalysis",
         "summarize": "global:default",
         "fast": "global:default",
         "cost": "global:default",
@@ -32052,7 +32052,7 @@
       "scoreSource": {
         "coding": "global:default",
         "review": "global:default",
-        "reasoning": "benchmark:artificialanalysis+catalog-only",
+        "reasoning": "benchmark:artificialanalysis",
         "summarize": "global:default",
         "fast": "global:default",
         "cost": "global:default",
@@ -33210,7 +33210,7 @@
       "scoreSource": {
         "coding": "global:default",
         "review": "global:default",
-        "reasoning": "benchmark:artificialanalysis+catalog-only",
+        "reasoning": "benchmark:artificialanalysis",
         "summarize": "global:default",
         "fast": "global:default",
         "cost": "global:default",
@@ -33350,7 +33350,7 @@
       "scoreSource": {
         "coding": "global:default",
         "review": "global:default",
-        "reasoning": "benchmark:artificialanalysis+catalog-only",
+        "reasoning": "benchmark:artificialanalysis",
         "summarize": "global:default",
         "fast": "global:default",
         "cost": "global:default",
@@ -33396,7 +33396,7 @@
       "scoreSource": {
         "coding": "global:default",
         "review": "global:default",
-        "reasoning": "benchmark:artificialanalysis+catalog-only",
+        "reasoning": "benchmark:artificialanalysis",
         "summarize": "global:default",
         "fast": "global:default",
         "cost": "global:default",
@@ -33572,7 +33572,7 @@
         "summarize": 0.7,
         "fast": 0.7,
         "cost": 0.7,
-        "eco": 0.0,
+        "eco": 0.7,
         "context": 0.9,
         "vision": 0.5,
         "tools": 0.7,
@@ -33585,7 +33585,7 @@
         "summarize": "global:default",
         "fast": "global:default",
         "cost": "global:default",
-        "eco": "benchmark:inherited:nvidia/moonshotai/kimi-k2.5",
+        "eco": "global:default",
         "context": "derived:context_window",
         "vision": "global:default",
         "tools": "global:default",
@@ -33628,7 +33628,7 @@
       "scoreSource": {
         "coding": "global:default",
         "review": "global:default",
-        "reasoning": "benchmark:artificialanalysis+catalog-only",
+        "reasoning": "benchmark:artificialanalysis",
         "summarize": "global:default",
         "fast": "global:default",
         "cost": "global:default",
@@ -35362,7 +35362,7 @@
       "scoreSource": {
         "coding": "global:default",
         "review": "global:default",
-        "reasoning": "benchmark:artificialanalysis+catalog-only",
+        "reasoning": "benchmark:artificialanalysis",
         "summarize": "global:default",
         "fast": "global:default",
         "cost": "global:default",
@@ -35409,7 +35409,7 @@
       "scoreSource": {
         "coding": "global:default",
         "review": "global:default",
-        "reasoning": "benchmark:artificialanalysis+catalog-only",
+        "reasoning": "benchmark:artificialanalysis",
         "summarize": "global:default",
         "fast": "global:default",
         "cost": "global:default",
@@ -35455,7 +35455,7 @@
       "scoreSource": {
         "coding": "global:default",
         "review": "global:default",
-        "reasoning": "benchmark:artificialanalysis+catalog-only",
+        "reasoning": "benchmark:artificialanalysis",
         "summarize": "global:default",
         "fast": "global:default",
         "cost": "global:default",
@@ -35825,7 +35825,7 @@
       "scoreSource": {
         "coding": "global:default",
         "review": "global:default",
-        "reasoning": "benchmark:artificialanalysis+catalog-only",
+        "reasoning": "benchmark:artificialanalysis",
         "summarize": "global:default",
         "fast": "global:default",
         "cost": "global:default",
@@ -35917,7 +35917,7 @@
       "scoreSource": {
         "coding": "global:default",
         "review": "global:default",
-        "reasoning": "benchmark:artificialanalysis+catalog-only",
+        "reasoning": "benchmark:artificialanalysis",
         "summarize": "global:default",
         "fast": "global:default",
         "cost": "global:default",
@@ -36195,7 +36195,7 @@
       "scoreSource": {
         "coding": "global:default",
         "review": "global:default",
-        "reasoning": "benchmark:artificialanalysis+catalog-only",
+        "reasoning": "benchmark:artificialanalysis",
         "summarize": "global:default",
         "fast": "global:default",
         "cost": "global:default",
@@ -36796,7 +36796,7 @@
       "scoreSource": {
         "coding": "global:default",
         "review": "global:default",
-        "reasoning": "benchmark:artificialanalysis+catalog-only",
+        "reasoning": "benchmark:artificialanalysis",
         "summarize": "global:default",
         "fast": "global:default",
         "cost": "global:default",
@@ -37029,7 +37029,7 @@
       "scoreSource": {
         "coding": "global:default",
         "review": "global:default",
-        "reasoning": "benchmark:artificialanalysis+catalog-only",
+        "reasoning": "benchmark:artificialanalysis",
         "summarize": "global:default",
         "fast": "global:default",
         "cost": "global:default",
@@ -37397,7 +37397,7 @@
       "scoreSource": {
         "coding": "global:default",
         "review": "global:default",
-        "reasoning": "benchmark:artificialanalysis+catalog-only",
+        "reasoning": "benchmark:artificialanalysis",
         "summarize": "global:default",
         "fast": "global:default",
         "cost": "global:default",
@@ -37444,7 +37444,7 @@
       "scoreSource": {
         "coding": "global:default",
         "review": "global:default",
-        "reasoning": "benchmark:artificialanalysis+catalog-only",
+        "reasoning": "benchmark:artificialanalysis",
         "summarize": "global:default",
         "fast": "global:default",
         "cost": "global:default",
@@ -37538,7 +37538,7 @@
       "scoreSource": {
         "coding": "global:default",
         "review": "global:default",
-        "reasoning": "benchmark:artificialanalysis+catalog-only",
+        "reasoning": "benchmark:artificialanalysis",
         "summarize": "global:default",
         "fast": "global:default",
         "cost": "global:default",
@@ -37725,7 +37725,7 @@
       "scoreSource": {
         "coding": "global:default",
         "review": "global:default",
-        "reasoning": "benchmark:artificialanalysis+catalog-only",
+        "reasoning": "benchmark:artificialanalysis",
         "summarize": "global:default",
         "fast": "global:default",
         "cost": "global:default",
@@ -37864,7 +37864,7 @@
       "scoreSource": {
         "coding": "global:default",
         "review": "global:default",
-        "reasoning": "benchmark:artificialanalysis+catalog-only",
+        "reasoning": "benchmark:artificialanalysis",
         "summarize": "global:default",
         "fast": "global:default",
         "cost": "global:default",
@@ -37910,7 +37910,7 @@
       "scoreSource": {
         "coding": "global:default",
         "review": "global:default",
-        "reasoning": "benchmark:artificialanalysis+catalog-only",
+        "reasoning": "benchmark:artificialanalysis",
         "summarize": "global:default",
         "fast": "global:default",
         "cost": "global:default",
@@ -38003,7 +38003,7 @@
       "scoreSource": {
         "coding": "global:default",
         "review": "global:default",
-        "reasoning": "benchmark:artificialanalysis+catalog-only",
+        "reasoning": "benchmark:artificialanalysis",
         "summarize": "global:default",
         "fast": "global:default",
         "cost": "global:default",
@@ -38049,7 +38049,7 @@
       "scoreSource": {
         "coding": "global:default",
         "review": "global:default",
-        "reasoning": "benchmark:artificialanalysis+catalog-only",
+        "reasoning": "benchmark:artificialanalysis",
         "summarize": "global:default",
         "fast": "global:default",
         "cost": "global:default",
@@ -38096,7 +38096,7 @@
       "scoreSource": {
         "coding": "global:default",
         "review": "global:default",
-        "reasoning": "benchmark:artificialanalysis+catalog-only",
+        "reasoning": "benchmark:artificialanalysis",
         "summarize": "global:default",
         "fast": "global:default",
         "cost": "global:default",
@@ -38142,7 +38142,7 @@
       "scoreSource": {
         "coding": "global:default",
         "review": "global:default",
-        "reasoning": "benchmark:artificialanalysis+catalog-only",
+        "reasoning": "benchmark:artificialanalysis",
         "summarize": "global:default",
         "fast": "global:default",
         "cost": "global:default",
@@ -38188,7 +38188,7 @@
       "scoreSource": {
         "coding": "global:default",
         "review": "global:default",
-        "reasoning": "benchmark:artificialanalysis+catalog-only",
+        "reasoning": "benchmark:artificialanalysis",
         "summarize": "global:default",
         "fast": "global:default",
         "cost": "global:default",
@@ -38234,7 +38234,7 @@
       "scoreSource": {
         "coding": "global:default",
         "review": "global:default",
-        "reasoning": "benchmark:artificialanalysis+catalog-only",
+        "reasoning": "benchmark:artificialanalysis",
         "summarize": "global:default",
         "fast": "global:default",
         "cost": "global:default",
@@ -38280,7 +38280,7 @@
       "scoreSource": {
         "coding": "global:default",
         "review": "global:default",
-        "reasoning": "benchmark:artificialanalysis+catalog-only",
+        "reasoning": "benchmark:artificialanalysis",
         "summarize": "global:default",
         "fast": "global:default",
         "cost": "global:default",
@@ -38289,6 +38289,559 @@
         "vision": "derived:modality",
         "tools": "global:default",
         "multilingual": "global:default"
+      }
+    },
+    {
+      "id": "openai-codex/gpt-5.5",
+      "provider": "openai-codex",
+      "modelId": "gpt-5.5",
+      "name": "GPT-5.5",
+      "features": {
+        "supportsVision": true,
+        "supportsTools": true,
+        "contextWindow": 400000,
+        "inputModalities": [
+          "text",
+          "image"
+        ],
+        "is_free": null
+      },
+      "availability": {
+        "authed": true,
+        "available": true,
+        "local": false
+      },
+      "scores": {
+        "coding": 0.97,
+        "review": 0.84,
+        "reasoning": 0.88,
+        "summarize": 0.78,
+        "fast": 0.64,
+        "cost": 0.52,
+        "eco": 0.7,
+        "context": 0.9,
+        "vision": 0.74,
+        "tools": 0.94,
+        "multilingual": 0.78
+      },
+      "scoreSource": {
+        "coding": "override:manual",
+        "review": "override:manual",
+        "reasoning": "override:manual",
+        "summarize": "override:manual",
+        "fast": "override:manual",
+        "cost": "override:manual",
+        "eco": "global:default",
+        "context": "derived:context_window",
+        "vision": "family:default",
+        "tools": "override:manual",
+        "multilingual": "family:default"
+      }
+    },
+    {
+      "id": "openai-codex/gpt-5.4-nano",
+      "provider": "openai-codex",
+      "modelId": "gpt-5.4-nano",
+      "name": "openai-codex/gpt-5.4-nano",
+      "features": {
+        "supportsVision": false,
+        "supportsTools": true,
+        "contextWindow": 0,
+        "inputModalities": [
+          "-"
+        ],
+        "is_free": null
+      },
+      "availability": {
+        "authed": null,
+        "available": null,
+        "local": null
+      },
+      "scores": {
+        "coding": 0.92,
+        "review": 0.78,
+        "reasoning": 0.817,
+        "summarize": 0.74,
+        "fast": 0.68,
+        "cost": 0.55,
+        "eco": 0.7,
+        "context": 0.78,
+        "vision": 0.0,
+        "tools": 0.9,
+        "multilingual": 0.78
+      },
+      "scoreSource": {
+        "coding": "family:default",
+        "review": "family:default",
+        "reasoning": "benchmark-inherited:openai/gpt-5.4-nano:artificialanalysis",
+        "summarize": "family:default",
+        "fast": "family:default",
+        "cost": "family:default",
+        "eco": "global:default",
+        "context": "family:default",
+        "vision": "derived:modality",
+        "tools": "family:default",
+        "multilingual": "family:default"
+      }
+    },
+    {
+      "id": "openrouter/elephant-alpha:free",
+      "provider": "openrouter",
+      "modelId": "elephant-alpha:free",
+      "name": "openrouter/elephant-alpha:free",
+      "features": {
+        "supportsVision": false,
+        "supportsTools": true,
+        "contextWindow": 200000,
+        "inputModalities": [
+          "text"
+        ],
+        "is_free": true
+      },
+      "availability": {
+        "authed": true,
+        "available": true,
+        "local": false
+      },
+      "scores": {
+        "coding": 0.7,
+        "review": 0.7,
+        "reasoning": 0.7,
+        "summarize": 0.7,
+        "fast": 0.7,
+        "cost": 0.7,
+        "eco": 0.7,
+        "context": 0.9,
+        "vision": 0.0,
+        "tools": 0.7,
+        "multilingual": 0.75
+      },
+      "scoreSource": {
+        "coding": "global:default",
+        "review": "global:default",
+        "reasoning": "global:default",
+        "summarize": "global:default",
+        "fast": "global:default",
+        "cost": "global:default",
+        "eco": "global:default",
+        "context": "derived:context_window",
+        "vision": "derived:modality",
+        "tools": "global:default",
+        "multilingual": "global:default"
+      }
+    },
+    {
+      "id": "openrouter/cohere/rerank-4-fast:free",
+      "provider": "openrouter",
+      "modelId": "cohere/rerank-4-fast:free",
+      "name": "cohere/rerank-4-fast:free",
+      "features": {
+        "supportsVision": false,
+        "supportsTools": true,
+        "contextWindow": 200000,
+        "inputModalities": [
+          "text"
+        ],
+        "is_free": true
+      },
+      "availability": {
+        "authed": true,
+        "available": true,
+        "local": false
+      },
+      "scores": {
+        "coding": 0.7,
+        "review": 0.7,
+        "reasoning": 0.7,
+        "summarize": 0.7,
+        "fast": 0.7,
+        "cost": 0.7,
+        "eco": 0.7,
+        "context": 0.9,
+        "vision": 0.0,
+        "tools": 0.7,
+        "multilingual": 0.75
+      },
+      "scoreSource": {
+        "coding": "global:default",
+        "review": "global:default",
+        "reasoning": "global:default",
+        "summarize": "global:default",
+        "fast": "global:default",
+        "cost": "global:default",
+        "eco": "global:default",
+        "context": "derived:context_window",
+        "vision": "derived:modality",
+        "tools": "global:default",
+        "multilingual": "global:default"
+      }
+    },
+    {
+      "id": "openrouter/cohere/rerank-4-pro:free",
+      "provider": "openrouter",
+      "modelId": "cohere/rerank-4-pro:free",
+      "name": "cohere/rerank-4-pro:free",
+      "features": {
+        "supportsVision": false,
+        "supportsTools": true,
+        "contextWindow": 200000,
+        "inputModalities": [
+          "text"
+        ],
+        "is_free": true
+      },
+      "availability": {
+        "authed": true,
+        "available": true,
+        "local": false
+      },
+      "scores": {
+        "coding": 0.7,
+        "review": 0.7,
+        "reasoning": 0.7,
+        "summarize": 0.7,
+        "fast": 0.7,
+        "cost": 0.7,
+        "eco": 0.7,
+        "context": 0.9,
+        "vision": 0.0,
+        "tools": 0.7,
+        "multilingual": 0.75
+      },
+      "scoreSource": {
+        "coding": "global:default",
+        "review": "global:default",
+        "reasoning": "global:default",
+        "summarize": "global:default",
+        "fast": "global:default",
+        "cost": "global:default",
+        "eco": "global:default",
+        "context": "derived:context_window",
+        "vision": "derived:modality",
+        "tools": "global:default",
+        "multilingual": "global:default"
+      }
+    },
+    {
+      "id": "nvidia/nemotron-3-super-120b-a12b",
+      "provider": "nvidia",
+      "modelId": "nemotron-3-super-120b-a12b",
+      "name": "nemotron-3-super-120b-a12b",
+      "features": {
+        "supportsVision": false,
+        "supportsTools": true,
+        "contextWindow": 262144,
+        "inputModalities": [
+          "text"
+        ],
+        "is_free": true
+      },
+      "availability": {
+        "authed": true,
+        "available": true,
+        "local": false
+      },
+      "scores": {
+        "coding": 0.7,
+        "review": 0.7,
+        "reasoning": 0.8,
+        "summarize": 0.7,
+        "fast": 0.7,
+        "cost": 0.7,
+        "eco": 0.7,
+        "context": 0.9,
+        "vision": 0.0,
+        "tools": 0.7,
+        "multilingual": 0.75
+      },
+      "scoreSource": {
+        "coding": "global:default",
+        "review": "global:default",
+        "reasoning": "benchmark-inherited:nvidia/nvidia/nemotron-3-super-120b-a12b:artificialanalysis",
+        "summarize": "global:default",
+        "fast": "global:default",
+        "cost": "global:default",
+        "eco": "global:default",
+        "context": "derived:context_window",
+        "vision": "derived:modality",
+        "tools": "global:default",
+        "multilingual": "global:default"
+      }
+    },
+    {
+      "id": "nvidia/nemotron-3-nano-30b-a3b",
+      "provider": "nvidia",
+      "modelId": "nemotron-3-nano-30b-a3b",
+      "name": "nemotron-3-nano-30b-a3b",
+      "features": {
+        "supportsVision": false,
+        "supportsTools": true,
+        "contextWindow": 262144,
+        "inputModalities": [
+          "text"
+        ],
+        "is_free": true
+      },
+      "availability": {
+        "authed": true,
+        "available": true,
+        "local": false
+      },
+      "scores": {
+        "coding": 0.7,
+        "review": 0.7,
+        "reasoning": 0.399,
+        "summarize": 0.7,
+        "fast": 0.7,
+        "cost": 0.7,
+        "eco": 0.7,
+        "context": 0.9,
+        "vision": 0.0,
+        "tools": 0.7,
+        "multilingual": 0.75
+      },
+      "scoreSource": {
+        "coding": "global:default",
+        "review": "global:default",
+        "reasoning": "benchmark-inherited:openrouter/nvidia/nemotron-3-nano-30b-a3b:artificialanalysis",
+        "summarize": "global:default",
+        "fast": "global:default",
+        "cost": "global:default",
+        "eco": "global:default",
+        "context": "derived:context_window",
+        "vision": "derived:modality",
+        "tools": "global:default",
+        "multilingual": "global:default"
+      }
+    },
+    {
+      "id": "nvidia/moonshotai/kimi-k2-instruct",
+      "provider": "nvidia",
+      "modelId": "moonshotai/kimi-k2-instruct",
+      "name": "Kimi K2 Instruct",
+      "features": {
+        "supportsVision": false,
+        "supportsTools": true,
+        "contextWindow": 131072,
+        "inputModalities": [
+          "text"
+        ],
+        "is_free": true
+      },
+      "availability": {
+        "authed": true,
+        "available": true,
+        "local": false
+      },
+      "scores": {
+        "coding": 0.7,
+        "review": 0.7,
+        "reasoning": 0.7,
+        "summarize": 0.7,
+        "fast": 0.7,
+        "cost": 0.7,
+        "eco": 0.7,
+        "context": 0.8,
+        "vision": 0.0,
+        "tools": 0.7,
+        "multilingual": 0.75
+      },
+      "scoreSource": {
+        "coding": "global:default",
+        "review": "global:default",
+        "reasoning": "global:default",
+        "summarize": "global:default",
+        "fast": "global:default",
+        "cost": "global:default",
+        "eco": "global:default",
+        "context": "derived:context_window",
+        "vision": "derived:modality",
+        "tools": "global:default",
+        "multilingual": "global:default"
+      }
+    },
+    {
+      "id": "nvidia/stepfun-ai/step-3.5-flash",
+      "provider": "nvidia",
+      "modelId": "stepfun-ai/step-3.5-flash",
+      "name": "StepFun Step 3.5 Flash",
+      "features": {
+        "supportsVision": false,
+        "supportsTools": true,
+        "contextWindow": 256000,
+        "inputModalities": [
+          "text"
+        ],
+        "is_free": true
+      },
+      "availability": {
+        "authed": true,
+        "available": true,
+        "local": false
+      },
+      "scores": {
+        "coding": 0.7,
+        "review": 0.7,
+        "reasoning": 0.7,
+        "summarize": 0.7,
+        "fast": 0.7,
+        "cost": 0.7,
+        "eco": 0.7,
+        "context": 0.9,
+        "vision": 0.0,
+        "tools": 0.7,
+        "multilingual": 0.75
+      },
+      "scoreSource": {
+        "coding": "global:default",
+        "review": "global:default",
+        "reasoning": "global:default",
+        "summarize": "global:default",
+        "fast": "global:default",
+        "cost": "global:default",
+        "eco": "global:default",
+        "context": "derived:context_window",
+        "vision": "derived:modality",
+        "tools": "global:default",
+        "multilingual": "global:default"
+      }
+    },
+    {
+      "id": "nvidia/deepseek-ai/deepseek-v4-flash",
+      "provider": "nvidia",
+      "modelId": "deepseek-ai/deepseek-v4-flash",
+      "name": "DeepSeek V4 Flash",
+      "features": {
+        "supportsVision": false,
+        "supportsTools": true,
+        "contextWindow": 163840,
+        "inputModalities": [
+          "text"
+        ],
+        "is_free": true
+      },
+      "availability": {
+        "authed": true,
+        "available": true,
+        "local": false
+      },
+      "scores": {
+        "coding": 0.78,
+        "review": 0.76,
+        "reasoning": 0.76,
+        "summarize": 0.76,
+        "fast": 0.86,
+        "cost": 1.0,
+        "eco": 0.96,
+        "context": 0.8,
+        "vision": 0.0,
+        "tools": 0.72,
+        "multilingual": 0.8
+      },
+      "scoreSource": {
+        "coding": "override:manual",
+        "review": "override:manual",
+        "reasoning": "override:manual",
+        "summarize": "override:manual",
+        "fast": "override:manual",
+        "cost": "override:manual",
+        "eco": "override:manual",
+        "context": "derived:context_window",
+        "vision": "derived:modality",
+        "tools": "override:manual",
+        "multilingual": "override:manual"
+      }
+    },
+    {
+      "id": "nvidia/deepseek-ai/deepseek-v4-pro",
+      "provider": "nvidia",
+      "modelId": "deepseek-ai/deepseek-v4-pro",
+      "name": "DeepSeek V4 Pro",
+      "features": {
+        "supportsVision": false,
+        "supportsTools": true,
+        "contextWindow": 163840,
+        "inputModalities": [
+          "text"
+        ],
+        "is_free": true
+      },
+      "availability": {
+        "authed": true,
+        "available": true,
+        "local": false
+      },
+      "scores": {
+        "coding": 0.84,
+        "review": 0.83,
+        "reasoning": 0.88,
+        "summarize": 0.8,
+        "fast": 0.58,
+        "cost": 1.0,
+        "eco": 0.92,
+        "context": 0.8,
+        "vision": 0.0,
+        "tools": 0.76,
+        "multilingual": 0.82
+      },
+      "scoreSource": {
+        "coding": "override:manual",
+        "review": "override:manual",
+        "reasoning": "override:manual",
+        "summarize": "override:manual",
+        "fast": "override:manual",
+        "cost": "override:manual",
+        "eco": "override:manual",
+        "context": "derived:context_window",
+        "vision": "derived:modality",
+        "tools": "override:manual",
+        "multilingual": "override:manual"
+      }
+    },
+    {
+      "id": "nvidia/qwen/qwen3-coder-480b-a35b-instruct",
+      "provider": "nvidia",
+      "modelId": "qwen/qwen3-coder-480b-a35b-instruct",
+      "name": "Qwen3 Coder 480B A35B Instruct",
+      "features": {
+        "supportsVision": false,
+        "supportsTools": true,
+        "contextWindow": 262144,
+        "inputModalities": [
+          "text"
+        ],
+        "is_free": true
+      },
+      "availability": {
+        "authed": true,
+        "available": true,
+        "local": false
+      },
+      "scores": {
+        "coding": 0.86,
+        "review": 0.82,
+        "reasoning": 0.8,
+        "summarize": 0.76,
+        "fast": 0.66,
+        "cost": 1.0,
+        "eco": 0.95,
+        "context": 0.9,
+        "vision": 0.0,
+        "tools": 0.78,
+        "multilingual": 0.88
+      },
+      "scoreSource": {
+        "coding": "override:manual",
+        "review": "override:manual",
+        "reasoning": "override:manual",
+        "summarize": "override:manual",
+        "fast": "override:manual",
+        "cost": "override:manual",
+        "eco": "override:manual",
+        "context": "derived:context_window",
+        "vision": "derived:modality",
+        "tools": "override:manual",
+        "multilingual": "override:manual"
       }
     }
   ]

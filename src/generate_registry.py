@@ -92,6 +92,30 @@ def extract_provider(key: str) -> tuple[str, str]:
     return key, key
 
 
+def _context_window(value) -> int:
+    """Return a safe integer context window from mixed catalog values."""
+    if isinstance(value, bool):
+        return 0
+    if isinstance(value, int):
+        return max(0, value)
+    if isinstance(value, float):
+        return max(0, int(value))
+    if isinstance(value, str):
+        text = value.strip().replace(",", "")
+        if not text:
+            return 0
+        try:
+            return max(0, int(float(text)))
+        except ValueError:
+            return 0
+    return 0
+
+
+def _input_modalities(value) -> list[str]:
+    text = value if isinstance(value, str) and value.strip() else "text"
+    return [m for m in text.split("+") if m]
+
+
 def _benchmark_entry_is_usable(entry: dict) -> bool:
     if not entry:
         return False
@@ -257,11 +281,12 @@ def normalize(
         if only_providers and provider not in only_providers:
             continue
 
+        input_modalities = _input_modalities(entry.get("input"))
         features = {
-            "supportsVision": "image" in entry.get("input", ""),
+            "supportsVision": "image" in input_modalities,
             "supportsTools": True,  # conservative default; update when catalog exposes it
-            "contextWindow": entry.get("contextWindow", 0),
-            "inputModalities": [m for m in entry.get("input", "text").split("+") if m],
+            "contextWindow": _context_window(entry.get("contextWindow")),
+            "inputModalities": input_modalities,
         }
 
         availability = {
