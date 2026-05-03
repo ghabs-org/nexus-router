@@ -1,5 +1,5 @@
 -- Nexus Router — SQLite schema
--- Version: 4
+-- Version: 6
 -- Location: data/router.sqlite
 
 PRAGMA journal_mode = WAL;
@@ -153,6 +153,12 @@ CREATE TABLE IF NOT EXISTS route_mode_preferences (
   PRIMARY KEY (scope, pref_key)
 );
 
+CREATE TABLE IF NOT EXISTS model_metadata (
+  model       TEXT PRIMARY KEY,
+  is_free     INTEGER,
+  updated_at  TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS provider_health_state (
   provider                   TEXT PRIMARY KEY,
   auth                       TEXT,
@@ -192,8 +198,9 @@ CREATE INDEX IF NOT EXISTS idx_route_feedback_decision_id ON route_feedback(deci
 CREATE INDEX IF NOT EXISTS idx_route_feedback_created_at ON route_feedback(created_at);
 CREATE INDEX IF NOT EXISTS idx_route_feedback_preferred_model ON route_feedback(preferred_model);
 CREATE INDEX IF NOT EXISTS idx_route_mode_preferences_updated_at ON route_mode_preferences(updated_at);
+CREATE INDEX IF NOT EXISTS idx_model_metadata_updated_at ON model_metadata(updated_at);
 
-INSERT OR IGNORE INTO schema_meta (key, value) VALUES ('schema_version', '4');
+INSERT OR IGNORE INTO schema_meta (key, value) VALUES ('schema_version', '6');
 INSERT OR IGNORE INTO schema_meta (key, value) VALUES ('created_at', datetime('now'));
 
 -- ────────────────────────────────────────────────────────────────────────────

@@ -131,19 +131,7 @@ class Router:
             if self._use_routing_policy
             else None
         )
-        live_registry = self._registry
-        if free_only or normalized_route_mode == "free":
-            metadata = load_model_metadata()
-            if metadata:
-                live_registry = []
-                for model in self._registry:
-                    model_copy = dict(model)
-                    features = dict(model_copy.get("features") or {})
-                    override = metadata.get(model_copy.get("id", ""), {})
-                    if "is_free" in override:
-                        features["is_free"] = override.get("is_free")
-                    model_copy["features"] = features
-                    live_registry.append(model_copy)
+        live_registry = _overlay_model_metadata(self._registry, load_model_metadata())
 
         scored = score_models(
             classifier=effective_classifier,
@@ -298,6 +286,25 @@ def _adapt_classifier_for_light_chat(
         return replace(classifier, task_type="fast_utility", complexity="low", cost_profile="cheap")
 
     return classifier
+
+
+def _overlay_model_metadata(models: list[dict], metadata: dict[str, dict]) -> list[dict]:
+    """Apply mutable DB-backed model metadata over static catalog defaults."""
+    if not metadata:
+        return models
+
+    live_models = []
+    for model in models:
+        override = metadata.get(model.get("id", ""), {})
+        if "is_free" not in override:
+            live_models.append(model)
+            continue
+        model_copy = dict(model)
+        features = dict(model_copy.get("features") or {})
+        features["is_free"] = override.get("is_free")
+        model_copy["features"] = features
+        live_models.append(model_copy)
+    return live_models
 
 
 def _build_fallback_chain(eligible_scores: list, *, primary_provider: str, limit: int = 5) -> list[str]:

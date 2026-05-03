@@ -17,6 +17,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from src.types import ClassifierOutput, PreSignals, ProviderHealth
 from src.scorer import score_models, _preference_score, _learned_score, _fast_mode_correction, _reasoning_mode_total, _build_preference_order
 from src.router import Router, _adapt_classifier_for_light_chat
+import src.router as router_module
 from src.classifier import extract_pre_signals, heuristic_classify, parse_classifier_response, classify_with_model, select_classifier_models, _call_direct_provider_classifier
 from src.server import should_reclassify_with_llm, RouterHandler
 
@@ -591,6 +592,74 @@ class TestRouter:
         reasons_text = " ".join(decision.reason).lower()
         assert "route mode: balanced" in reasons_text
 
+    def test_db_model_metadata_is_free_overrides_static_free_filter(self, tmp_path, monkeypatch):
+        router = _router_with_free_test_registry(tmp_path)
+        monkeypatch.setattr(router_module, "load_provider_health", lambda: {
+            "p": ProviderHealth(provider="p", auth="ok", quota="healthy", health_score=0.95),
+        })
+        monkeypatch.setattr(router_module, "load_model_stats", lambda: {})
+        monkeypatch.setattr(router_module, "load_model_metadata", lambda: {
+            "p/static-paid": {"is_free": True},
+            "p/static-free": {"is_free": False},
+        })
+
+        decision = router.route(ClassifierOutput(task_type="fast_utility", confidence=0.8), free_only=True)
+
+        assert decision.selected_model == "p/static-paid"
+        excluded = {item["model"]: item["reason"] for item in decision.excluded_models}
+        assert excluded["p/static-free"] == "not_free"
+
+    def test_free_route_mode_respects_db_is_free_metadata(self, tmp_path, monkeypatch):
+        router = _router_with_free_test_registry(tmp_path)
+        monkeypatch.setattr(router_module, "load_provider_health", lambda: {
+            "p": ProviderHealth(provider="p", auth="ok", quota="healthy", health_score=0.95),
+        })
+        monkeypatch.setattr(router_module, "load_model_stats", lambda: {})
+        monkeypatch.setattr(router_module, "load_model_metadata", lambda: {
+            "p/static-paid": {"is_free": True},
+            "p/static-free": {"is_free": False},
+        })
+
+        decision = router.route(ClassifierOutput(task_type="general_chat", confidence=0.8), route_mode="free")
+
+        assert decision.selected_model == "p/static-paid"
+        assert "route mode: free" in " ".join(decision.reason).lower()
+
+    def test_free_filter_falls_back_to_static_is_free_without_db_metadata(self, tmp_path, monkeypatch):
+        router = _router_with_free_test_registry(tmp_path)
+        monkeypatch.setattr(router_module, "load_provider_health", lambda: {
+            "p": ProviderHealth(provider="p", auth="ok", quota="healthy", health_score=0.95),
+        })
+        monkeypatch.setattr(router_module, "load_model_stats", lambda: {})
+        monkeypatch.setattr(router_module, "load_model_metadata", lambda: {})
+
+        decision = router.route(ClassifierOutput(task_type="fast_utility", confidence=0.8), free_only=True)
+
+        assert decision.selected_model == "p/static-free"
+
+
+def _router_with_free_test_registry(tmp_path):
+    registry_path = tmp_path / "models.json"
+    registry_path.write_text(json.dumps({
+        "models": [
+            {
+                "id": "p/static-paid",
+                "provider": "p",
+                "features": {"contextWindow": 300000, "is_free": False},
+                "availability": {"authed": True},
+                "scores": {"fast": 0.95, "cost": 0.95, "reasoning": 0.8, "coding": 0.8, "review": 0.8, "summarize": 0.8, "eco": 0.9, "context": 0.8, "vision": 0.7},
+            },
+            {
+                "id": "p/static-free",
+                "provider": "p",
+                "features": {"contextWindow": 300000, "is_free": True},
+                "availability": {"authed": True},
+                "scores": {"fast": 0.7, "cost": 0.7, "reasoning": 0.7, "coding": 0.7, "review": 0.7, "summarize": 0.7, "eco": 0.7, "context": 0.8, "vision": 0.7},
+            },
+        ]
+    }))
+    return Router(registry_path=registry_path, persist=False)
+
 
 # ── Classifier tests ──────────────────────────────────────────────────────────
 
@@ -1048,6 +1117,7 @@ def test_load_model_stats_includes_feedback_preferences(tmp_path, monkeypatch):
     monkeypatch.setenv("NEXUS_ROUTER_DB_PATH", str(tmp_path / "routing.sqlite"))
     import src.db as db
     importlib.reload(db)
+    monkeypatch.setattr(db, "DB_PATH", tmp_path / "routing.sqlite")
 
     db.ensure_schema()
     conn = db._connect()
@@ -1078,6 +1148,7 @@ def test_load_model_stats_maps_too_cheap_feedback_to_selected_model_when_preferr
     monkeypatch.setenv("NEXUS_ROUTER_DB_PATH", str(tmp_path / "routing.sqlite"))
     import src.db as db
     importlib.reload(db)
+    monkeypatch.setattr(db, "DB_PATH", tmp_path / "routing.sqlite")
 
     db.ensure_schema()
     conn = db._connect()
@@ -1103,3 +1174,22 @@ def test_load_model_stats_maps_too_cheap_feedback_to_selected_model_when_preferr
     assert pref["samples"] == 1
     assert pref["score"] == 0.0
     assert pref["top_reason_tag"] == "too_cheap"
+
+
+def test_set_and_load_model_is_free_metadata(tmp_path, monkeypatch):
+    import importlib
+
+    monkeypatch.setenv("NEXUS_ROUTER_DB_PATH", str(tmp_path / "routing.sqlite"))
+    import src.db as db
+    importlib.reload(db)
+    monkeypatch.setattr(db, "DB_PATH", tmp_path / "routing.sqlite")
+
+    db.ensure_schema()
+    db.set_model_is_free("p/model", True)
+    assert db.load_model_metadata()["p/model"]["is_free"] is True
+
+    db.set_model_is_free("p/model", False)
+    assert db.load_model_metadata()["p/model"]["is_free"] is False
+
+    db.set_model_is_free("p/model", None)
+    assert db.load_model_metadata()["p/model"]["is_free"] is None
