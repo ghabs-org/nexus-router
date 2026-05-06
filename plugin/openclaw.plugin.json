@@ -27,7 +27,11 @@
       },
       "costProfile": {
         "type": "string",
-        "enum": ["cheap", "balanced", "premium"],
+        "enum": [
+          "cheap",
+          "balanced",
+          "premium"
+        ],
         "description": "Cost/quality routing profile",
         "default": "balanced"
       },
@@ -38,8 +42,8 @@
       },
       "minConfidence": {
         "type": "number",
-        "description": "Skip routing if classifier confidence is below this threshold (0.0–1.0)",
-        "default": 0.60
+        "description": "Skip routing if classifier confidence is below this threshold (0.0\u20131.0)",
+        "default": 0.6
       },
       "timeoutMs": {
         "type": "number",
@@ -47,5 +51,8 @@
         "default": 3000
       }
     }
+  },
+  "activation": {
+    "onStartup": true
   }
 }

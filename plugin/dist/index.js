@@ -842,6 +842,8 @@ function buildRouteLastReply(last) {
     const escalationLabel = last.autoEscalated ? `${last.requestedRouteMode} → ${last.routeMode}` : last.routeMode;
     const lines = [
         `Routing: ${escalationLabel}`,
+        `Applied: ${last.applied === false ? "no" : "yes"}`,
+        ...(last.applied === false && last.skippedReason ? [`Skip reason: ${last.skippedReason}`] : []),
         `Input: ${last.source}`,
         `Source tag: ${last.sourceTag}`,
         `Context: ${contextLabel}`,
@@ -877,6 +879,8 @@ function buildRouteExplainReply(last) {
     const runtimeDuration = last.runtimeDurationMs === undefined ? "" : ` (${last.runtimeDurationMs}ms)`;
     const lines = [
         `Routing: ${escalationLabel}`,
+        `Applied: ${last.applied === false ? "no" : "yes"}`,
+        ...(last.applied === false && last.skippedReason ? [`Skip reason: ${last.skippedReason}`] : []),
         `Input: ${last.source}`,
         `Source tag: ${last.sourceTag}`,
         `Context: ${contextLabel}`,
@@ -954,27 +958,31 @@ function resolveCostProfileForRouteMode(mode, defaultProfile) {
             return defaultProfile;
     }
 }
-function buildRouteInteractiveReply(mode, scopeLabel = "this conversation", freeFilter) {
+function buildRouteInteractiveReply(mode, scopeLabel = "this conversation", freeFilter, includeInteractive = true) {
     const label = `${mode ?? "auto"}${freeFilter && mode !== "free" ? " free" : ""}`;
     return {
         text: `⚙️ Routing mode: ${label} (${scopeLabel}).`,
-        interactive: {
-            blocks: [
-                { type: "text", text: `Choose a routing mode (current: ${label}, persisted in router state):` },
-                {
-                    type: "buttons",
-                    buttons: [
-                        { label: "Auto", value: "/route auto", style: "primary" },
-                        { label: "Balanced", value: "/route balanced", style: "secondary" },
-                        { label: "Fast", value: "/route fast", style: "success" },
-                        { label: "Reasoning", value: "/route reasoning", style: "secondary" },
-                        { label: "Eco", value: "/route eco", style: "secondary" },
-                        { label: "Free", value: "/route free", style: "secondary" },
-                        { label: "Off", value: "/route off", style: "danger" },
+        ...(includeInteractive
+            ? {
+                interactive: {
+                    blocks: [
+                        { type: "text", text: `Choose a routing mode (current: ${label}, persisted in router state):` },
+                        {
+                            type: "buttons",
+                            buttons: [
+                                { label: "Auto", value: "/route auto", style: "primary" },
+                                { label: "Balanced", value: "/route balanced", style: "secondary" },
+                                { label: "Fast", value: "/route fast", style: "success" },
+                                { label: "Reasoning", value: "/route reasoning", style: "secondary" },
+                                { label: "Eco", value: "/route eco", style: "secondary" },
+                                { label: "Free", value: "/route free", style: "secondary" },
+                                { label: "Off", value: "/route off", style: "danger" },
+                            ],
+                        },
                     ],
                 },
-            ],
-        },
+            }
+            : {}),
     };
 }
 function resolveLastDecisionForContext(ctx, conversationKey) {
@@ -1280,7 +1288,7 @@ export default definePluginEntry({
                     await persistRouteModePreference(routerUrl, ctx.sessionKey, normalized, "session", hasFreeModifier);
                 if (channelOnlyKey)
                     await persistRouteModePreference(routerUrl, channelOnlyKey, normalized, "channel", hasFreeModifier);
-                return buildRouteInteractiveReply(normalized, "this conversation", hasFreeModifier);
+                return buildRouteInteractiveReply(normalized, "this conversation", hasFreeModifier, false);
             },
         });
         api.on("before_dispatch", (event, ctx) => {
@@ -1350,8 +1358,10 @@ export default definePluginEntry({
             const source = rawUserText ? "raw-user" : "compiled-prompt";
             const startupReason = source === "compiled-prompt" ? takeRecentStartupReason(ctx.sessionKey) : null;
             const sourceTag = buildSourceTag(ctx, source, routingText, startupReason);
-            const routeMode = await resolveRouteModeFromContext(api, ctx);
-            const freeFilter = resolveFreeFilterFromContext(ctx);
+            const modeResolution = await resolveRouteModeDetailsFromContext(api, ctx);
+            const routeMode = modeResolution.mode;
+            const freeFilter = Boolean(modeResolution.freeFilter);
+            const shouldEnforceConfidenceGate = modeResolution.source === "default" && routeMode === "auto" && !freeFilter;
             const firstPassCostProfile = resolveCostProfileForRouteMode(routeMode, costProfile);
             const sessionRef = String(ctx?.sessionKey ?? ctx?.sessionId ?? ctx?.conversationId ?? "");
             const dedupeText = routingText.trim();
@@ -1576,13 +1586,6 @@ export default definePluginEntry({
                     await debugLog(`[feedback-card] skipped decision=${decision.decision_id} reason=missing_sender session=${ctx.sessionKey ?? sessionRef ?? ""}`);
                 }
             }
-            if (decision.confidence < minConfidence) {
-                await debugLog(`[hook-result] source=${source} source_tag=${sourceTag} skipped confidence=${decision.confidence.toFixed(2)} threshold=${minConfidence}`);
-                if (debugMode) {
-                    console.log(`[nexus-router] confidence ${decision.confidence.toFixed(2)} < ${minConfidence}, skipping`);
-                }
-                return;
-            }
             const lastDecision = {
                 at: Date.now(),
                 decisionId: decision.decision_id,
@@ -1606,8 +1609,17 @@ export default definePluginEntry({
                 score: decision.score,
                 reason: decision.reason,
                 autoEscalated: routeMode === "auto" && finalMode === "balanced",
+                applied: !shouldEnforceConfidenceGate || decision.confidence >= minConfidence,
             };
             rememberLastDecision(ctx.sessionKey, lastDecision);
+            if (shouldEnforceConfidenceGate && decision.confidence < minConfidence) {
+                lastDecision.skippedReason = `confidence ${decision.confidence.toFixed(2)} below threshold ${minConfidence} in default auto mode`;
+                await debugLog(`[hook-result] source=${source} source_tag=${sourceTag} skipped confidence=${decision.confidence.toFixed(2)} threshold=${minConfidence}`);
+                if (debugMode) {
+                    console.log(`[nexus-router] confidence ${decision.confidence.toFixed(2)} < ${minConfidence}, skipping`);
+                }
+                return;
+            }
             if (ctx.sessionId && decision.decision_id) {
                 enqueuePendingOutcome(ctx.sessionId, {
                     decisionId: decision.decision_id,

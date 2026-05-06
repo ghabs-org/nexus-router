@@ -15,3 +15,4 @@ artifacts/
 
 .test-state/
 scripts/fake_report.py
+.live-backups/
