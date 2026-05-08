@@ -17,13 +17,13 @@ from typing import Any, Optional
 
 try:
     from .types import ClassifierOutput, PreSignals, ProviderHealth, RoutingDecision
-    from .paths import ROUTER_DB_PATH, ensure_parent
+    from .paths import ROUTER_DB_PATH, REGISTRY_FILE, ensure_parent
 except ImportError:
     import sys
     from pathlib import Path as _Path
     sys.path.insert(0, str(_Path(__file__).parent))
     from types import SimpleNamespace as _ignore  # noqa: F401
-    from paths import ROUTER_DB_PATH, ensure_parent  # type: ignore
+    from paths import ROUTER_DB_PATH, REGISTRY_FILE, ensure_parent  # type: ignore
     from importlib import util as _importlib_util
     _types_spec = _importlib_util.spec_from_file_location("nexus_router_local_types", _Path(__file__).parent / "types.py")
     _types_mod = _importlib_util.module_from_spec(_types_spec)
@@ -59,6 +59,7 @@ def ensure_schema():
     _ensure_routing_decisions_compat(conn)
     _ensure_model_metadata_compat(conn)
     _ensure_route_mode_preferences_compat(conn)
+    _ensure_providers_compat(conn)
     conn.commit()
     conn.close()
 
@@ -138,6 +139,188 @@ def _ensure_routing_decisions_compat(conn: sqlite3.Connection) -> None:
             WHERE source_type IS NULL OR TRIM(source_type) = ''
             """
         )
+
+
+def _ensure_providers_compat(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS providers (
+          provider                   TEXT PRIMARY KEY,
+          enabled                    INTEGER NOT NULL DEFAULT 0,
+          status                     TEXT NOT NULL DEFAULT 'unknown',
+          priority                   INTEGER DEFAULT 100,
+          allow_primary              INTEGER NOT NULL DEFAULT 1,
+          allow_fallback             INTEGER NOT NULL DEFAULT 1,
+          weight_multiplier          REAL NOT NULL DEFAULT 1.0,
+          max_concurrency            INTEGER,
+          notes                      TEXT,
+          health_status              TEXT NOT NULL DEFAULT 'unknown',
+          health_score               REAL DEFAULT 1,
+          auth_status                TEXT DEFAULT 'unknown',
+          quota_status               TEXT DEFAULT 'unknown',
+          quota_remaining_ratio      REAL,
+          recent_error_rate          REAL DEFAULT 0,
+          rate_limit_risk            REAL DEFAULT 0,
+          consecutive_rate_limits    INTEGER DEFAULT 0,
+          cooldown_until             TEXT,
+          latency_ms_p50             REAL,
+          latency_ms_p95             REAL,
+          latency_updated_at         TEXT,
+          last_check_at              TEXT,
+          last_success_at            TEXT,
+          last_failure_at            TEXT,
+          last_error_type            TEXT,
+          last_error_message         TEXT,
+          metadata_json              TEXT,
+          created_at                 TEXT NOT NULL DEFAULT (datetime('now')),
+          updated_at                 TEXT NOT NULL DEFAULT (datetime('now'))
+        )
+        """
+    )
+    expected = {
+        "enabled": "INTEGER NOT NULL DEFAULT 0",
+        "status": "TEXT NOT NULL DEFAULT 'unknown'",
+        "priority": "INTEGER DEFAULT 100",
+        "allow_primary": "INTEGER NOT NULL DEFAULT 1",
+        "allow_fallback": "INTEGER NOT NULL DEFAULT 1",
+        "weight_multiplier": "REAL NOT NULL DEFAULT 1.0",
+        "max_concurrency": "INTEGER",
+        "notes": "TEXT",
+        "health_status": "TEXT NOT NULL DEFAULT 'unknown'",
+        "health_score": "REAL DEFAULT 1",
+        "auth_status": "TEXT DEFAULT 'unknown'",
+        "quota_status": "TEXT DEFAULT 'unknown'",
+        "quota_remaining_ratio": "REAL",
+        "recent_error_rate": "REAL DEFAULT 0",
+        "rate_limit_risk": "REAL DEFAULT 0",
+        "consecutive_rate_limits": "INTEGER DEFAULT 0",
+        "cooldown_until": "TEXT",
+        "latency_ms_p50": "REAL",
+        "latency_ms_p95": "REAL",
+        "latency_updated_at": "TEXT",
+        "last_check_at": "TEXT",
+        "last_success_at": "TEXT",
+        "last_failure_at": "TEXT",
+        "last_error_type": "TEXT",
+        "last_error_message": "TEXT",
+        "metadata_json": "TEXT",
+        "created_at": "TEXT NOT NULL DEFAULT (datetime('now'))",
+        "updated_at": "TEXT NOT NULL DEFAULT (datetime('now'))",
+    }
+    columns = {row["name"] for row in conn.execute("PRAGMA table_info(providers)").fetchall()}
+    for column, column_type in expected.items():
+        if column not in columns:
+            conn.execute(f"ALTER TABLE providers ADD COLUMN {column} {column_type}")
+
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_providers_enabled ON providers(enabled)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_providers_health_status ON providers(health_status)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_providers_updated_at ON providers(updated_at)")
+    _seed_known_providers(conn)
+    conn.execute("UPDATE schema_meta SET value='7' WHERE key='schema_version'")
+    conn.execute("INSERT OR IGNORE INTO schema_meta (key, value) VALUES ('schema_version', '7')")
+
+
+def _seed_known_providers(conn: sqlite3.Connection) -> None:
+    enabled_defaults = {"anthropic", "openai-codex", "google-gemini-cli", "openrouter", "nvidia"}
+    providers = _known_provider_names(conn)
+    now = _now_iso()
+    for provider in sorted(providers):
+        enabled = 1 if provider in enabled_defaults else 0
+        status = "enabled" if enabled else "disabled"
+        conn.execute(
+            """
+            INSERT INTO providers (provider, enabled, status, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(provider) DO NOTHING
+            """,
+            (provider, enabled, status, now, now),
+        )
+
+    conn.execute(
+        """
+        UPDATE providers
+        SET
+          health_score = COALESCE((SELECT health_score FROM provider_health_state phs WHERE phs.provider = providers.provider), health_score),
+          auth_status = COALESCE((SELECT auth FROM provider_health_state phs WHERE phs.provider = providers.provider), auth_status, 'unknown'),
+          quota_status = COALESCE((SELECT quota FROM provider_health_state phs WHERE phs.provider = providers.provider), quota_status, 'unknown'),
+          quota_remaining_ratio = COALESCE((SELECT quota_remaining_ratio FROM provider_health_state phs WHERE phs.provider = providers.provider), quota_remaining_ratio),
+          recent_error_rate = COALESCE((SELECT recent_error_rate FROM provider_health_state phs WHERE phs.provider = providers.provider), recent_error_rate, 0),
+          rate_limit_risk = COALESCE((SELECT rate_limit_risk FROM provider_health_state phs WHERE phs.provider = providers.provider), rate_limit_risk, 0),
+          consecutive_rate_limits = COALESCE((SELECT consecutive_rate_limits FROM provider_health_state phs WHERE phs.provider = providers.provider), consecutive_rate_limits, 0),
+          cooldown_until = COALESCE((SELECT rate_limit_cooldown_until FROM provider_health_state phs WHERE phs.provider = providers.provider), cooldown_until),
+          latency_ms_p50 = COALESCE((SELECT latency_ms_p50 FROM provider_health_state phs WHERE phs.provider = providers.provider), latency_ms_p50),
+          latency_updated_at = COALESCE((SELECT latency_updated_at FROM provider_health_state phs WHERE phs.provider = providers.provider), latency_updated_at),
+          last_check_at = COALESCE((SELECT last_check_at FROM provider_health_state phs WHERE phs.provider = providers.provider), last_check_at),
+          last_failure_at = COALESCE((SELECT last_failure_at FROM provider_health_state phs WHERE phs.provider = providers.provider), last_failure_at),
+          updated_at = ?
+        WHERE provider IN (SELECT provider FROM provider_health_state)
+        """,
+        (now,),
+    )
+    conn.execute(
+        """
+        UPDATE providers
+        SET health_status = CASE
+          WHEN cooldown_until IS NOT NULL AND cooldown_until > datetime('now') THEN 'cooldown'
+          WHEN health_score IS NULL THEN 'unknown'
+          WHEN health_score >= 0.80 THEN 'healthy'
+          WHEN health_score >= 0.40 THEN 'degraded'
+          ELSE 'unhealthy'
+        END
+        """
+    )
+    conn.execute(
+        """
+        UPDATE providers
+        SET last_success_at = (
+              SELECT MAX(observed_at)
+              FROM provider_health_log phl
+              WHERE phl.provider = providers.provider
+                AND COALESCE(phl.auth_status, 'ok') IN ('ok', 'unknown')
+                AND COALESCE(phl.quota_state, 'healthy') != 'exhausted'
+                AND phl.error_type IS NULL
+            ),
+            last_error_type = (
+              SELECT error_type FROM provider_health_log phl
+              WHERE phl.provider = providers.provider AND phl.error_type IS NOT NULL
+              ORDER BY observed_at DESC LIMIT 1
+            ),
+            last_error_message = (
+              SELECT note FROM provider_health_log phl
+              WHERE phl.provider = providers.provider AND (phl.error_type IS NOT NULL OR phl.http_status >= 400)
+              ORDER BY observed_at DESC LIMIT 1
+            )
+        """
+    )
+
+
+def _known_provider_names(conn: sqlite3.Connection) -> set[str]:
+    providers: set[str] = set()
+    for table in ("provider_health_state", "provider_health_log", "model_stats", "routing_decisions"):
+        try:
+            if table == "model_stats":
+                rows = conn.execute("SELECT DISTINCT provider FROM model_stats WHERE provider IS NOT NULL AND TRIM(provider) != ''").fetchall()
+            elif table == "routing_decisions":
+                rows = conn.execute("SELECT DISTINCT selected_provider AS provider FROM routing_decisions WHERE selected_provider IS NOT NULL AND TRIM(selected_provider) != ''").fetchall()
+            else:
+                rows = conn.execute(f"SELECT DISTINCT provider FROM {table} WHERE provider IS NOT NULL AND TRIM(provider) != ''").fetchall()
+            providers.update(str(row["provider"]) for row in rows if row["provider"])
+        except sqlite3.OperationalError:
+            pass
+
+    try:
+        if REGISTRY_FILE.exists():
+            payload = json.loads(REGISTRY_FILE.read_text())
+            models = payload.get("models", []) if isinstance(payload, dict) else payload
+            if isinstance(models, list):
+                for model in models:
+                    if isinstance(model, dict) and model.get("provider"):
+                        providers.add(str(model["provider"]))
+    except Exception:
+        # Registry seeding is best-effort; DB-backed observations above are enough
+        # for live routing state.
+        pass
+    return providers
 
 
 def _ensure_model_metadata_compat(conn: sqlite3.Connection) -> None:
@@ -644,6 +827,26 @@ def replace_benchmark_scores(models: dict[str, dict[str, Any]]) -> None:
         conn.close()
 
 
+def load_providers(providers: Optional[list[str]] = None) -> dict[str, dict[str, Any]]:
+    conn = _connect()
+    try:
+        try:
+            _ensure_providers_compat(conn)
+            if providers:
+                placeholders = ",".join("?" for _ in providers)
+                rows = conn.execute(
+                    f"SELECT * FROM providers WHERE provider IN ({placeholders})",
+                    tuple(providers),
+                ).fetchall()
+            else:
+                rows = conn.execute("SELECT * FROM providers").fetchall()
+        except sqlite3.OperationalError:
+            return {}
+        return {row["provider"]: dict(row) for row in rows}
+    finally:
+        conn.close()
+
+
 def upsert_provider_health_state(provider: str, state: dict[str, Any]) -> None:
     conn = _connect()
     try:
@@ -684,6 +887,45 @@ def upsert_provider_health_state(provider: str, state: dict[str, Any]) -> None:
                 state.get("last_failure_at"),
                 state.get("last_check_at"),
                 state.get("health_score", 1.0),
+            ),
+        )
+        # Keep the provider control/current-state table in sync with health observations.
+        _ensure_providers_compat(conn)
+        now = _now_iso()
+        enabled = 1 if provider in {"anthropic", "openai-codex", "google-gemini-cli", "openrouter", "nvidia"} else 0
+        status = "enabled" if enabled else "disabled"
+        conn.execute(
+            """
+            INSERT INTO providers (provider, enabled, status, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(provider) DO NOTHING
+            """,
+            (provider, enabled, status, now, now),
+        )
+        conn.execute(
+            """
+            UPDATE providers
+            SET
+              health_score=?, auth_status=?, quota_status=?, quota_remaining_ratio=?,
+              recent_error_rate=?, rate_limit_risk=?, consecutive_rate_limits=?,
+              cooldown_until=?, latency_ms_p50=?, latency_updated_at=?,
+              last_failure_at=?, last_check_at=?, updated_at=?,
+              health_status = CASE
+                WHEN ? IS NOT NULL AND ? > datetime('now') THEN 'cooldown'
+                WHEN ? IS NULL THEN 'unknown'
+                WHEN ? >= 0.80 THEN 'healthy'
+                WHEN ? >= 0.40 THEN 'degraded'
+                ELSE 'unhealthy'
+              END
+            WHERE provider=?
+            """,
+            (
+                state.get("health_score", 1.0), state.get("auth", "unknown"), state.get("quota", "unknown"),
+                state.get("quota_remaining_ratio"), state.get("recent_error_rate", 0.0), state.get("rate_limit_risk", 0.0),
+                state.get("consecutive_rate_limits", 0), state.get("rate_limit_cooldown_until"), state.get("latency_ms_p50"),
+                state.get("latency_updated_at"), state.get("last_failure_at"), state.get("last_check_at"), now,
+                state.get("rate_limit_cooldown_until"), state.get("rate_limit_cooldown_until"),
+                state.get("health_score"), state.get("health_score", 1.0), state.get("health_score", 1.0), provider,
             ),
         )
         conn.commit()

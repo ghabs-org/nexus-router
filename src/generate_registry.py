@@ -31,10 +31,10 @@ ROOT = Path(__file__).parent.parent
 
 try:
     from .paths import RAW_CATALOG_FILE as RAW_CATALOG, POLICIES_ROOT, REGISTRY_FILE as OUT_FILE, ensure_parent
-    from .db import load_benchmark_scores, load_outcome_counts
+    from .db import load_benchmark_scores, load_outcome_counts, load_providers
 except ImportError:
     from paths import RAW_CATALOG_FILE as RAW_CATALOG, POLICIES_ROOT, REGISTRY_FILE as OUT_FILE, ensure_parent
-    from db import load_benchmark_scores, load_outcome_counts
+    from db import load_benchmark_scores, load_outcome_counts, load_providers
 
 FAMILIES_FILE    = POLICIES_ROOT / "families.yaml"
 OVERRIDES_FILE   = POLICIES_ROOT / "overrides.yaml"
@@ -127,6 +127,38 @@ def _benchmark_entry_is_usable(entry: dict) -> bool:
     return True
 
 
+def _benchmark_model_signature(model_key: str) -> str:
+    """Provider-agnostic model signature for benchmark inheritance.
+
+    OpenClaw providers sometimes expose the same underlying model with slightly
+    different separators, e.g. `anthropic/claude-opus-4-6` vs
+    `github-copilot/claude-opus-4.6`. Normalize those so direct Anthropic
+    Claude models can inherit public benchmark stats gathered through another
+    provider.
+    """
+    model = model_key.split("/", 1)[-1].lower()
+    if model.startswith("anthropic."):
+        model = model.removeprefix("anthropic.")
+    vendor_prefixes = (
+        "anthropic",
+        "google",
+        "openai",
+        "qwen",
+        "x-ai",
+        "meta-llama",
+        "mistralai",
+        "deepseek",
+    )
+    for vendor in vendor_prefixes:
+        for prefix in (f"{vendor}/", f"~{vendor}/"):
+            if model.startswith(prefix):
+                model = model.removeprefix(prefix)
+                break
+    model = re.sub(r"-v1(?::0)?$", "", model)
+    model = re.sub(r"-202[0-9]{5}$", "", model)
+    return model.replace(".", "-").replace(":thinking", "")
+
+
 def _canonical_benchmark_keys(provider: str, model_id: str, bench_models: dict) -> list[str]:
     """Return candidate benchmark keys, preferring exact usable match then any same-model sibling across providers."""
     exact = f"{provider}/{model_id}"
@@ -140,9 +172,13 @@ def _canonical_benchmark_keys(provider: str, model_id: str, bench_models: dict) 
     # underlying model_id and benchmark data exists for it, reuse those capability
     # scores here. Provider-specific delivery differences are handled elsewhere.
     sibling_suffix = f"/{model_id}"
+    target_signature = _benchmark_model_signature(exact)
     siblings = sorted(
         key for key, entry in bench_models.items()
-        if key != exact and key.endswith(sibling_suffix) and _benchmark_entry_is_usable(entry) and "inherited:" not in str(entry.get("_source") or "")
+        if key != exact
+        and (key.endswith(sibling_suffix) or _benchmark_model_signature(key) == target_signature)
+        and _benchmark_entry_is_usable(entry)
+        and "inherited:" not in str(entry.get("_source") or "")
     )
     candidates.extend(siblings)
     return candidates
@@ -261,6 +297,49 @@ def resolve_scores(
     return defaults, source
 
 
+def _gemini_cli_enabled() -> bool:
+    try:
+        control = load_providers(["google-gemini-cli"]).get("google-gemini-cli") or {}
+    except Exception:
+        return False
+    if not bool(control.get("enabled", 0)):
+        return False
+    status = str(control.get("status") or "enabled").lower()
+    if status in {"disabled", "maintenance"}:
+        return False
+    auth = str(control.get("auth_status") or "unknown").lower()
+    return auth not in {"missing", "expired"}
+
+
+def _expand_cli_backed_entries(raw_models: list[dict]) -> list[dict]:
+    models = list(raw_models)
+    if not _gemini_cli_enabled():
+        return models
+
+    existing = {str(entry.get("key") or "") for entry in models}
+    for entry in raw_models:
+        key = str(entry.get("key") or "")
+        provider, model_id = extract_provider(key)
+        if provider != "google" or not model_id.startswith("gemini-"):
+            continue
+
+        cli_key = f"google-gemini-cli/{model_id}"
+        if cli_key in existing:
+            continue
+
+        clone = dict(entry)
+        clone["key"] = cli_key
+        clone["available"] = True
+        clone["local"] = False
+        tags = list(clone.get("tags") or [])
+        if "runtime:google-gemini-cli" not in tags:
+            tags.append("runtime:google-gemini-cli")
+        clone["tags"] = tags
+        models.append(clone)
+        existing.add(cli_key)
+    return models
+
+
 def normalize(
     raw: dict,
     families: dict,
@@ -270,7 +349,8 @@ def normalize(
     outcome_counts: dict[str, int] | None = None,
 ) -> list[dict]:
     models = []
-    for entry in raw.get("models", []):
+    raw_models = _expand_cli_backed_entries(raw.get("models", []))
+    for entry in raw_models:
         key = entry.get("key", "")
         if not key:
             continue
@@ -378,7 +458,7 @@ def main():
         all_models = raw.get("models", [])
         authed_providers = {
             extract_provider(m.get("key", ""))[0]
-            for m in all_models
+            for m in _expand_cli_backed_entries(all_models)
             if m.get("available", False)
         }
         only_providers = authed_providers

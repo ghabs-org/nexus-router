@@ -169,6 +169,43 @@ CREATE TABLE IF NOT EXISTS provider_health_state (
   health_score               REAL DEFAULT 1
 );
 
+CREATE TABLE IF NOT EXISTS providers (
+  provider                   TEXT PRIMARY KEY,
+
+  -- operator controls
+  enabled                    INTEGER NOT NULL DEFAULT 0,
+  status                     TEXT NOT NULL DEFAULT 'unknown', -- enabled|disabled|maintenance|unknown
+  priority                   INTEGER DEFAULT 100,
+  allow_primary              INTEGER NOT NULL DEFAULT 1,
+  allow_fallback             INTEGER NOT NULL DEFAULT 1,
+  weight_multiplier          REAL NOT NULL DEFAULT 1.0,
+  max_concurrency            INTEGER,
+  notes                      TEXT,
+
+  -- current runtime state, mirrored from provider_health_state when available
+  health_status              TEXT NOT NULL DEFAULT 'unknown', -- healthy|degraded|unhealthy|cooldown|unknown
+  health_score               REAL DEFAULT 1,
+  auth_status                TEXT DEFAULT 'unknown',
+  quota_status               TEXT DEFAULT 'unknown',
+  quota_remaining_ratio      REAL,
+  recent_error_rate          REAL DEFAULT 0,
+  rate_limit_risk            REAL DEFAULT 0,
+  consecutive_rate_limits    INTEGER DEFAULT 0,
+  cooldown_until             TEXT,
+  latency_ms_p50             REAL,
+  latency_ms_p95             REAL,
+  latency_updated_at         TEXT,
+  last_check_at              TEXT,
+  last_success_at            TEXT,
+  last_failure_at            TEXT,
+  last_error_type            TEXT,
+  last_error_message         TEXT,
+
+  metadata_json              TEXT,
+  created_at                 TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at                 TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 CREATE TABLE IF NOT EXISTS benchmark_model_scores (
   model_id               TEXT PRIMARY KEY,
   source                 TEXT,
@@ -192,6 +229,9 @@ CREATE INDEX IF NOT EXISTS idx_route_feedback_decision_id ON route_feedback(deci
 CREATE INDEX IF NOT EXISTS idx_route_feedback_created_at ON route_feedback(created_at);
 CREATE INDEX IF NOT EXISTS idx_route_feedback_preferred_model ON route_feedback(preferred_model);
 CREATE INDEX IF NOT EXISTS idx_route_mode_preferences_updated_at ON route_mode_preferences(updated_at);
+CREATE INDEX IF NOT EXISTS idx_providers_enabled ON providers(enabled);
+CREATE INDEX IF NOT EXISTS idx_providers_health_status ON providers(health_status);
+CREATE INDEX IF NOT EXISTS idx_providers_updated_at ON providers(updated_at);
 
 INSERT OR IGNORE INTO schema_meta (key, value) VALUES ('schema_version', '4');
 INSERT OR IGNORE INTO schema_meta (key, value) VALUES ('created_at', datetime('now'));

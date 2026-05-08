@@ -32,7 +32,7 @@ ROOT = Path(__file__).resolve().parents[1]
 REPORT_SCRIPT = Path(__file__).resolve().parent / "feedback_calibration_report.py"
 POLICIES_PATH = ROOT / "policies"
 OVERRIDES_PATH = POLICIES_PATH / "tuning_overrides.yaml"
-STATE_DIR = Path.home() / ".local" / "state" / "nexus-router" / "tuning"
+STATE_DIR = Path(os.environ.get("NEXUS_ROUTER_TUNING_STATE_DIR", Path.home() / ".local" / "state" / "nexus-router" / "tuning"))
 SNAP_DIR = STATE_DIR / "backups"
 JOURNAL = STATE_DIR / "journal.log"
 STATE_FILE = STATE_DIR / "state.json"
@@ -46,6 +46,10 @@ DEFAULTS = {
 
 
 def load_report() -> Dict[str, Any]:
+    report_file = os.environ.get("NEXUS_ROUTER_FEEDBACK_REPORT_FILE")
+    if report_file:
+        return json.loads(Path(report_file).read_text())
+
     # Run report script and parse JSON
     if not REPORT_SCRIPT.exists():
         raise FileNotFoundError(f"report script missing: {REPORT_SCRIPT}")

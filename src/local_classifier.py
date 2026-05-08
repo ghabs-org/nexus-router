@@ -19,10 +19,10 @@ DEFAULT_LOCAL_CLASSIFIER_MODEL_FILE = os.environ.get(
     "NEXUS_ROUTER_LOCAL_CLASSIFIER_MODEL_FILE", "model.onnx"
 )
 DEFAULT_LOCAL_CLASSIFIER_MIN_CONFIDENCE = float(
-    os.environ.get("NEXUS_ROUTER_LOCAL_CLASSIFIER_MIN_CONFIDENCE", "0.14")
+    os.environ.get("NEXUS_ROUTER_LOCAL_CLASSIFIER_MIN_CONFIDENCE", "0.70")
 )
 DEFAULT_LOCAL_CLASSIFIER_MARGIN = float(
-    os.environ.get("NEXUS_ROUTER_LOCAL_CLASSIFIER_MARGIN", "0.0")
+    os.environ.get("NEXUS_ROUTER_LOCAL_CLASSIFIER_MARGIN", "0.05")
 )
 DEFAULT_LOCAL_CLASSIFIER_MAX_LENGTH = int(
     os.environ.get("NEXUS_ROUTER_LOCAL_CLASSIFIER_MAX_LENGTH", "512")
@@ -252,11 +252,15 @@ def classify_with_local_model(
     if not classifier.available:
         return None
 
-    result = classifier.classify(
-        message,
-        pre_signals,
-        conversation_context=conversation_context,
-    )
+    try:
+        result = classifier.classify(
+            message,
+            pre_signals,
+            conversation_context=conversation_context,
+        )
+    except TypeError:
+        # Keep simple fakes and older custom classifier adapters compatible.
+        result = classifier.classify(message, pre_signals)
     if result is None:
         return None
     if result.confidence < min_confidence:

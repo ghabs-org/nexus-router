@@ -50,6 +50,10 @@ VISION_MIN_SCORE = 0.50
 # Context window thresholds for long_context task
 LONG_CONTEXT_MIN_TOKENS = 200_000
 
+# Lightweight models are fine for cheap/fast turns, but should not win
+# high-complexity reasoning unless the user explicitly picked fast/free routing.
+LIGHTWEIGHT_MODEL_HINTS = {"mini", "flash", "haiku"}
+
 # Complexity → scoring adjustments for preference dimension
 COMPLEXITY_PREFERENCE = {
     "low":    {"fast": +0.10, "cost": +0.10, "coding": -0.05, "reasoning": -0.05},
@@ -163,6 +167,24 @@ def score_models(
                     excluded=True, exclusion_reason=f"context_too_small:{ctx}",
                 ))
                 continue
+
+        # High-complexity reasoning guardrail: do not let cheap/lightweight
+        # variants win by small learned/cost/speed differences. Explicit
+        # fast/free modes are the opt-out when the user really wants cheap.
+        mode = (route_mode or "").strip().lower()
+        if (
+            classifier.task_type == "reasoning"
+            and classifier.complexity == "high"
+            and mode not in {"fast", "free"}
+            and _is_lightweight_model(model_id)
+        ):
+            excluded.append(ModelScore(
+                model_id=model_id, provider=provider,
+                total_score=0.0, task_fit=0.0, health=0.0,
+                preference=0.0, learned=0.0, cost=0.0, speed=0.0,
+                excluded=True, exclusion_reason="lightweight_excluded_for_high_reasoning",
+            ))
+            continue
 
         # Provider health hard cutoff
         ph = provider_health.get(provider)
@@ -558,3 +580,15 @@ def _parse_iso_utc(value: object) -> datetime | None:
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=timezone.utc)
     return parsed.astimezone(timezone.utc)
+
+
+def _is_lightweight_model(model_id: str) -> bool:
+    """Return True for explicit lightweight model-name tokens.
+
+    Use token matching instead of substring matching so `gemini` does not match
+    `mini`.
+    """
+    import re
+
+    tokens = {token for token in re.split(r"[^a-z0-9]+", model_id.lower()) if token}
+    return bool(tokens & LIGHTWEIGHT_MODEL_HINTS)

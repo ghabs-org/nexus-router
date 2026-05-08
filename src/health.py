@@ -9,7 +9,7 @@ from datetime import timedelta, datetime, timezone
 from typing import Optional
 
 from .types import ProviderHealth
-from .db import load_provider_health_state, upsert_provider_health_state
+from .db import load_provider_health_state, load_providers, upsert_provider_health_state
 
 AUTH_STATUSES_OK = {"ok"}
 AUTH_STATUSES_BLOCKED = {"expired", "missing"}
@@ -69,8 +69,50 @@ def _row_to_provider_health(pid: str, data: dict) -> ProviderHealth:
 
 def load_provider_health(providers: Optional[list[str]] = None) -> dict[str, ProviderHealth]:
     rows = load_provider_health_state(providers)
+    provider_controls = load_providers(providers)
     result: dict[str, ProviderHealth] = {}
+
+    # Include provider-control rows even when they have no health sample yet,
+    # otherwise disabled providers absent from provider_health_state would be
+    # treated by the scorer as unknown-but-healthy.
+    for pid, control in provider_controls.items():
+        rows.setdefault(pid, {
+            "provider": pid,
+            "auth": control.get("auth_status", "unknown"),
+            "quota": control.get("quota_status", "unknown"),
+            "quota_remaining_ratio": control.get("quota_remaining_ratio"),
+            "recent_error_rate": control.get("recent_error_rate", 0.0),
+            "rate_limit_risk": control.get("rate_limit_risk", 0.0),
+            "consecutive_rate_limits": control.get("consecutive_rate_limits", 0),
+            "rate_limit_cooldown_until": control.get("cooldown_until"),
+            "latency_ms_p50": control.get("latency_ms_p50"),
+            "latency_updated_at": control.get("latency_updated_at"),
+            "last_failure_at": control.get("last_failure_at"),
+            "last_check_at": control.get("last_check_at"),
+            "health_score": control.get("health_score", 1.0),
+        })
+
     for pid, data in rows.items():
+        control = provider_controls.get(pid) or {}
+        provider_enabled = bool(control.get("enabled", 1))
+        provider_status = str(control.get("status") or "enabled").lower()
+        if not provider_enabled or provider_status in {"disabled", "maintenance"}:
+            result[pid] = ProviderHealth(
+                provider=pid,
+                auth=data.get("auth", "unknown"),
+                quota=data.get("quota", "unknown"),
+                quota_remaining_ratio=data.get("quota_remaining_ratio"),
+                recent_error_rate=float(data.get("recent_error_rate") or 0.0),
+                rate_limit_risk=float(data.get("rate_limit_risk") or 0.0),
+                consecutive_rate_limits=int(data.get("consecutive_rate_limits") or 0),
+                rate_limit_cooldown_until=data.get("rate_limit_cooldown_until"),
+                latency_ms_p50=data.get("latency_ms_p50"),
+                last_failure_at=data.get("last_failure_at"),
+                last_check_at=data.get("last_check_at"),
+                health_score=0.0,
+            )
+            continue
+
         payload = {
             "auth": data.get("auth", "unknown"),
             "quota": data.get("quota", "unknown"),

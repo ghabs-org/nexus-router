@@ -14,7 +14,7 @@ os.environ.setdefault("NEXUS_ROUTER_STATE_ROOT", str(Path(__file__).parent.paren
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from src.types import ClassifierOutput, PreSignals, ProviderHealth
+from src.types import ClassifierOutput, PreSignals, ProviderHealth, RoutingDecision
 from src.scorer import score_models, _preference_score, _learned_score, _fast_mode_correction, _reasoning_mode_total, _build_preference_order
 from src.router import Router, _adapt_classifier_for_light_chat
 from src.classifier import extract_pre_signals, heuristic_classify, parse_classifier_response, classify_with_model, select_classifier_models, _call_direct_provider_classifier
@@ -92,14 +92,14 @@ class TestScorer:
     def test_new_router_catalog_models_are_available(self, authed_models):
         models = {m["id"]: m for m in authed_models}
         expected = {
-            "openai-codex/gpt-5.5": None,
-            "openrouter/qwen/qwen3-coder:free": True,
-            "nvidia/qwen/qwen3-coder-480b-a35b-instruct": True,
-            "nvidia/deepseek-ai/deepseek-v4-flash": True,
-            "nvidia/deepseek-ai/deepseek-v4-pro": True,
+            "openai-codex/gpt-5.4": None,
+            "openai-codex/gpt-5.3-codex": None,
+            "nvidia/deepseek-ai/deepseek-v3.2": True,
+            "nvidia/qwen/qwen3.5-122b-a10b": True,
+            "openrouter/openai/gpt-oss-120b:free": True,
         }
         for model_id, is_free in expected.items():
-            assert model_id in models
+            assert model_id in models, f"Expected {model_id} in authed models"
             if is_free is not None:
                 assert models[model_id]["features"].get("is_free") is is_free
 
@@ -449,6 +449,36 @@ class TestScorer:
 
         assert (cheap_fast - expensive_fast) > (cheap_base - expensive_base)
         assert fast_ranked[0].model_id == "p/good-taskfit-cheap-fast"
+
+    def test_high_complexity_reasoning_excludes_lightweight_models(self):
+        classifier = ClassifierOutput(task_type="reasoning", complexity="high", confidence=0.90)
+        provider_health = {"p": ProviderHealth(provider="p", auth="ok", quota="healthy", health_score=0.95)}
+        models = [
+            {
+                "id": "p/strong-pro",
+                "provider": "p",
+                "scores": {
+                    "coding": 0.80, "review": 0.80, "reasoning": 0.92, "summarize": 0.74,
+                    "fast": 0.60, "cost": 0.55, "context": 0.80, "vision": 0.60,
+                },
+                "features": {"contextWindow": 200000},
+                "availability": {"authed": True},
+            },
+            {
+                "id": "p/cheap-mini",
+                "provider": "p",
+                "scores": {
+                    "coding": 0.84, "review": 0.84, "reasoning": 0.90, "summarize": 0.78,
+                    "fast": 0.96, "cost": 0.96, "context": 0.80, "vision": 0.60,
+                },
+                "features": {"contextWindow": 200000},
+                "availability": {"authed": True},
+            },
+        ]
+
+        ranked = score_models(classifier, models, provider_health, {})
+        assert ranked[0].model_id == "p/strong-pro"
+        assert next(s for s in ranked if s.model_id == "p/cheap-mini").excluded is True
 
     def test_reasoning_route_mode_prefers_stronger_reasoning_models(self):
         classifier = ClassifierOutput(task_type="coding", complexity="high", confidence=0.85, cost_profile="balanced")
@@ -936,7 +966,31 @@ class TestRouteProvenance:
         reg_file = tmp_path / "models.json"
         reg_file.write_text(json.dumps(_MINIMAL_REGISTRY))
         minimal_router = Router(registry_path=reg_file, persist=False)
+
+        def fake_route(*_args, **kwargs):
+            classifier = kwargs.get("classifier")
+            return RoutingDecision(
+                task_type=classifier.task_type,
+                confidence=classifier.confidence,
+                selected_model="openai-codex/gpt-5.4",
+                selected_provider="openai-codex",
+                score=0.8,
+                reason=[],
+            )
+
+        minimal_router.route = fake_route
         monkeypatch.setattr(server_module, "_router", minimal_router)
+        monkeypatch.setattr(server_module, "classify_with_local_model", lambda *_args, **_kwargs: None)
+        healthy_provider = lambda: {
+            "openai-codex": ProviderHealth(
+                provider="openai-codex",
+                auth="ok",
+                quota="healthy",
+                health_score=0.95,
+            )
+        }
+        monkeypatch.setattr(server_module, "load_provider_health", healthy_provider)
+        monkeypatch.setattr("src.router.load_provider_health", healthy_provider)
 
     def test_explicit_classifier_source(self):
         """Providing a 'classifier' hint yields classifier_source='explicit'."""
@@ -1046,7 +1100,9 @@ def test_load_model_stats_includes_feedback_preferences(tmp_path, monkeypatch):
     import os
 
     monkeypatch.setenv("NEXUS_ROUTER_DB_PATH", str(tmp_path / "routing.sqlite"))
+    import src.paths as paths
     import src.db as db
+    importlib.reload(paths)
     importlib.reload(db)
 
     db.ensure_schema()
@@ -1103,3 +1159,68 @@ def test_load_model_stats_maps_too_cheap_feedback_to_selected_model_when_preferr
     assert pref["samples"] == 1
     assert pref["score"] == 0.0
     assert pref["top_reason_tag"] == "too_cheap"
+
+
+def test_provider_table_seed_enables_only_primary_runtime_providers(tmp_path, monkeypatch):
+    import importlib
+
+    monkeypatch.setenv("NEXUS_ROUTER_DB_PATH", str(tmp_path / "routing.sqlite"))
+    import src.paths as paths
+    import src.db as db
+    importlib.reload(paths)
+    importlib.reload(db)
+
+    db.ensure_schema()
+    conn = db._connect()
+    try:
+        now = db._now_iso()
+        conn.executemany(
+            "INSERT INTO provider_health_state (provider, auth, quota, health_score, last_check_at) VALUES (?,?,?,?,?)",
+            [
+                ("openai-codex", "ok", "healthy", 1.0, now),
+                ("google-gemini-cli", "ok", "healthy", 0.9, now),
+                ("openrouter", "ok", "healthy", 0.8, now),
+                ("nvidia", "ok", "healthy", 0.8, now),
+                ("github-copilot", "ok", "unknown", 0.9, now),
+            ],
+        )
+        conn.commit()
+        db._ensure_providers_compat(conn)
+        enabled = {row["provider"] for row in conn.execute("SELECT provider FROM providers WHERE enabled=1")}
+        disabled = {row["provider"] for row in conn.execute("SELECT provider FROM providers WHERE enabled=0")}
+    finally:
+        conn.close()
+
+    assert enabled == {"openai-codex", "google-gemini-cli", "openrouter", "nvidia"}
+    assert "github-copilot" in disabled
+
+
+def test_disabled_provider_control_returns_zero_health(tmp_path, monkeypatch):
+    import importlib
+
+    monkeypatch.setenv("NEXUS_ROUTER_DB_PATH", str(tmp_path / "routing.sqlite"))
+    import src.paths as paths
+    import src.db as db
+    import src.health as health
+    importlib.reload(paths)
+    importlib.reload(db)
+    importlib.reload(health)
+
+    db.ensure_schema()
+    conn = db._connect()
+    try:
+        now = db._now_iso()
+        conn.execute(
+            "INSERT INTO provider_health_state (provider, auth, quota, health_score, last_check_at) VALUES (?,?,?,?,?)",
+            ("github-copilot", "ok", "healthy", 1.0, now),
+        )
+        conn.execute(
+            "UPDATE providers SET enabled=0, status='disabled', updated_at=? WHERE provider='github-copilot'",
+            (now,),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    loaded = health.load_provider_health(["github-copilot"])
+    assert loaded["github-copilot"].health_score == 0.0

@@ -11,12 +11,13 @@ from pathlib import Path
 import argparse
 import shutil
 import json
+import os
 from datetime import datetime
 
 ROOT = Path(__file__).resolve().parents[1]
 POLICIES = ROOT / "policies"
 OVERRIDES = POLICIES / "tuning_overrides.yaml"
-STATE_DIR = Path.home() / ".local" / "state" / "nexus-router" / "tuning"
+STATE_DIR = Path(os.environ.get("NEXUS_ROUTER_TUNING_STATE_DIR", Path.home() / ".local" / "state" / "nexus-router" / "tuning"))
 SNAP_DIR = STATE_DIR / "backups"
 JOURNAL = STATE_DIR / "journal.log"
 
