@@ -29,6 +29,7 @@ services:
       - NEXUS_ROUTER_REGISTRY_FILE=/app/generated/models.json
       - NEXUS_ROUTER_BENCHMARK_CACHE_DIR=/app/cache/benchmark
       - NEXUS_ROUTER_LOCAL_CLASSIFIER_DIR=/app/artifacts/router-classifier/onnx
+      - NEXUS_ROUTER_LOCAL_CLASSIFIER_MIN_CONFIDENCE=0.45
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:7771/health', timeout=3)"]
       interval: 30s
