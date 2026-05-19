@@ -241,6 +241,7 @@ const recentConversationRouteModes = new Map<string, RouteModeEntry>();
 const recentConversationKeyBySession = new Map<string, { conversationKey: string; at: number }>();
 const recentSessionKeyByConversation = new Map<string, { sessionKey: string; at: number }>();
 const recentConversationContextBySession = new Map<string, { context: string; at: number }>();
+const recentConversationTextsByConversation = new Map<string, { texts: string[]; at: number }>();
 const recentLastDecisionBySession = new Map<string, LastRouteDecision>();
 const recentLastDecisionByConversation = new Map<string, LastRouteDecision>();
 const recentLastDecisionByDecisionId = new Map<string, LastRouteDecision>();
@@ -279,6 +280,21 @@ function rememberRecentUserMessage(sessionKey: string, text: string): void {
   recentUserMessages.set(sessionKey, { text: trimmed, at: Date.now() });
 }
 
+function rememberRecentConversationText(conversationKey: string, text: string): string | null {
+  const trimmed = stripOpenClawMetadataEnvelope(text).trim();
+  if (!conversationKey || !trimmed) return null;
+
+  const now = Date.now();
+  const existing = recentConversationTextsByConversation.get(conversationKey);
+  const previousTexts = existing && now - existing.at <= RECENT_MESSAGE_TTL_MS
+    ? existing.texts
+    : [];
+  const previousContext = previousTexts.join("\n").slice(-2000) || null;
+  const nextTexts = [...previousTexts, trimmed].slice(-8);
+  recentConversationTextsByConversation.set(conversationKey, { texts: nextTexts, at: now });
+  return previousContext;
+}
+
 // Route mode is an explicit user preference. Keep it sticky for the life of the
 // session/conversation instead of silently expiring back to the default.
 const STICKY_ROUTE_MODES = new Set<RouteMode>(["auto", "balanced", "fast", "reasoning", "eco", "off"]);
@@ -299,7 +315,7 @@ export function shouldUseContextualLlmClassifier(
 ): boolean {
   if (!conversationContext?.trim()) return false;
   if (!routingText?.trim()) return false;
-  if (routeMode === "auto" || routeMode === "fast") return false;
+  if (routeMode === "fast") return false;
   if (isShortFollowUpForContextualRouting(routingText)) return false;
   return true;
 }
@@ -682,6 +698,7 @@ function resetInMemoryRoutingState(): void {
   recentConversationKeyBySession.clear();
   recentSessionKeyByConversation.clear();
   recentConversationContextBySession.clear();
+  recentConversationTextsByConversation.clear();
   recentLastDecisionBySession.clear();
   recentLastDecisionByConversation.clear();
   recentLastDecisionByDecisionId.clear();
@@ -1369,6 +1386,9 @@ export const __testHelpers = {
   rememberRouteMode,
   rememberLastDecision,
   rememberFailedOverride,
+  rememberRecentConversationText,
+  takeRecentConversationContext,
+  rememberConversationContextForSession,
   resolveRouteModeDetailsFromContext,
   shouldUseContextualLlmClassifier,
   shouldBypassCompiledRetryRouting,
@@ -1536,6 +1556,10 @@ export default definePluginEntry({
         recentSlashCommandBySession.set(sessionKey, { at: Date.now(), cmd: rawText });
       }
       if (sessionKey && rawText && !isSlashCommand) {
+        const previousConversationContext = rememberRecentConversationText(conversationKey, rawText);
+        if (previousConversationContext) {
+          rememberConversationContextForSession(sessionKey, previousConversationContext);
+        }
         rememberRecentUserMessage(sessionKey, rawText);
       }
       if (sessionKey && ctx.conversationId) {

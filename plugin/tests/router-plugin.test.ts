@@ -7,6 +7,9 @@ const {
   rememberRouteMode,
   rememberLastDecision,
   rememberFailedOverride,
+  rememberRecentConversationText,
+  takeRecentConversationContext,
+  rememberConversationContextForSession,
   resolveRouteModeDetailsFromContext,
   shouldUseContextualLlmClassifier,
   shouldBypassCompiledRetryRouting,
@@ -57,7 +60,7 @@ test("short contextual follow-ups do not trigger the contextual LLM classifier",
       "We were discussing why the router was timing out.",
       "Can you compare the trade-offs between these two routing strategies?",
     ),
-    false,
+    true,
   );
 });
 
@@ -78,6 +81,26 @@ test("longer ambiguous follow-ups can still opt into contextual LLM classificati
     ),
     true,
   );
+});
+
+test("recent conversation text provides previous-turn context without current message", () => {
+  resetInMemoryRoutingState();
+  try {
+    const key = "telegram:default:direct:";
+
+    assert.equal(
+      rememberRecentConversationText(key, "Please check Biome Backoffice improvements."),
+      null,
+    );
+
+    const previous = rememberRecentConversationText(key, "Can you complete the BO tasks?");
+    assert.equal(previous, "Please check Biome Backoffice improvements.");
+
+    rememberConversationContextForSession("session:test", previous ?? "");
+    assert.equal(takeRecentConversationContext("session:test"), "Please check Biome Backoffice improvements.");
+  } finally {
+    resetInMemoryRoutingState();
+  }
 });
 
 test("compiled retry prompts for user-triggered retries are bypassed after a recent route decision", () => {
