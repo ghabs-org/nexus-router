@@ -13,6 +13,7 @@ const {
   resolveRouteModeDetailsFromContext,
   shouldUseContextualLlmClassifier,
   shouldBypassCompiledRetryRouting,
+  classifySessionKind,
   isShortFollowUpForContextualRouting,
   inferFailureFromRuntime,
   getFailedOverrideBlock,
@@ -142,6 +143,12 @@ test("compiled retry prompts for user-triggered retries are bypassed after a rec
   } finally {
     resetInMemoryRoutingState();
   }
+});
+
+test("dreaming narrative sessions are classified as background memory work", () => {
+  assert.equal(classifySessionKind("dreaming-narrative-rem-4aec231fb4d0"), "dreaming");
+  assert.equal(classifySessionKind("agent:main:dreaming-narrative-light-4aec231fb4d0"), "dreaming");
+  assert.equal(classifySessionKind("agent:main:telegram:direct:47168736"), "direct");
 });
 
 

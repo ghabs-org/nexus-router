@@ -487,6 +487,8 @@ function classifySessionKind(sessionKey) {
         return "other";
     if (key.startsWith("cron:") || key.includes(":cron:"))
         return "cron";
+    if (key.startsWith("dreaming-narrative-") || key.includes(":dreaming-narrative-"))
+        return "dreaming";
     if (key.includes(":subagent:"))
         return "subagent";
     if (key.includes(":direct:"))
@@ -514,6 +516,9 @@ function inferCronLabel(prompt) {
 function buildSourceTag(ctx, source, prompt, startupReason) {
     if (ctx?.trigger === "cron" || classifySessionKind(ctx?.sessionKey) === "cron") {
         return `cron:${inferCronLabel(prompt)}`;
+    }
+    if (classifySessionKind(ctx?.sessionKey) === "dreaming") {
+        return "memory:dreaming";
     }
     if (startupReason) {
         return "startup";
@@ -986,13 +991,13 @@ function buildRouteInteractiveReply(mode, scopeLabel = "this conversation", free
                         {
                             type: "buttons",
                             buttons: [
-                                { label: "Auto", value: "/route auto", style: "primary" },
-                                { label: "Balanced", value: "/route balanced", style: "secondary" },
-                                { label: "Fast", value: "/route fast", style: "success" },
-                                { label: "Reasoning", value: "/route reasoning", style: "secondary" },
-                                { label: "Eco", value: "/route eco", style: "secondary" },
-                                { label: "Free", value: "/route free", style: "secondary" },
-                                { label: "Off", value: "/route off", style: "danger" },
+                                { label: "Auto", value: "tgcmd:/route auto", style: "primary" },
+                                { label: "Balanced", value: "tgcmd:/route balanced", style: "secondary" },
+                                { label: "Fast", value: "tgcmd:/route fast", style: "success" },
+                                { label: "Reasoning", value: "tgcmd:/route reasoning", style: "secondary" },
+                                { label: "Eco", value: "tgcmd:/route eco", style: "secondary" },
+                                { label: "Free", value: "tgcmd:/route free", style: "secondary" },
+                                { label: "Off", value: "tgcmd:/route off", style: "danger" },
                             ],
                         },
                     ],
@@ -1174,6 +1179,7 @@ export const __testHelpers = {
     resolveRouteModeDetailsFromContext,
     shouldUseContextualLlmClassifier,
     shouldBypassCompiledRetryRouting,
+    classifySessionKind,
     isShortFollowUpForContextualRouting,
     inferFailureFromRuntime,
     getFailedOverrideBlock,
@@ -1390,11 +1396,19 @@ export default definePluginEntry({
             const dedupeText = routingText.trim();
             const shouldUseLlmClassifier = shouldUseContextualLlmClassifier(routeMode, conversationContext, routingText);
             await debugLog(`[hook-enter] source=${source} source_tag=${sourceTag} trigger=${ctx?.trigger ?? "unknown"} route=${routeMode} prompt_len=${routingText.length} profile=${firstPassCostProfile}`);
-            if (ctx?.trigger === "cron" || classifySessionKind(ctx?.sessionKey) === "cron") {
+            const sessionKind = classifySessionKind(ctx?.sessionKey);
+            if (ctx?.trigger === "cron" || sessionKind === "cron") {
                 if (sessionRef) {
                     recentRouteCacheBySession.set(sessionRef, { text: dedupeText, mode: routeMode, at: Date.now() });
                 }
                 await debugLog(`[hook-result] source=${source} source_tag=${sourceTag} route=${routeMode} bypassed reason=cron`);
+                return;
+            }
+            if (sessionKind === "dreaming") {
+                if (sessionRef) {
+                    recentRouteCacheBySession.set(sessionRef, { text: dedupeText, mode: routeMode, at: Date.now() });
+                }
+                await debugLog(`[hook-result] source=${source} source_tag=${sourceTag} route=${routeMode} bypassed reason=dreaming`);
                 return;
             }
             if (ctx?.trigger === "heartbeat" || (ctx?.trigger === "memory" && source !== "raw-user")) {
