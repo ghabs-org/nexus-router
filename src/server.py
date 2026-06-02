@@ -116,7 +116,7 @@ def _apply_low_signal_guardrail(
     if not low_signal:
         return classifier, None
 
-    if classifier.confidence >= 0.45:
+    if classifier.confidence >= DEFAULT_LOW_SIGNAL_GUARDRAIL_MIN_CONFIDENCE:
         return classifier, None
 
     if classifier.task_type not in {'vision', 'long_context', 'coding', 'code_review'}:
@@ -134,6 +134,9 @@ def _apply_low_signal_guardrail(
 
 DEFAULT_PORT = 7771
 DEFAULT_CLASSIFIER_TIMEOUT_SECONDS = int(os.environ.get("NEXUS_ROUTER_CLASSIFIER_TIMEOUT_SECONDS", "6"))
+DEFAULT_LOW_SIGNAL_GUARDRAIL_MIN_CONFIDENCE = float(
+    os.environ.get("NEXUS_ROUTER_LOW_SIGNAL_GUARDRAIL_MIN_CONFIDENCE", "0.45")
+)
 
 # Lazy-init router
 _router: Router | None = None
