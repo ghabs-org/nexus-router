@@ -446,6 +446,7 @@ class RouterHandler(BaseHTTPRequestHandler):
                 "selected_model": decision.selected_model,
                 "selected_provider": decision.selected_provider,
                 "fallbacks": decision.fallbacks,
+                "excluded_models": decision.excluded_models,
                 "score": decision.score,
                 "reason": decision.reason,
                 "classifier_source": classifier_source,

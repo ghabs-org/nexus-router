@@ -246,12 +246,16 @@ def score_models(
         hard_exclude_min_samples = max(1, int(preference_cfg.get("hard_exclude_min_samples", 10) or 10))
         hard_exclude_centered_lte = float(preference_cfg.get("hard_exclude_centered_score_lte", -0.8) or -0.8)
         centered_score = preference_meta.get("centered_score")
+        decay_factor = preference_meta.get("decay_factor", 1.0)
+        decayed_centered_score = None
+        if isinstance(centered_score, (int, float)) and isinstance(decay_factor, (int, float)):
+            decayed_centered_score = float(centered_score) * float(decay_factor)
         reason_tag = str(preference_meta.get("top_reason_tag") or "")
         if (
             hard_exclude_enabled
             and int(preference_meta.get("samples", 0) or 0) >= hard_exclude_min_samples
-            and isinstance(centered_score, (int, float))
-            and float(centered_score) <= hard_exclude_centered_lte
+            and isinstance(decayed_centered_score, (int, float))
+            and float(decayed_centered_score) <= hard_exclude_centered_lte
         ):
             excluded.append(ModelScore(
                 model_id=model_id, provider=provider,
@@ -266,6 +270,7 @@ def score_models(
                 exclusion_reason=(
                     f"feedback_hard_exclude:{classifier.task_type}:samples={int(preference_meta.get('samples', 0))}"
                     f":centered={float(centered_score):.2f}"
+                    f":decayed={float(decayed_centered_score):.2f}"
                     + (f":reason={reason_tag}" if reason_tag else "")
                 ),
             ))

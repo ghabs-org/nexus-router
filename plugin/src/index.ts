@@ -35,10 +35,16 @@ interface RouteResponse {
   selected_model: string;
   selected_provider: string;
   fallbacks: string[];
+  excluded_models?: RouteExcludedModel[];
   score: number;
   reason: string[];
   classifier_source?: "explicit" | "local" | "heuristic" | "llm" | "fallback";
   reply_context_used?: boolean;
+}
+
+interface RouteExcludedModel {
+  model: string;
+  reason?: string;
 }
 
 interface LastRouteDecision {
@@ -69,6 +75,7 @@ interface LastRouteDecision {
   applied?: boolean;
   skippedReason?: string;
   fallbacks: string[];
+  excludedModels: RouteExcludedModel[];
   score: number;
   reason: string[];
   autoEscalated: boolean;
@@ -438,6 +445,22 @@ function buildFeedbackKeyboard(decisionId: string): Array<Array<{ text: string; 
   ];
 }
 
+function summarizeExcludedModels(excludedModels?: RouteExcludedModel[], limit = 3): string {
+  const items = (excludedModels ?? [])
+    .filter((item) => String(item?.model ?? "").trim())
+    .map((item) => ({
+      model: String(item.model).trim(),
+      reason: String(item.reason ?? "").trim(),
+    }));
+  if (!items.length) return "none";
+
+  const codexItems = items.filter((item) => /\b(?:codex|openai)\//i.test(item.model));
+  const selected = (codexItems.length ? codexItems : items).slice(0, limit);
+  return selected
+    .map((item) => item.reason ? `${item.model} (${item.reason})` : item.model)
+    .join(", ");
+}
+
 /**
  * Strip OpenClaw injected metadata envelopes from a raw user message before
  * routing. These blocks are injected by the runtime and should never reach
@@ -537,15 +560,18 @@ async function sendTelegramFeedbackCard(
     : (Number.isFinite(decision.confidence) ? decision.confidence.toFixed(2) : "?");
   const shadowMode = Boolean(opts?.shadowMode);
   const actualModel = String(opts?.actualModel || "").trim();
+  const excludedSummary = summarizeExcludedModels(decision.excluded_models, 2);
   const lines = shadowMode
     ? [
         `🧭 shadow ${task} · proposed ${model} · conf ${confidence}`,
         `Actual reply model: ${actualModel || "unknown"}`,
+        ...(excludedSummary !== "none" ? [`Excluded: ${excludedSummary}`] : []),
         `Source: ${sourceTag}`,
         `Feedback?`,
       ]
     : [
         `🧭 ${task} · ${model} · ${confidence}`,
+        ...(excludedSummary !== "none" ? [`Excluded: ${excludedSummary}`] : []),
         `Source: ${sourceTag}`,
         `Feedback?`,
       ];
@@ -576,6 +602,7 @@ async function sendTelegramFeedbackCard(
       selected_model: model,
       confidence: Number.isFinite(decision.confidence) ? decision.confidence : undefined,
       classifier_source: decision.classifier_source,
+      excluded_models: decision.excluded_models,
       provenance_mode: shadowMode ? "shadow" : "route",
       actual_model: actualModel || undefined,
       source_channel: "telegram",
@@ -717,25 +744,38 @@ function resetInMemoryRoutingState(): void {
   recentLastDecisionGlobal = null;
 }
 
-function buildFailedOverrideKeys(sessionKey: string | undefined, conversationKey: string | null, selectedModel: string, selectedProvider: string): string[] {
+type FailedOverrideScope = "model" | "provider" | "both";
+
+function buildFailedOverrideKeys(
+  sessionKey: string | undefined,
+  conversationKey: string | null,
+  selectedModel: string,
+  selectedProvider: string,
+  scope: FailedOverrideScope = "both",
+): string[] {
   const keys = new Set<string>();
   const model = selectedModel.trim();
   const provider = selectedProvider.trim();
   if (sessionKey) {
-    keys.add(`session:${sessionKey}:model:${model}`);
-    keys.add(`session:${sessionKey}:provider:${provider}`);
+    if (scope === "model" || scope === "both") keys.add(`session:${sessionKey}:model:${model}`);
+    if (scope === "provider" || scope === "both") keys.add(`session:${sessionKey}:provider:${provider}`);
   }
   if (conversationKey) {
-    keys.add(`conversation:${conversationKey}:model:${model}`);
-    keys.add(`conversation:${conversationKey}:provider:${provider}`);
+    if (scope === "model" || scope === "both") keys.add(`conversation:${conversationKey}:model:${model}`);
+    if (scope === "provider" || scope === "both") keys.add(`conversation:${conversationKey}:provider:${provider}`);
   }
   return Array.from(keys);
+}
+
+function failedOverrideScopeForReason(reason: string): FailedOverrideScope {
+  return reason === "timeout" ? "model" : "both";
 }
 
 function rememberFailedOverride(sessionKey: string | undefined, conversationKey: string | null, selectedModel: string, selectedProvider: string, reason: string): void {
   const now = Date.now();
   const blockedUntil = now + FAILED_OVERRIDE_COOLDOWN_MS;
-  for (const key of buildFailedOverrideKeys(sessionKey, conversationKey, selectedModel, selectedProvider)) {
+  const scope = failedOverrideScopeForReason(reason);
+  for (const key of buildFailedOverrideKeys(sessionKey, conversationKey, selectedModel, selectedProvider, scope)) {
     recentFailedOverrides.set(key, { at: now, blockedUntil, reason });
   }
 }
@@ -1026,6 +1066,7 @@ function buildRouteLastReply(last: LastRouteDecision | null): { text: string } {
   }
 
   const fallbacks = last.fallbacks.length ? last.fallbacks.join(", ") : "none";
+  const excluded = summarizeExcludedModels(last.excludedModels);
   const reason = last.reason.length ? last.reason.slice(0, 3).join("; ") : "n/a";
   const contextLabel = last.replyContextUsed ? "reply-context used: yes" : "reply-context used: no";
   const escalationLabel = last.autoEscalated ? `${last.requestedRouteMode} → ${last.routeMode}` : last.routeMode;
@@ -1044,6 +1085,7 @@ function buildRouteLastReply(last: LastRouteDecision | null): { text: string } {
     `First pass: ${last.firstPassModel ?? last.selectedModel}`,
     `Selected: ${last.selectedModel}`,
     `Fallbacks: ${fallbacks}`,
+    `Excluded: ${excluded}`,
     `Reason: ${reason}`,
   ];
 
@@ -1058,6 +1100,7 @@ function buildRouteExplainReply(last: LastRouteDecision | null): { text: string 
   }
 
   const fallbacks = last.fallbacks.length ? last.fallbacks.join(", ") : "none";
+  const excluded = summarizeExcludedModels(last.excludedModels, 6);
   const reason = last.reason.length ? last.reason.join("; ") : "n/a";
   const actual = last.actualModel ? `${last.actualProvider ?? "unknown"}/${last.actualModel}` : "not recorded yet";
   const usageBits = last.usage
@@ -1088,6 +1131,7 @@ function buildRouteExplainReply(last: LastRouteDecision | null): { text: string 
     `Execution override detected: ${overrideDetected ? "yes" : "no"}`,
     `Runtime status: ${runtimeStatus}${runtimeDuration}`,
     `Fallbacks: ${fallbacks}`,
+    `Excluded: ${excluded}`,
     `Reason: ${reason}`,
   ];
 
@@ -1706,6 +1750,7 @@ const modeResolution = await resolveRouteModeDetailsFromContext(api, ctx);
           selectedModel: shadowDecision.selected_model,
           selectedProvider: shadowDecision.selected_provider,
           fallbacks: shadowDecision.fallbacks,
+          excludedModels: shadowDecision.excluded_models ?? [],
           score: shadowDecision.score,
           reason: [...shadowDecision.reason, "route_off"],
           autoEscalated: false,
@@ -1785,6 +1830,7 @@ const modeResolution = await resolveRouteModeDetailsFromContext(api, ctx);
                   selected_model: lastDecision.selectedModel,
                   selected_provider: lastDecision.selectedProvider,
                   fallbacks: lastDecision.fallbacks,
+                  excluded_models: lastDecision.excludedModels,
                   score: lastDecision.score,
                   reason: lastDecision.reason,
                   classifier_source: lastDecision.classifierSource as RouteResponse['classifier_source'],
@@ -1913,6 +1959,7 @@ const modeResolution = await resolveRouteModeDetailsFromContext(api, ctx);
         selectedModel: decision.selected_model,
         selectedProvider: decision.selected_provider,
         fallbacks: decision.fallbacks,
+        excludedModels: decision.excluded_models ?? [],
         score: decision.score,
         reason: decision.reason,
         autoEscalated: routeMode === "auto" && finalMode === "balanced",

@@ -7,6 +7,7 @@ import json
 import os
 import pytest
 from pathlib import Path
+from datetime import datetime, timedelta, timezone
 
 os.environ.setdefault("NEXUS_ROUTER_STATE_ROOT", str(Path(__file__).parent.parent / ".test-state"))
 
@@ -218,6 +219,84 @@ class TestScorer:
         }}
         score = _learned_score("openai-codex/gpt-5.4", "coding", stats)
         assert score > 0.85
+
+    def test_feedback_hard_exclude_uses_decay(self, provider_health_ok):
+        model = {
+            "id": "openai-codex/gpt-5.5",
+            "provider": "openai-codex",
+            "scores": {
+                "coding": 0.97,
+                "review": 0.84,
+                "reasoning": 0.88,
+                "summarize": 0.78,
+                "fast": 0.64,
+                "cost": 0.52,
+                "tools": 0.94,
+            },
+            "features": {
+                "supportsVision": True,
+                "supportsTools": True,
+                "contextWindow": 400000,
+            },
+            "availability": {"authed": True, "available": True},
+        }
+        classifier = ClassifierOutput(task_type="reasoning", complexity="high", confidence=0.90)
+        stale_at = (datetime.now(timezone.utc) - timedelta(days=45)).isoformat()
+        stats = {
+            "openai-codex/gpt-5.5": {
+                "feedback_preference": {
+                    "reasoning": {
+                        "samples": 20,
+                        "score": 0.0,
+                        "last_feedback_at": stale_at,
+                    }
+                }
+            }
+        }
+
+        scored = score_models(classifier, [model], provider_health_ok, stats)
+
+        assert scored[0].model_id == "openai-codex/gpt-5.5"
+        assert not scored[0].excluded
+
+    def test_fresh_bad_feedback_still_hard_excludes(self, provider_health_ok):
+        model = {
+            "id": "openai-codex/gpt-5.5",
+            "provider": "openai-codex",
+            "scores": {
+                "coding": 0.97,
+                "review": 0.84,
+                "reasoning": 0.88,
+                "summarize": 0.78,
+                "fast": 0.64,
+                "cost": 0.52,
+                "tools": 0.94,
+            },
+            "features": {
+                "supportsVision": True,
+                "supportsTools": True,
+                "contextWindow": 400000,
+            },
+            "availability": {"authed": True, "available": True},
+        }
+        classifier = ClassifierOutput(task_type="reasoning", complexity="high", confidence=0.90)
+        fresh_at = datetime.now(timezone.utc).isoformat()
+        stats = {
+            "openai-codex/gpt-5.5": {
+                "feedback_preference": {
+                    "reasoning": {
+                        "samples": 20,
+                        "score": 0.0,
+                        "last_feedback_at": fresh_at,
+                    }
+                }
+            }
+        }
+
+        scored = score_models(classifier, [model], provider_health_ok, stats)
+
+        assert scored[0].excluded
+        assert "feedback_hard_exclude:reasoning" in (scored[0].exclusion_reason or "")
 
     def test_learned_score_penalises_overrides(self):
         low_override = {"m": {"total_selected": 100, "total_success": 80, "success_rate": 0.80, "total_override": 2}}

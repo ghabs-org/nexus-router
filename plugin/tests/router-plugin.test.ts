@@ -123,6 +123,7 @@ test("compiled retry prompts for user-triggered retries are bypassed after a rec
       selectedModel: "google-gemini-cli/gemini-3-flash-preview",
       selectedProvider: "google-gemini-cli",
       fallbacks: [],
+      excludedModels: [],
       score: 0.93,
       reason: [],
       autoEscalated: true,
@@ -194,6 +195,51 @@ test("recent failed overrides block immediate re-selection and permit unblocked 
     );
 
     assert.equal(fallback, "github-copilot/gpt-5.4");
+  } finally {
+    resetInMemoryRoutingState();
+  }
+});
+
+test("timeout failed overrides only block the timed-out model, not provider siblings", () => {
+  resetInMemoryRoutingState();
+  try {
+    rememberFailedOverride(
+      "session:test",
+      "conversation:test",
+      "nvidia/deepseek-ai/deepseek-v4-flash",
+      "nvidia",
+      "timeout",
+    );
+
+    assert.ok(
+      getFailedOverrideBlock(
+        "session:test",
+        "conversation:test",
+        "nvidia/deepseek-ai/deepseek-v4-flash",
+        "nvidia",
+      ),
+    );
+
+    assert.equal(
+      getFailedOverrideBlock(
+        "session:test",
+        "conversation:test",
+        "nvidia/qwen/qwen3-coder-480b-a35b-instruct",
+        "nvidia",
+      ),
+      null,
+    );
+
+    const fallback = chooseUnblockedFallback(
+      [
+        "nvidia/deepseek-ai/deepseek-v4-flash",
+        "nvidia/qwen/qwen3-coder-480b-a35b-instruct",
+      ],
+      "session:test",
+      "conversation:test",
+    );
+
+    assert.equal(fallback, "nvidia/qwen/qwen3-coder-480b-a35b-instruct");
   } finally {
     resetInMemoryRoutingState();
   }
