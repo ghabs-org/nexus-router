@@ -9,3 +9,5 @@ ExecStart=/usr/bin/env bash /home/ubuntu/git/ghabs/nexus-router/scripts/nightly_
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=nexus-router-nightly-retrain
+TimeoutStartSec=1800
+TimeoutStopSec=120

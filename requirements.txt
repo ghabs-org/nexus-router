@@ -2,3 +2,10 @@ pyyaml>=6.0
 numpy>=2.0.0
 onnxruntime>=1.20.0
 tokenizers>=0.20.0
+# Build/retrain stack. Pinned for transformers>=5.14 (DTensor import needs torch>=2.7).
+# CPU-only torch build is intentional: nightly retrain is not a serving stack.
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch>=2.13.0
+datasets>=3.6,<4
+accelerate>=1.0,<2
+transformers>=5.14,<6

@@ -29,6 +29,14 @@ if [[ ! -x "$PYTHON_BIN" ]]; then
   exit 1
 fi
 
+# Self-heal: if torch is missing from the build venv, rebuild it from requirements.
+# This prevents the "ImportError: AutoModelForSequenceClassification requires the PyTorch library"
+# failure mode if the venv drifts.
+if ! "$PYTHON_BIN" -c "import torch, datasets, transformers" >/dev/null 2>&1; then
+  echo "[nightly-retrain] torch/datasets/transformers missing in build venv — bootstrapping"
+  bash "$ROOT_DIR/scripts/setup-classifier-build-venv.sh"
+fi
+
 cd "$ROOT_DIR"
 
 $PYTHON_BIN scripts/feedback_calibration_report.py > "$REPORT_DIR/calibration-$(date -u +%F).json"
@@ -65,7 +73,7 @@ if [[ "$DRY_RUN" == "--dry-run" ]]; then
   exit 0
 fi
 
-$PYTHON_BIN scripts/train_router_classifier.py
+$PYTHON_BIN scripts/train_router_classifier.py --epochs 1.0 --batch-size 32
 $PYTHON_BIN scripts/export_router_classifier_onnx.py
 bash "$ROOT_DIR/scripts/refresh_registry.sh"
 
