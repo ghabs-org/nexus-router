@@ -292,18 +292,49 @@ function hasRecentFeedbackPrompt(decisionId) {
     return true;
 }
 function buildFeedbackKeyboard(decisionId) {
+    // Initial card only asks Correct/Wrong — Wrong triggers a follow-up prompt
+    // asking for the correct task and model verdict (matches nexus-arc service).
     return [
         [
             { text: "✅ Correct", callback_data: `routefb:ok:${decisionId}` },
             { text: "❌ Wrong", callback_data: `routefb:wrong:${decisionId}` },
         ],
+    ];
+}
+const FEEDBACK_TASK_LABELS = ["coding", "code_review", "reasoning", "general_chat"];
+const FEEDBACK_MODEL_VERDICTS = {
+    too_cheap: "🔼 Too cheap/fast",
+    ok: "✅ Model OK",
+    too_powerful: "🔽 Too powerful/slow",
+};
+function buildWrongTaskKeyboard(decisionId) {
+    const buttons = [];
+    let row = [];
+    for (const label of FEEDBACK_TASK_LABELS) {
+        row.push({ text: label, callback_data: `routefb:wrong_task:${decisionId}:${label}` });
+        if (row.length === 2) {
+            buttons.push(row);
+            row = [];
+        }
+    }
+    if (row.length)
+        buttons.push(row);
+    buttons.push([
+        { text: "⬅️ Back", callback_data: `routefb:back:${decisionId}:initial` },
+        { text: "⏭ Skip", callback_data: `routefb:wrong_task:${decisionId}:skip` },
+    ]);
+    return buttons;
+}
+function buildWrongModelKeyboard(decisionId, taskSlot) {
+    const slot = taskSlot || "skip";
+    return [
+        Object.entries(FEEDBACK_MODEL_VERDICTS).map(([key, label]) => ({
+            text: label,
+            callback_data: `routefb:wrong_model:${decisionId}:${slot}:${key}`,
+        })),
         [
-            { text: "coding", callback_data: `routefb:fix:${decisionId}:coding` },
-            { text: "review", callback_data: `routefb:fix:${decisionId}:code_review` },
-        ],
-        [
-            { text: "reasoning", callback_data: `routefb:fix:${decisionId}:reasoning` },
-            { text: "chat", callback_data: `routefb:fix:${decisionId}:general_chat` },
+            { text: "⬅️ Back", callback_data: `routefb:back:${decisionId}:wrong_task` },
+            { text: "⏭ Skip", callback_data: `routefb:wrong_model:${decisionId}:${slot}:skip` },
         ],
     ];
 }
@@ -1347,6 +1378,180 @@ export default definePluginEntry({
                 return buildRouteInteractiveReply(normalized, "this conversation", hasFreeModifier, false);
             },
         });
+        // ── Feedback card interactive handler ─────────────────────────────────────
+        // Handles `routefb:*` callbacks so that clicking "Wrong" does NOT
+        // immediately record `wrong` but instead asks for the correct task and
+        // model verdict (Step 1/2 → Step 2/2). This matches the expected UX:
+        // Wrong → Which task was it? → Was the model right? → recorded.
+        try {
+            const registerInteractive = api.registerInteractiveHandler?.bind(api);
+            if (typeof registerInteractive === "function") {
+                registerInteractive({
+                    channel: "telegram",
+                    namespace: "routefb",
+                    handler: async (ctx) => {
+                        const rawPayload = String(ctx?.callback?.payload ?? ctx?.callback?.data ?? "").trim();
+                        let payload = rawPayload;
+                        // Gateway may pass full `routefb:...` string as payload in some versions;
+                        // our registration is for namespace `routefb`, so payload should be the
+                        // suffix after `routefb:`. Handle both forms defensively.
+                        if (payload.startsWith("routefb:")) {
+                            payload = payload.slice("routefb:".length);
+                        }
+                        const parts = payload.split(":");
+                        const action = (parts[0] ?? "").trim();
+                        const decisionId = (parts[1] ?? "").trim();
+                        const extra1 = parts[2] != null ? String(parts[2]).trim() : undefined;
+                        const extra2 = parts[3] != null ? String(parts[3]).trim() : undefined;
+                        const routerUrlResolved = api?.config?.routerUrl ?? cfg.routerUrl ?? DEFAULT_URL;
+                        const postFeedback = async (body) => {
+                            try {
+                                const res = await fetch(`${routerUrlResolved}/feedback`, {
+                                    method: "POST",
+                                    headers: { "Content-Type": "application/json" },
+                                    body: JSON.stringify(body),
+                                });
+                                return res.ok;
+                            }
+                            catch {
+                                return false;
+                            }
+                        };
+                        // Helper to safely edit the original feedback message
+                        const safeEdit = async (text, buttons) => {
+                            try {
+                                if (typeof ctx?.respond?.editMessage === "function") {
+                                    await ctx.respond.editMessage({ text, buttons });
+                                }
+                                else if (typeof ctx?.editMessage === "function") {
+                                    await ctx.editMessage({ text, buttons });
+                                }
+                            }
+                            catch {
+                                // best-effort; Telegram edit may fail if message was deleted
+                            }
+                        };
+                        if (action === "ok" && decisionId) {
+                            const ok = await postFeedback({
+                                decision_id: decisionId,
+                                verdict: "correct",
+                                source_surface: "telegram_feedback_card",
+                                source_channel: "telegram",
+                                source_user_id: ctx?.senderId ? String(ctx.senderId) : undefined,
+                                source_message_id: ctx?.callback?.messageId ? String(ctx.callback.messageId) : undefined,
+                            });
+                            if (ok) {
+                                await safeEdit("✅ Feedback recorded.", []);
+                            }
+                            else {
+                                await safeEdit("⚠️ Could not record feedback. Please try again.", buildFeedbackKeyboard(decisionId));
+                            }
+                            return { handled: true };
+                        }
+                        if (action === "wrong" && decisionId) {
+                            await safeEdit("❌ Step 1/2 — Which task was it?", buildWrongTaskKeyboard(decisionId));
+                            return { handled: true };
+                        }
+                        if (action === "wrong_task" && decisionId) {
+                            const taskSlot = (extra1 ?? "skip").trim();
+                            await safeEdit("❌ Step 2/2 — Was the model right?", buildWrongModelKeyboard(decisionId, taskSlot));
+                            return { handled: true };
+                        }
+                        if (action === "wrong_model" && decisionId) {
+                            const taskSlot = (extra1 ?? "skip").trim();
+                            const modelVerdictRaw = (extra2 ?? "skip").trim();
+                            const correctedTask = taskSlot && taskSlot !== "skip" && FEEDBACK_TASK_LABELS.includes(taskSlot)
+                                ? taskSlot
+                                : null;
+                            const modelVerdict = modelVerdictRaw && modelVerdictRaw !== "skip" && Object.prototype.hasOwnProperty.call(FEEDBACK_MODEL_VERDICTS, modelVerdictRaw)
+                                ? modelVerdictRaw
+                                : null;
+                            const ok = await postFeedback({
+                                decision_id: decisionId,
+                                verdict: "wrong",
+                                corrected_task: correctedTask,
+                                model_verdict: modelVerdict,
+                                source_surface: "telegram_feedback_card",
+                                source_channel: "telegram",
+                                source_user_id: ctx?.senderId ? String(ctx.senderId) : undefined,
+                                source_message_id: ctx?.callback?.messageId ? String(ctx.callback.messageId) : undefined,
+                            });
+                            if (ok) {
+                                const bits = [];
+                                if (correctedTask)
+                                    bits.push(`task→${correctedTask}`);
+                                if (modelVerdict)
+                                    bits.push(`model→${modelVerdict}`);
+                                const summary = bits.length ? `✅ Marked wrong (${bits.join(", ")}).` : "✅ Marked wrong.";
+                                await safeEdit(summary, []);
+                            }
+                            else {
+                                await safeEdit("⚠️ Feedback service unreachable. Please try again.", []);
+                            }
+                            return { handled: true };
+                        }
+                        if (action === "fix" && decisionId) {
+                            const rawTask = extra1 ?? "";
+                            // `skip` means user chose to mark wrong without specifying task
+                            if (!rawTask || rawTask === "skip") {
+                                const ok = await postFeedback({
+                                    decision_id: decisionId,
+                                    verdict: "wrong",
+                                    corrected_task: null,
+                                    source_surface: "telegram_feedback_card",
+                                    source_channel: "telegram",
+                                    source_user_id: ctx?.senderId ? String(ctx.senderId) : undefined,
+                                    source_message_id: ctx?.callback?.messageId ? String(ctx.callback.messageId) : undefined,
+                                });
+                                await safeEdit(ok ? "✅ Marked wrong." : "⚠️ Could not record feedback.", []);
+                                return { handled: true };
+                            }
+                            const correctedTask = FEEDBACK_TASK_LABELS.includes(rawTask) ? rawTask : null;
+                            if (!correctedTask) {
+                                await safeEdit("⚠️ Invalid task.", buildWrongTaskKeyboard(decisionId));
+                                return { handled: true };
+                            }
+                            const ok = await postFeedback({
+                                decision_id: decisionId,
+                                verdict: "wrong",
+                                corrected_task: correctedTask,
+                                source_surface: "telegram_feedback_card",
+                                source_channel: "telegram",
+                                source_user_id: ctx?.senderId ? String(ctx.senderId) : undefined,
+                                source_message_id: ctx?.callback?.messageId ? String(ctx.callback.messageId) : undefined,
+                            });
+                            await safeEdit(ok ? `✅ Marked wrong → ${correctedTask}.` : "⚠️ Could not record feedback.", []);
+                            return { handled: true };
+                        }
+                        if (action === "back" && decisionId) {
+                            const target = (extra1 ?? "initial").trim();
+                            if (target === "initial") {
+                                await safeEdit("Feedback?", buildFeedbackKeyboard(decisionId));
+                            }
+                            else if (target === "wrong_task") {
+                                await safeEdit("❌ Step 1/2 — Which task was it?", buildWrongTaskKeyboard(decisionId));
+                            }
+                            else {
+                                await safeEdit("Feedback?", buildFeedbackKeyboard(decisionId));
+                            }
+                            return { handled: true };
+                        }
+                        if (action === "cancel" && decisionId) {
+                            await safeEdit("❌ Cancelled.", []);
+                            return { handled: true };
+                        }
+                        return { handled: false };
+                    },
+                });
+                void debugLog("[feedback-handler] registered interactive handler for routefb:telegram");
+            }
+            else {
+                void debugLog("[feedback-handler] registerInteractiveHandler not available");
+            }
+        }
+        catch (e) {
+            void debugLog(`[feedback-handler] failed to register: ${e?.message ?? String(e)}`);
+        }
         api.on("before_dispatch", (event, ctx) => {
             const rawText = (event.body ?? event.content ?? "").trim();
             const sessionKey = ctx.sessionKey ?? event.sessionKey;
