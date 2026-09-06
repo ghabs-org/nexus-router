@@ -113,6 +113,7 @@ def score_models(
     """
     weights = _resolve_weights(classifier, policy_weights)
     task_dim = TASK_TO_DIMENSION.get(classifier.task_type, "reasoning")
+    score_mechanisms_base = ["static_weights"]
     preference_order = _build_preference_order(classifier.task_type, routing_policy)
     # Build preference config: merge routing_policy overrides over safe defaults.
     # Feedback is ALWAYS enabled regardless of routing_policy state.
@@ -253,8 +254,9 @@ def score_models(
             # Slightly de-emphasize pure cost so stronger models can win when task fit is high.
             cost_score = max(0.0, cost_score - 0.05)
 
-        # Speed: direct from model capability profile
+        # Speed/Eco: direct from model capability profile
         speed_score = scores_raw.get("fast", 0.70)
+        eco_score = scores_raw.get("eco", 0.50)
         reasoning_score = scores_raw.get("reasoning", 0.70)
 
         hard_exclude_enabled = bool(preference_cfg.get("hard_exclude_enabled", True))
@@ -299,6 +301,7 @@ def score_models(
             + learned  * weights["learned"]
             + cost_score * weights["cost"]
             + speed_score * weights["speed"]
+            + eco_score * weights["eco"]
         )
 
         latency_component = _latency_objective_score(ph)
@@ -314,6 +317,34 @@ def score_models(
 
         # Blend the legacy composite with explicit task objectives.
         total = (0.45 * base_total) + (0.55 * objective_total) - quota_penalty
+
+        component_scores = {
+            "task_fit": round(float(task_fit), 4),
+            "health": round(float(health), 4),
+            "preference": round(float(preference), 4),
+            "learned": round(float(learned), 4),
+            "cost": round(float(cost_score), 4),
+            "speed": round(float(speed_score), 4),
+            "eco": round(float(eco_score), 4),
+            "latency_objective": round(float(latency_component), 4),
+            "quality_objective": round(float(quality_component), 4),
+            "reliability_objective": round(float(reliability_component), 4),
+            "quota_penalty": round(float(quota_penalty), 4),
+        }
+        component_contributions = {
+            "task_fit": round(float(task_fit * weights["task_fit"]), 4),
+            "health": round(float(health * weights["health"]), 4),
+            "preference": round(float(preference * weights["preference"]), 4),
+            "learned": round(float(learned * weights["learned"]), 4),
+            "cost": round(float(cost_score * weights["cost"]), 4),
+            "speed": round(float(speed_score * weights["speed"]), 4),
+            "eco": round(float(eco_score * weights["eco"]), 4),
+            "objective_quality": round(float(objective_weights["quality"] * quality_component), 4),
+            "objective_latency": round(float(objective_weights["latency"] * latency_component), 4),
+            "objective_reliability": round(float(objective_weights["reliability"] * reliability_component), 4),
+            "objective_cost": round(float(objective_weights["cost"] * cost_score), 4),
+            "quota_penalty": round(float(-quota_penalty), 4),
+        }
 
         mode = (route_mode or "").strip().lower()
         if mode == "fast":
@@ -353,7 +384,10 @@ def score_models(
             model_preference_centered_score=preference_meta.get("centered_score"),
             cost=round(cost_score, 4),
             speed=round(speed_score, 4),
-            eco=round(scores_raw.get("eco", 0.50), 4),
+            eco=round(eco_score, 4),
+            component_scores=component_scores,
+            component_contributions=component_contributions,
+            score_mechanisms=list(score_mechanisms_base),
         ))
 
     # Sort eligible descending by total score

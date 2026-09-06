@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import importlib
+import json
 import sqlite3
 import sys
+
+import pytest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -86,3 +89,80 @@ def test_weekly_spend_summary_aggregates_by_task(tmp_path):
     coding = next(item for item in summary["by_task"] if item["task"] == "coding")
     assert coding["decisions"] == 1
     assert coding["estimated_spend_usd"] == 0.12
+
+
+def test_write_decision_persists_mechanisms_and_score_breakdown(tmp_path, monkeypatch):
+    monkeypatch.setenv("NEXUS_ROUTER_DB_PATH", str(tmp_path / "router.sqlite"))
+
+    import src.paths as paths
+    import src.db as db
+    from src.types import ClassifierOutput, ModelScore, PreSignals, ProviderHealth, RoutingDecision
+
+    importlib.reload(paths)
+    importlib.reload(db)
+
+    db.ensure_schema()
+
+    decision = RoutingDecision(
+        task_type="general_chat",
+        confidence=0.41,
+        selected_model="lab/fast-cheap",
+        selected_provider="lab-fast",
+        score=0.81,
+        mechanisms=["static_weights", "confidence_gate"],
+        confidence_gate_triggered=True,
+        confidence_gate_threshold=0.65,
+        confidence_gate_reason="confidence=0.41 below threshold=0.65 -> general_chat",
+        selected_component_scores={"task_fit": 0.72, "health": 0.95, "cost": 0.97},
+        selected_component_contributions={"task_fit": 0.36, "health": 0.19, "cost": 0.04},
+        all_scores=[
+            ModelScore(
+                model_id="lab/fast-cheap",
+                provider="lab-fast",
+                total_score=0.81,
+                task_fit=0.72,
+                health=0.95,
+                preference=0.5,
+                learned=0.75,
+                cost=0.97,
+                speed=0.94,
+                component_scores={"task_fit": 0.72},
+                component_contributions={"task_fit": 0.36},
+                score_mechanisms=["static_weights"],
+            )
+        ],
+    )
+
+    classifier = ClassifierOutput(task_type="coding", confidence=0.41)
+    pre = PreSignals(message_length=18, estimated_tokens=7)
+    ph = ProviderHealth(provider="lab-fast", auth="ok", quota="healthy", health_score=0.95)
+
+    decision_id = db.write_decision(
+        decision=decision,
+        classifier=classifier,
+        pre_signals=pre,
+        provider_health=ph,
+        source_type="standalone",
+        classifier_source="local",
+        message_text="need fix for lint failure",
+    )
+
+    conn = db._connect()
+    try:
+        row = conn.execute(
+            """
+            SELECT mechanisms, confidence_gate_triggered, confidence_gate_threshold,
+                   selected_component_scores, selected_component_contributions
+            FROM routing_decisions WHERE id=?
+            """,
+            (decision_id,),
+        ).fetchone()
+    finally:
+        conn.close()
+
+    assert row is not None
+    assert row["confidence_gate_triggered"] == 1
+    assert float(row["confidence_gate_threshold"]) == pytest.approx(0.65)
+    assert "confidence_gate" in json.loads(row["mechanisms"])
+    assert json.loads(row["selected_component_scores"])["task_fit"] == pytest.approx(0.72)
+    assert json.loads(row["selected_component_contributions"])["task_fit"] == pytest.approx(0.36)

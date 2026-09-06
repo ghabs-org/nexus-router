@@ -17,6 +17,8 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
+from dataclasses import replace
+
 from src.scorer import score_models
 from src.types import ClassifierOutput, ProviderHealth
 
@@ -65,6 +67,20 @@ def _health() -> dict[str, ProviderHealth]:
     }
 
 
+
+
+def _apply_golden_confidence_gate(classifier: ClassifierOutput, route_mode: str, row: dict[str, Any]) -> tuple[ClassifierOutput, list[str]]:
+    mechanisms = ["static_weights"]
+    threshold = float(row.get("confidence_gate_threshold") or 0.65)
+    if route_mode not in {"auto", "balanced", "off"}:
+        return classifier, mechanisms
+    if classifier.confidence >= threshold:
+        return classifier, mechanisms
+
+    gated = replace(classifier, task_type="general_chat", subtype=None, complexity="medium", cost_profile="balanced")
+    mechanisms.append("confidence_gate")
+    return gated, mechanisms
+
 def evaluate_golden_set(path: Path = GOLDEN_PATH) -> dict[str, Any]:
     payload = json.loads(path.read_text())
     if not isinstance(payload, list):
@@ -87,9 +103,10 @@ def evaluate_golden_set(path: Path = GOLDEN_PATH) -> dict[str, Any]:
             cost_profile=str(row.get("cost_profile") or "balanced"),
             confidence=float(row.get("confidence") or 0.82),
         )
+        effective_classifier, mechanisms = _apply_golden_confidence_gate(classifier, route_mode, row)
 
         scored = score_models(
-            classifier=classifier,
+            classifier=effective_classifier,
             models=models,
             provider_health=health,
             learned_stats={},
@@ -98,18 +115,50 @@ def evaluate_golden_set(path: Path = GOLDEN_PATH) -> dict[str, Any]:
         )
         eligible = [s for s in scored if not s.excluded]
         selected = eligible[0].model_id if eligible else None
+        case_id = row.get("id") or f"case-{idx}"
+
         if selected not in acceptable:
             failures.append(
                 {
                     "index": idx,
-                    "id": row.get("id") or f"case-{idx}",
+                    "id": case_id,
                     "prompt": row.get("prompt"),
                     "expected_task": task,
+                    "effective_task": effective_classifier.task_type,
                     "route_mode": route_mode,
                     "selected": selected,
                     "acceptable_routes": acceptable,
                 }
             )
+
+        expected_effective_task = row.get("expected_effective_task")
+        if expected_effective_task and effective_classifier.task_type != str(expected_effective_task):
+            failures.append({
+                "index": idx,
+                "id": case_id,
+                "error": "effective_task_mismatch",
+                "expected_effective_task": expected_effective_task,
+                "actual_effective_task": effective_classifier.task_type,
+            })
+
+        expected_mechanisms = [str(x) for x in (row.get("expected_mechanisms") or []) if str(x).strip()]
+        if expected_mechanisms and any(m not in mechanisms for m in expected_mechanisms):
+            failures.append({
+                "index": idx,
+                "id": case_id,
+                "error": "mechanism_missing",
+                "expected_mechanisms": expected_mechanisms,
+                "actual_mechanisms": mechanisms,
+            })
+
+        if row.get("require_score_breakdown", True):
+            top = eligible[0] if eligible else None
+            if not top or not top.component_scores or not top.component_contributions:
+                failures.append({
+                    "index": idx,
+                    "id": case_id,
+                    "error": "missing_score_breakdown",
+                })
 
     return {
         "ok": not failures,

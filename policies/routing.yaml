@@ -163,3 +163,21 @@ routing:
         priority: 6
       - model: github-copilot/gpt-5.4-mini
         priority: 7
+
+scoring:
+  confidence_gate:
+    min_confidence: 0.65
+
+  fitted_weights:
+    enabled: true
+    min_samples_per_task: 40
+    artifact_path: ~/.local/state/nexus-router/artifacts/scorer/fitted_weights.active.json
+
+  exploration:
+    enabled: true
+    strategy: thompson
+    epsilon: 0.03
+    top_k: 3
+    family_prior_strength: 6.0
+    uncertainty_bonus: 0.08
+    shadow_log_challenger: true

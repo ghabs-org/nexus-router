@@ -41,6 +41,13 @@ CREATE TABLE IF NOT EXISTS routing_decisions (
   selected_cost_score   REAL,                  -- normalized model cost score at decision time
   reason                TEXT,                  -- JSON array of reason strings
   excluded_models       TEXT,                  -- JSON array of {model, reason}
+  original_task_type    TEXT,                  -- classifier task before confidence/mode overrides
+  mechanisms            TEXT,                  -- JSON array: static_weights|fitted_weights|confidence_gate|bandit_*
+  confidence_gate_triggered INTEGER DEFAULT 0,
+  confidence_gate_threshold REAL,
+  confidence_gate_reason TEXT,
+  selected_component_scores TEXT,              -- JSON object raw component values
+  selected_component_contributions TEXT,       -- JSON object weighted contributions
 
   -- provider state at decision time
   provider_health_score REAL,                  -- health score used in routing

@@ -76,6 +76,9 @@ class ModelScore:
     cost: float = 0.0
     speed: float = 0.0
     eco: float = 0.0
+    component_scores: dict[str, float] = field(default_factory=dict)
+    component_contributions: dict[str, float] = field(default_factory=dict)
+    score_mechanisms: list[str] = field(default_factory=list)
     excluded: bool = False
     exclusion_reason: Optional[str] = None
 
@@ -93,3 +96,10 @@ class RoutingDecision:
     reason: list[str] = field(default_factory=list)
     excluded_models: list[dict] = field(default_factory=list)
     all_scores: list[ModelScore] = field(default_factory=list)
+    original_task_type: Optional[str] = None
+    mechanisms: list[str] = field(default_factory=list)
+    confidence_gate_triggered: bool = False
+    confidence_gate_threshold: Optional[float] = None
+    confidence_gate_reason: Optional[str] = None
+    selected_component_scores: dict[str, float] = field(default_factory=dict)
+    selected_component_contributions: dict[str, float] = field(default_factory=dict)

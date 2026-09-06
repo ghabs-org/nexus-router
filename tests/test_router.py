@@ -1303,3 +1303,34 @@ def test_disabled_provider_control_returns_zero_health(tmp_path, monkeypatch):
 
     loaded = health.load_provider_health(["github-copilot"])
     assert loaded["github-copilot"].health_score == 0.0
+
+
+def test_confidence_gate_routes_low_confidence_to_safe_generalist(router):
+    classifier = ClassifierOutput(task_type="coding", complexity="high", confidence=0.42)
+    decision = router.route(classifier, PreSignals(message_length=24, estimated_tokens=8))
+
+    assert decision.task_type == "general_chat"
+    assert decision.confidence_gate_triggered is True
+    assert decision.confidence_gate_threshold == pytest.approx(0.65)
+    assert "confidence_gate" in decision.mechanisms
+    assert any("confidence gate fired" in r for r in decision.reason)
+
+
+def test_confidence_gate_respects_routing_yaml_threshold_override(tmp_path):
+    registry_path = Path(__file__).parent.parent / "generated" / "models.json"
+    routing_path = tmp_path / "routing.yaml"
+    routing_path.write_text(
+        "scoring:\n"
+        "  confidence_gate:\n"
+        "    min_confidence: 0.90\n"
+    )
+
+    custom_router = Router(registry_path=registry_path, routing_path=routing_path, persist=False)
+    classifier = ClassifierOutput(task_type="reasoning", complexity="medium", confidence=0.85)
+    decision = custom_router.route(classifier, PreSignals(message_length=20, estimated_tokens=10))
+
+    assert decision.confidence_gate_triggered is True
+    assert decision.confidence_gate_threshold == pytest.approx(0.90)
+    assert decision.task_type == "general_chat"
+    assert decision.selected_component_scores
+    assert decision.selected_component_contributions

@@ -146,6 +146,13 @@ def _ensure_routing_decisions_compat(conn: sqlite3.Connection) -> None:
         "total_tokens": "INTEGER",
         "estimated_cost_usd": "REAL",
         "estimated_co2e_grams": "REAL",
+        "original_task_type": "TEXT",
+        "mechanisms": "TEXT",
+        "confidence_gate_triggered": "INTEGER NOT NULL DEFAULT 0",
+        "confidence_gate_threshold": "REAL",
+        "confidence_gate_reason": "TEXT",
+        "selected_component_scores": "TEXT",
+        "selected_component_contributions": "TEXT",
     }
     for column, column_type in expected.items():
         if column not in columns:
@@ -400,51 +407,56 @@ def write_decision(
     decision_id = str(uuid.uuid4())
     conn = _connect()
     try:
-        conn.execute(
-            """
-            INSERT INTO routing_decisions (
-              id, created_at,
-              task_type, subtype, complexity,
-              needs_tools, needs_vision, needs_long_context,
-              cost_profile, classifier_confidence, detected_language,
-              has_image, has_code, has_diff, has_logs, estimated_tokens,
-              selected_model, selected_provider,
-              fallbacks, routing_score, selected_cost_score, reason, excluded_models,
-              provider_health_score, quota_state, provider_auth_ok,
-              nexus_workflow_id, nexus_step_id, nexus_issue_id, nexus_project,
-              route_mode, mode, source_type, source_tag,
-              message_text, classifier_source
-            ) VALUES (
-              ?,?,  ?,?,?,  ?,?,?,  ?,?,?,
-              ?,?,?,?,?,  ?,?,  ?,?,?,?,?,  ?,?,?,  ?,?,?,?,
-              ?,?,?,?,  ?,?
-            )
-            """,
-            (
-                decision_id, _now_iso(),
-                classifier.task_type, classifier.subtype, classifier.complexity,
-                int(classifier.needs_tools), int(classifier.needs_vision), int(classifier.needs_long_context),
-                classifier.cost_profile, classifier.confidence, classifier.detected_language,
-                int(pre_signals.has_image), int(pre_signals.has_code),
-                int(pre_signals.has_diff), int(pre_signals.has_logs),
-                pre_signals.estimated_tokens,
-                decision.selected_model, decision.selected_provider,
-                json.dumps(decision.fallbacks), decision.score,
-                _selected_score_component(decision, "cost"),
-                json.dumps(decision.reason),
-                json.dumps(decision.excluded_models),
-                provider_health.health_score, provider_health.quota,
-                int(provider_health.auth == "ok"),
-                nexus_workflow_id, nexus_step_id, nexus_issue_id, nexus_project,
-                route_mode,
-                mode,
-                source_type or 'standalone',
-                source_tag,
-                # Truncate to 512 chars — enough for classifier, avoids storing full docs
-                (message_text or "")[:512] or None,
-                classifier_source,
-            ),
+        columns = [
+            "id", "created_at",
+            "task_type", "subtype", "complexity",
+            "needs_tools", "needs_vision", "needs_long_context",
+            "cost_profile", "classifier_confidence", "detected_language",
+            "has_image", "has_code", "has_diff", "has_logs", "estimated_tokens",
+            "selected_model", "selected_provider",
+            "fallbacks", "routing_score", "selected_cost_score", "reason", "excluded_models",
+            "original_task_type", "mechanisms",
+            "confidence_gate_triggered", "confidence_gate_threshold", "confidence_gate_reason",
+            "selected_component_scores", "selected_component_contributions",
+            "provider_health_score", "quota_state", "provider_auth_ok",
+            "nexus_workflow_id", "nexus_step_id", "nexus_issue_id", "nexus_project",
+            "route_mode", "mode", "source_type", "source_tag",
+            "message_text", "classifier_source",
+        ]
+        values = (
+            decision_id, _now_iso(),
+            classifier.task_type, classifier.subtype, classifier.complexity,
+            int(classifier.needs_tools), int(classifier.needs_vision), int(classifier.needs_long_context),
+            classifier.cost_profile, classifier.confidence, classifier.detected_language,
+            int(pre_signals.has_image), int(pre_signals.has_code),
+            int(pre_signals.has_diff), int(pre_signals.has_logs),
+            pre_signals.estimated_tokens,
+            decision.selected_model, decision.selected_provider,
+            json.dumps(decision.fallbacks), decision.score,
+            _selected_score_component(decision, "cost"),
+            json.dumps(decision.reason),
+            json.dumps(decision.excluded_models),
+            decision.original_task_type,
+            json.dumps(decision.mechanisms or []),
+            int(bool(decision.confidence_gate_triggered)),
+            decision.confidence_gate_threshold,
+            decision.confidence_gate_reason,
+            json.dumps(decision.selected_component_scores or {}),
+            json.dumps(decision.selected_component_contributions or {}),
+            provider_health.health_score, provider_health.quota,
+            int(provider_health.auth == "ok"),
+            nexus_workflow_id, nexus_step_id, nexus_issue_id, nexus_project,
+            route_mode,
+            mode,
+            source_type or 'standalone',
+            source_tag,
+            # Truncate to 512 chars — enough for classifier, avoids storing full docs
+            (message_text or "")[:512] or None,
+            classifier_source,
         )
+        placeholders = ", ".join(["?"] * len(columns))
+        sql = f"INSERT INTO routing_decisions ({', '.join(columns)}) VALUES ({placeholders})"
+        conn.execute(sql, values)
         conn.commit()
     finally:
         conn.close()

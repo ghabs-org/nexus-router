@@ -662,5 +662,41 @@
       "lab/quality-coder",
       "lab/fast-cheap"
     ]
+  },
+  {
+    "id": "confidence-gate-01",
+    "prompt": "Low-confidence classification should fall back to safe generalist route.",
+    "expected_task": "coding",
+    "route_mode": "auto",
+    "confidence": 0.42,
+    "complexity": "high",
+    "cost_profile": "premium",
+    "acceptable_routes": [
+      "lab/deep-reasoner",
+      "lab/quality-coder"
+    ],
+    "expected_effective_task": "general_chat",
+    "expected_mechanisms": [
+      "confidence_gate",
+      "static_weights"
+    ],
+    "require_score_breakdown": true
+  },
+  {
+    "id": "confidence-gate-02",
+    "prompt": "Explicit reasoning mode should bypass confidence gate.",
+    "expected_task": "coding",
+    "route_mode": "reasoning",
+    "confidence": 0.4,
+    "complexity": "high",
+    "cost_profile": "balanced",
+    "acceptable_routes": [
+      "lab/deep-reasoner"
+    ],
+    "expected_effective_task": "coding",
+    "expected_mechanisms": [
+      "static_weights"
+    ],
+    "require_score_breakdown": true
   }
 ]

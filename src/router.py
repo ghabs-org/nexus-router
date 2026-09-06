@@ -30,6 +30,7 @@ from .paths import REGISTRY_FILE, POLICIES_ROOT
 ROOT = Path(__file__).parent.parent
 
 ROUTING_FILE  = POLICIES_ROOT / "routing.yaml"
+DEFAULT_CONFIDENCE_GATE_MIN = 0.65
 
 
 class Router:
@@ -103,6 +104,9 @@ class Router:
         
         # 1. Determine effective route mode
         normalized_route_mode = str(route_mode or "auto").strip().lower()
+        confidence_gate_threshold = _confidence_gate_threshold(self._routing)
+        confidence_gate_triggered = False
+        confidence_gate_reason: str | None = None
 
         # 2. Hard-force task based on explicit route_mode (precedence)
         if normalized_route_mode == "reasoning":
@@ -116,6 +120,17 @@ class Router:
         else:
             # Only apply heuristics for auto/balanced
             effective_classifier = _adapt_classifier_for_light_chat(classifier, pre_signals)
+
+        if (
+            normalized_route_mode in {"auto", "balanced", "off"}
+            and classifier.confidence < confidence_gate_threshold
+        ):
+            effective_classifier, confidence_gate_reason = _apply_confidence_gate(
+                classifier=effective_classifier,
+                original_classifier=classifier,
+                min_confidence=confidence_gate_threshold,
+            )
+            confidence_gate_triggered = True
         # 4. Perform routing with hard-filtered free_only if requested
         # (Router.score will handle the is_free filtering)
 
@@ -168,7 +183,19 @@ class Router:
         primary  = eligible[0]
         fallbacks = _build_fallback_chain(eligible, primary_provider=primary.provider, limit=5)
 
+        mechanisms = list(primary.score_mechanisms or [])
+        if confidence_gate_triggered:
+            mechanisms.append("confidence_gate")
+
         reason = _build_reason(primary, classifier, effective_classifier, pre_signals)
+        if confidence_gate_triggered:
+            reason.append(
+                f"confidence gate fired (<{confidence_gate_threshold:.2f}); routed as '{effective_classifier.task_type}'"
+            )
+            if confidence_gate_reason:
+                reason.append(confidence_gate_reason)
+        if mechanisms:
+            reason.append(f"mechanisms: {', '.join(dict.fromkeys(mechanisms))}")
         if normalized_route_mode in {"auto", "balanced", "fast", "reasoning", "eco", "free", "off"}:
             reason.append(f"route mode: {normalized_route_mode}")
 
@@ -185,6 +212,13 @@ class Router:
                 for e in excluded[:10]  # cap to keep output sane
             ],
             all_scores=scored,
+            original_task_type=classifier.task_type,
+            mechanisms=list(dict.fromkeys(mechanisms)),
+            confidence_gate_triggered=confidence_gate_triggered,
+            confidence_gate_threshold=confidence_gate_threshold,
+            confidence_gate_reason=confidence_gate_reason,
+            selected_component_scores=dict(primary.component_scores or {}),
+            selected_component_contributions=dict(primary.component_contributions or {}),
         )
 
         # Persist if enabled. Skip ephemeral compiled prompt probes: they pollute
@@ -300,6 +334,44 @@ def _adapt_classifier_for_light_chat(
     return classifier
 
 
+def _confidence_gate_threshold(routing_policy: Optional[dict]) -> float:
+    raw = ((routing_policy or {}).get("scoring", {}) or {}).get("confidence_gate", {}) or {}
+    value = raw.get("min_confidence", DEFAULT_CONFIDENCE_GATE_MIN)
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        parsed = DEFAULT_CONFIDENCE_GATE_MIN
+    return min(0.99, max(0.01, parsed))
+
+
+def _apply_confidence_gate(
+    classifier: ClassifierOutput,
+    original_classifier: ClassifierOutput,
+    min_confidence: float,
+) -> tuple[ClassifierOutput, str]:
+    target_task = "general_chat"
+    reason = "safe_generalist"
+    if original_classifier.needs_vision:
+        target_task = "vision"
+        reason = "safe_generalist_with_vision"
+    elif original_classifier.needs_long_context:
+        target_task = "long_context"
+        reason = "safe_generalist_with_long_context"
+
+    gated = replace(
+        classifier,
+        task_type=target_task,
+        subtype=None,
+        complexity="medium",
+        cost_profile="balanced",
+    )
+    return (
+        gated,
+        f"confidence={original_classifier.confidence:.2f} below threshold={min_confidence:.2f} -> {target_task} ({reason})",
+    )
+
+
+
 def _build_fallback_chain(eligible_scores: list, *, primary_provider: str, limit: int = 5) -> list[str]:
     """Build fallback chain preferring provider diversity.
 
@@ -375,6 +447,21 @@ def _build_reason(
         f"(task_fit={primary.task_fit:.2f}, health={primary.health:.2f}, "
         f"pref={primary.preference:.2f}, learned={primary.learned:.2f})"
     )
+
+    if primary.component_contributions:
+        contrib = primary.component_contributions
+        summary = (
+            f"score contributions: "
+            f"task_fit={float(contrib.get('task_fit', 0.0)):+.3f}, "
+            f"health={float(contrib.get('health', 0.0)):+.3f}, "
+            f"preference={float(contrib.get('preference', 0.0)):+.3f}, "
+            f"learned={float(contrib.get('learned', 0.0)):+.3f}, "
+            f"cost={float(contrib.get('cost', 0.0)):+.3f}, "
+            f"speed={float(contrib.get('speed', 0.0)):+.3f}, "
+            f"eco={float(contrib.get('eco', 0.0)):+.3f}, "
+            f"quota_penalty={float(contrib.get('quota_penalty', 0.0)):+.3f}"
+        )
+        reasons.append(summary)
 
     if primary.model_preference_bump > 0:
         detail = (
