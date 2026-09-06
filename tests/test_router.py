@@ -109,7 +109,11 @@ class TestScorer:
         scored = score_models(classifier, authed_models, provider_health_ok, {})
         eligible = [s for s in scored if not s.excluded]
         assert eligible, "Should have at least one eligible model"
-        assert "openai-codex" in eligible[0].provider or "codex" in eligible[0].model_id.lower()
+        top = eligible[0]
+        # Coding winner must stay quality-first (high coding + healthy provider),
+        # not simply whichever model is cheapest.
+        assert top.task_fit >= 0.88
+        assert top.health >= 0.80
 
     def test_code_review_prefers_claude(self, authed_models, provider_health_ok):
         classifier = ClassifierOutput(task_type="code_review", complexity="medium", confidence=0.85)
@@ -633,12 +637,11 @@ class TestRouter:
     def test_route_long_context_selects_large_window(self, router):
         classifier = ClassifierOutput(task_type="long_context", needs_long_context=True, confidence=0.85)
         decision = router.route(classifier)
-        # Should select a model with a large context window (>= 200k)
-        # Acceptable: gemini (1M), claude opus (1M), claude sonnet 4.6 (977k), gpt-5.2-codex (400k)
-        large_ctx_hints = ["gemini", "opus", "sonnet-4.6", "gpt-5.2-codex", "gpt-5.3-codex", "gpt-5.4"]
-        model = decision.selected_model.lower()
-        assert any(h in model for h in large_ctx_hints), \
-            f"Expected large-context model, got {decision.selected_model}"
+
+        selected = next((m for m in router._registry if m.get("id") == decision.selected_model), None)
+        assert selected is not None, f"Selected model missing from registry: {decision.selected_model}"
+        ctx = int((selected.get("features") or {}).get("contextWindow") or 0)
+        assert ctx >= 200_000, f"Expected >=200k context window, got {decision.selected_model} with {ctx}"
 
     def test_route_score_between_0_and_1(self, router):
         classifier = ClassifierOutput(task_type="general_chat", confidence=0.75)

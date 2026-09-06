@@ -11,6 +11,7 @@ Usage:
 
 import json
 import os
+import random
 from dataclasses import replace
 from pathlib import Path
 from typing import Optional
@@ -185,14 +186,24 @@ class Router:
                 "Check auth, quota, and model registry."
             )
 
-        primary  = eligible[0]
-        fallbacks = _build_fallback_chain(eligible, primary_provider=primary.provider, limit=5)
+        primary, bandit_mechanisms, bandit_reason = _select_primary_with_bandit(
+            eligible_scores=eligible,
+            learned_stats=learned_stats,
+            route_mode=normalized_route_mode,
+            provenance_mode=mode,
+            routing_config=self._routing,
+        )
+        ranked_for_fallbacks = [primary] + [s for s in eligible if s.model_id != primary.model_id]
+        fallbacks = _build_fallback_chain(ranked_for_fallbacks, primary_provider=primary.provider, limit=5)
 
         mechanisms = list(primary.score_mechanisms or [])
+        mechanisms.extend(bandit_mechanisms)
         if confidence_gate_triggered:
             mechanisms.append("confidence_gate")
 
         reason = _build_reason(primary, classifier, effective_classifier, pre_signals)
+        if bandit_reason:
+            reason.append(bandit_reason)
         if confidence_gate_triggered:
             reason.append(
                 f"confidence gate fired (<{confidence_gate_threshold:.2f}); routed as '{effective_classifier.task_type}'"
@@ -410,6 +421,126 @@ def _apply_confidence_gate(
 
 
 
+
+def _select_primary_with_bandit(
+    eligible_scores: list,
+    learned_stats: dict[str, dict],
+    route_mode: str,
+    provenance_mode: Optional[str],
+    routing_config: Optional[dict],
+):
+    if not eligible_scores:
+        raise RuntimeError("bandit selection called with no eligible scores")
+
+    cfg = _exploration_config(routing_config)
+    if not cfg["enabled"] or len(eligible_scores) <= 1:
+        return eligible_scores[0], [], None
+
+    # route_mode=off means no routing mutation, keep deterministic top score.
+    if route_mode == "off":
+        return eligible_scores[0], [], None
+
+    seed = cfg.get("seed")
+    rng = random.Random(seed) if seed is not None else random
+
+    top_k = max(2, int(cfg["top_k"]))
+    contenders = eligible_scores[: min(len(eligible_scores), top_k)]
+    sampled = []
+    prior_strength = float(cfg["family_prior_strength"])
+    uncertainty_bonus = float(cfg["uncertainty_bonus"])
+
+    for score in contenders:
+        stats = learned_stats.get(score.model_id) or {}
+        total = max(0, int(stats.get("total_selected") or 0))
+        success = max(0.0, float(stats.get("total_success") or 0.0))
+        success = min(success, float(total))
+
+        prior_mean = float((score.component_scores or {}).get("task_fit", score.task_fit))
+        prior_mean = min(0.99, max(0.01, prior_mean))
+
+        alpha = 1.0 + (prior_mean * prior_strength) + success
+        beta = 1.0 + ((1.0 - prior_mean) * prior_strength) + max(0.0, float(total) - success)
+        sample = rng.betavariate(alpha, beta)
+        uncertainty = prior_strength / (prior_strength + float(total) + 1.0)
+        utility = sample + (uncertainty_bonus * uncertainty)
+        sampled.append((utility, sample, uncertainty, score, total))
+
+    sampled.sort(key=lambda item: item[0], reverse=True)
+    challenger_utility, challenger_sample, challenger_uncertainty, challenger, challenger_total = sampled[0]
+
+    challenger.component_scores = dict(challenger.component_scores or {})
+    challenger.component_scores["bandit_sample"] = round(float(challenger_sample), 4)
+    challenger.component_scores["bandit_uncertainty"] = round(float(challenger_uncertainty), 4)
+
+    if str(provenance_mode or "route").strip().lower() == "shadow" and cfg["shadow_log_challenger"]:
+        return (
+            eligible_scores[0],
+            ["bandit_shadow"],
+            (
+                f"bandit shadow challenger: {challenger.model_id} "
+                f"(sample={challenger_sample:.3f}, uncertainty={challenger_uncertainty:.3f}, observations={challenger_total})"
+            ),
+        )
+
+    explore = float(cfg["epsilon"]) > 0 and rng.random() < float(cfg["epsilon"])
+
+    if explore and challenger.model_id != eligible_scores[0].model_id:
+        return (
+            challenger,
+            ["bandit_explore_thompson"],
+            (
+                f"bandit exploration selected challenger {challenger.model_id} "
+                f"(sample={challenger_sample:.3f}, uncertainty={challenger_uncertainty:.3f}, observations={challenger_total})"
+            ),
+        )
+
+    return eligible_scores[0], ["bandit_exploit"], None
+
+
+def _exploration_config(routing_config: Optional[dict]) -> dict[str, object]:
+    raw = ((routing_config or {}).get("scoring", {}) or {}).get("exploration", {}) or {}
+
+    epsilon_raw = raw.get("epsilon", 0.03)
+    try:
+        epsilon = float(epsilon_raw)
+    except (TypeError, ValueError):
+        epsilon = 0.03
+
+    top_k_raw = raw.get("top_k", 3)
+    try:
+        top_k = int(top_k_raw)
+    except (TypeError, ValueError):
+        top_k = 3
+
+    prior_strength_raw = raw.get("family_prior_strength", 6.0)
+    try:
+        prior_strength = float(prior_strength_raw)
+    except (TypeError, ValueError):
+        prior_strength = 6.0
+
+    uncertainty_bonus_raw = raw.get("uncertainty_bonus", 0.08)
+    try:
+        uncertainty_bonus = float(uncertainty_bonus_raw)
+    except (TypeError, ValueError):
+        uncertainty_bonus = 0.08
+
+    seed_raw = raw.get("seed")
+    seed = None
+    if isinstance(seed_raw, int):
+        seed = seed_raw
+    elif isinstance(seed_raw, str) and seed_raw.strip().isdigit():
+        seed = int(seed_raw.strip())
+
+    return {
+        "enabled": bool(raw.get("enabled", True)),
+        "strategy": str(raw.get("strategy") or "thompson"),
+        "epsilon": min(1.0, max(0.0, epsilon)),
+        "top_k": max(1, top_k),
+        "family_prior_strength": max(0.1, prior_strength),
+        "uncertainty_bonus": min(1.0, max(0.0, uncertainty_bonus)),
+        "shadow_log_challenger": bool(raw.get("shadow_log_challenger", True)),
+        "seed": seed,
+    }
 
 def _build_fallback_chain(eligible_scores: list, *, primary_provider: str, limit: int = 5) -> list[str]:
     """Build fallback chain preferring provider diversity.
