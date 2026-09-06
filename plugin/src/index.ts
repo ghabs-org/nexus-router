@@ -255,6 +255,7 @@ const recentLastDecisionByDecisionId = new Map<string, LastRouteDecision>();
 const pendingOutcomeQueueBySessionId = new Map<string, PendingOutcome[]>();
 const recentRouteCacheBySession = new Map<string, { text: string; mode: RouteMode; at: number; selectedModel?: string }>();
 const recentSenderBySession = new Map<string, { senderId: string; channelId?: string; at: number }>();
+const recentSenderByConversation = new Map<string, { senderId: string; channelId?: string; at: number }>();
 const recentFeedbackPromptByDecisionId = new Map<string, { at: number }>();
 const recentFeedbackSuppressedBySession = new Map<string, { at: number; suppressed: boolean }>();
 
@@ -393,10 +394,14 @@ function rememberConversationContextForSession(sessionKey: string, context: stri
   recentConversationContextBySession.set(sessionKey, { context: context.trim(), at: Date.now() });
 }
 
-function rememberSenderForSession(sessionKey: string, senderId?: string, channelId?: string): void {
+function rememberSenderForSession(sessionKey: string, senderId?: string, channelId?: string, conversationKey?: string): void {
   const trimmedSender = String(senderId ?? "").trim();
   if (!sessionKey || !trimmedSender) return;
-  recentSenderBySession.set(sessionKey, { senderId: trimmedSender, channelId: channelId?.trim() || undefined, at: Date.now() });
+  const payload = { senderId: trimmedSender, channelId: channelId?.trim() || undefined, at: Date.now() };
+  recentSenderBySession.set(sessionKey, payload);
+  if (conversationKey?.trim()) {
+    recentSenderByConversation.set(conversationKey.trim(), payload);
+  }
 }
 
 function resolveSenderForSession(sessionKey?: string): { senderId: string; channelId?: string } | null {
@@ -408,6 +413,47 @@ function resolveSenderForSession(sessionKey?: string): { senderId: string; chann
     return null;
   }
   return { senderId: entry.senderId, channelId: entry.channelId };
+}
+
+function resolveSenderForConversation(conversationKey?: string): { senderId: string; channelId?: string } | null {
+  if (!conversationKey) return null;
+  const entry = recentSenderByConversation.get(conversationKey);
+  if (!entry) return null;
+  if (Date.now() - entry.at > RECENT_MESSAGE_TTL_MS) {
+    recentSenderByConversation.delete(conversationKey);
+    return null;
+  }
+  return { senderId: entry.senderId, channelId: entry.channelId };
+}
+
+function resolveSenderIdFromContext(ctx: any, event?: any): string | undefined {
+  const candidates = [
+    ctx?.senderId,
+    event?.senderId,
+    ctx?.from,
+    event?.from,
+    ctx?.userId,
+    event?.userId,
+    ctx?.telegramUserId,
+    event?.telegramUserId,
+    event?.telegram_user_id,
+  ];
+  for (const candidate of candidates) {
+    const trimmed = String(candidate ?? "").trim();
+    if (trimmed) return trimmed;
+  }
+  return undefined;
+}
+
+function resolveFeedbackSender(ctx: any, event: any, sessionKey?: string, conversationKey?: string): { senderId: string; channelId?: string } | null {
+  return (
+    resolveSenderForSession(sessionKey)
+    ?? resolveSenderForSession(ctx?.sessionKey)
+    ?? resolveSenderForConversation(conversationKey)
+    ?? (resolveSenderIdFromContext(ctx, event)
+      ? { senderId: String(resolveSenderIdFromContext(ctx, event)), channelId: ctx?.channelId ? String(ctx.channelId) : undefined }
+      : null)
+  );
 }
 
 function rememberFeedbackPrompt(decisionId?: string): void {
@@ -566,7 +612,7 @@ function shouldSuppressFeedbackCardForText(messagePreview?: string): boolean {
 
 async function sendTelegramFeedbackCard(
   api: any,
-  targetSenderId: string,
+  targetSenderId: string | undefined,
   decision: RouteResponse,
   sourceTag: string,
   opts?: { shadowMode?: boolean; actualModel?: string; messagePreview?: string; sessionKey?: string },
@@ -612,7 +658,7 @@ async function sendTelegramFeedbackCard(
 
   try {
     const telegram = api?.runtime?.telegram;
-    if (telegram?.sendMessageTelegram) {
+    if (targetSenderId && telegram?.sendMessageTelegram) {
       try {
         const result = await telegram.sendMessageTelegram(targetSenderId, text, {
           buttons: buildFeedbackKeyboard(decisionId),
@@ -640,6 +686,7 @@ async function sendTelegramFeedbackCard(
       actual_model: actualModel || undefined,
       source_channel: "telegram",
       source_message_preview: opts?.messagePreview,
+      session_key: opts?.sessionKey,
     };
 
     const runtimePluginConfig = ((api as any)?.config?.plugins?.entries?.["nexus-router"]?.config ?? {}) as NexusRouterConfig;
@@ -753,6 +800,10 @@ function clearRecentRoutingState(sessionKey?: string): void {
   recentStartupBySession.delete(sessionKey);
   recentLastDecisionBySession.delete(sessionKey);
   recentSenderBySession.delete(sessionKey);
+  const conversationKey = resolveConversationKeyForSession(sessionKey);
+  if (conversationKey) {
+    recentSenderByConversation.delete(conversationKey);
+  }
 }
 
 function resetInMemoryRoutingState(): void {
@@ -769,6 +820,7 @@ function resetInMemoryRoutingState(): void {
   pendingOutcomeQueueBySessionId.clear();
   recentRouteCacheBySession.clear();
   recentSenderBySession.clear();
+  recentSenderByConversation.clear();
   recentFeedbackPromptByDecisionId.clear();
   routeBurstBySession.clear();
   recentSlashCommandBySession.clear();
@@ -1568,10 +1620,7 @@ export default definePluginEntry({
       if (!last || !last.decisionId) {
         return { text: `No recent routing decision found. ${statusText} Send a message first, then use /route feedback to request a feedback card (or /route feedback on|off to toggle).` };
       }
-      const sender = resolveSenderForSession(ctx.sessionKey) ?? (ctx.senderId ? { senderId: String(ctx.senderId) } : null);
-      if (!sender?.senderId) {
-        return { text: "Cannot send feedback card: sender not resolved for this session." };
-      }
+      const sender = resolveFeedbackSender(ctx, event, ctx.sessionKey, conversationKey);
       const syntheticDecision: RouteResponse = {
         decision_id: last.decisionId,
         task_type: last.taskType,
@@ -1584,7 +1633,10 @@ export default definePluginEntry({
         classifier_source: last.classifierSource as RouteResponse["classifier_source"],
         reply_context_used: last.replyContextUsed,
       };
-      const sent = await sendTelegramFeedbackCard(api, sender.senderId, syntheticDecision, last.sourceTag, { messagePreview: last.promptText, sessionKey: ctx.sessionKey });
+      const sent = await sendTelegramFeedbackCard(api, sender?.senderId, syntheticDecision, last.sourceTag, {
+        messagePreview: last.promptText,
+        sessionKey: ctx.sessionKey,
+      });
       const currentState = suppressed ? 'OFF' : 'ON';
       return { text: (sent ? `Feedback card sent.` : `Failed to send feedback card (rate limited or bridge error).`) + ` Current: ${currentState}.` };
     }
@@ -1824,8 +1876,14 @@ export default definePluginEntry({
       if (sessionKey && ctx.conversationId) {
         rememberConversationKeyForSession(sessionKey, conversationKey);
       }
-      if (sessionKey && (ctx.senderId || event?.senderId)) {
-        rememberSenderForSession(sessionKey, String(ctx.senderId ?? event.senderId ?? ""), String(ctx.channelId ?? event.channel ?? ""));
+      const resolvedSenderId = resolveSenderIdFromContext(ctx, event);
+      if (sessionKey && resolvedSenderId) {
+        rememberSenderForSession(
+          sessionKey,
+          resolvedSenderId,
+          String(ctx.channelId ?? event.channel ?? ""),
+          conversationKey,
+        );
       }
       if (debugMode && sessionKey && rawText) {
         console.log(`[nexus-router] captured inbound text for ${sessionKey} (${rawText.length} chars)`);
@@ -1974,7 +2032,7 @@ const modeResolution = await resolveRouteModeDetailsFromContext(api, ctx);
             selectedProvider: shadowDecision.selected_provider,
             sessionKey: ctx.sessionKey,
             shadowMode: true,
-            targetSenderId: (resolveSenderForSession(ctx.sessionKey ?? sessionRef) ?? (ctx.senderId ? { senderId: String(ctx.senderId) } : undefined))?.senderId,
+            targetSenderId: resolveFeedbackSender(ctx, event, ctx.sessionKey ?? sessionRef, conversationKey)?.senderId,
           });
         }
 
@@ -2030,8 +2088,8 @@ const modeResolution = await resolveRouteModeDetailsFromContext(api, ctx);
               const lastDecision = (ctx.sessionKey && recentLastDecisionBySession.get(ctx.sessionKey))
                 || (conversationKey && takeLastDecisionForConversation(conversationKey))
                 || recentLastDecisionGlobal;
-              const sender = resolveSenderForSession(ctx.sessionKey ?? sessionRef) ?? (ctx.senderId ? { senderId: String(ctx.senderId) } : null);
-              if (lastDecision && lastDecision.decisionId && sender?.senderId) {
+              const sender = resolveFeedbackSender(ctx, event, ctx.sessionKey ?? sessionRef, conversationKey);
+              if (lastDecision && lastDecision.decisionId) {
                 // Build a minimal RouteResponse-like object from LastRouteDecision
                 const syntheticDecision: RouteResponse = {
                   decision_id: lastDecision.decisionId,
@@ -2047,7 +2105,10 @@ const modeResolution = await resolveRouteModeDetailsFromContext(api, ctx);
                   reply_context_used: lastDecision.replyContextUsed,
                 };
                 // Fire-and-forget; do not block routing on notification success
-                void sendTelegramFeedbackCard(api, sender.senderId, syntheticDecision, sourceTag, { messagePreview: routingText });
+                void sendTelegramFeedbackCard(api, sender?.senderId, syntheticDecision, sourceTag, {
+                  messagePreview: routingText,
+                  sessionKey: ctx.sessionKey,
+                });
               }
             } catch (err) {
               // best-effort only
@@ -2138,13 +2199,15 @@ const modeResolution = await resolveRouteModeDetailsFromContext(api, ctx);
         });
       }
 
-      const sender = resolveSenderForSession(ctx.sessionKey ?? sessionRef) ?? (ctx.senderId ? { senderId: String(ctx.senderId), channelId: ctx.channelId ? String(ctx.channelId) : undefined } : null);
+      const sender = resolveFeedbackSender(ctx, event, ctx.sessionKey ?? sessionRef, conversationKey);
       if (decision.decision_id) {
-        if (sender) {
-          await sendTelegramFeedbackCard(api, sender.senderId, decision, sourceTag, { messagePreview: routingText, sessionKey: ctx.sessionKey });
-        } else {
+        const sent = await sendTelegramFeedbackCard(api, sender?.senderId, decision, sourceTag, {
+          messagePreview: routingText,
+          sessionKey: ctx.sessionKey,
+        });
+        if (!sent) {
           await debugLog(
-            `[feedback-card] skipped decision=${decision.decision_id} reason=missing_sender session=${ctx.sessionKey ?? sessionRef ?? ""}`,
+            `[feedback-card] failed decision=${decision.decision_id} sender=${sender?.senderId ?? "bridge_only"}`,
           );
         }
       }
@@ -2290,11 +2353,11 @@ const modeResolution = await resolveRouteModeDetailsFromContext(api, ctx);
           const decision = last;
           const sender = pending.targetSenderId
             ? { senderId: pending.targetSenderId }
-            : resolveSenderForSession(pending.sessionKey ?? ctx.sessionKey);
-          if (decision?.decisionId && sender?.senderId) {
-            await sendTelegramFeedbackCard(
+            : resolveFeedbackSender(ctx, event, pending.sessionKey ?? ctx.sessionKey, resolveConversationKeyForSession(pending.sessionKey ?? ctx.sessionKey));
+          if (decision?.decisionId) {
+            const sent = await sendTelegramFeedbackCard(
               api,
-              sender.senderId,
+              sender?.senderId,
               {
                 decision_id: decision.decisionId,
                 task_type: decision.taskType,
@@ -2308,12 +2371,13 @@ const modeResolution = await resolveRouteModeDetailsFromContext(api, ctx);
                 reply_context_used: decision.replyContextUsed,
               },
               decision.sourceTag,
-              { shadowMode: true, actualModel: outcomeModel, messagePreview: decision.promptText },
+              { shadowMode: true, actualModel: outcomeModel, messagePreview: decision.promptText, sessionKey: pending.sessionKey ?? ctx.sessionKey },
             );
+            if (!sent) {
+              await debugLog(`[feedback-card] shadow failed decision=${pending.decisionId} sender=${sender?.senderId ?? "bridge_only"}`);
+            }
           } else {
-            await debugLog(
-              `[feedback-card] shadow skipped decision=${pending.decisionId} reason=${decision ? 'missing_sender' : 'missing_decision'}`,
-            );
+            await debugLog(`[feedback-card] shadow skipped decision=${pending.decisionId} reason=missing_decision`);
           }
         }
       } catch {

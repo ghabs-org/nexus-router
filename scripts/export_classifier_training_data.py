@@ -17,6 +17,7 @@ Training labels are resolved as:
 Only includes records where:
   - message_text is present (non-null, non-empty)
   - classifier_source is "local"
+  - outcome_success is not NULL (turn completed, success or failure)
   - resolved label is a known label
 """
 from __future__ import annotations
@@ -82,6 +83,7 @@ def export(output_path: str, min_samples: int = 1) -> dict[str, object]:
             WHERE rd.message_text IS NOT NULL
               AND TRIM(rd.message_text) != ''
               AND rd.classifier_source = 'local'
+              AND rd.outcome_success IS NOT NULL
               AND COALESCE(NULLIF(rf.corrected_task, ''), rd.task_type) IS NOT NULL
             ORDER BY rd.created_at DESC
             """
