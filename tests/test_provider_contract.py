@@ -510,3 +510,33 @@ class TestUnknownProviderHealth:
                 if not s.excluded:
                     assert 0.0 <= s.total_score <= 1.0, \
                         f"{s.model_id} score {s.total_score} out of range for {task}"
+
+
+class TestLatencyAwareObjectives:
+    def test_fast_utility_prefers_lowest_latency_healthy_provider(self):
+        models = [
+            _model("slow/strong", "slow", fast=0.92, cost=0.90),
+            _model("fast/good", "fast", fast=0.86, cost=0.88),
+        ]
+        health = {
+            "slow": _health("slow", health_score=0.95, latency_ms_p50=1800, latency_updated_at="2099-01-01T00:00:00+00:00"),
+            "fast": _health("fast", health_score=0.92, latency_ms_p50=140, latency_updated_at="2099-01-01T00:00:00+00:00"),
+        }
+        classifier = ClassifierOutput(task_type="fast_utility", confidence=0.90, cost_profile="cheap", complexity="low")
+        scored = score_models(classifier, models, health, {})
+        eligible = [s for s in scored if not s.excluded]
+        assert eligible[0].model_id == "fast/good"
+
+    def test_reasoning_remains_quality_first_even_if_slower(self):
+        models = [
+            _model("slow/best-reasoner", "slow", reasoning=0.98, coding=0.90, fast=0.45, cost=0.50),
+            _model("fast/weaker-reasoner", "fast", reasoning=0.72, coding=0.75, fast=0.98, cost=0.90),
+        ]
+        health = {
+            "slow": _health("slow", health_score=0.95, latency_ms_p50=1600, latency_updated_at="2099-01-01T00:00:00+00:00"),
+            "fast": _health("fast", health_score=0.93, latency_ms_p50=120, latency_updated_at="2099-01-01T00:00:00+00:00"),
+        }
+        classifier = ClassifierOutput(task_type="reasoning", confidence=0.88, cost_profile="premium", complexity="high")
+        scored = score_models(classifier, models, health, {}, route_mode="reasoning")
+        eligible = [s for s in scored if not s.excluded]
+        assert eligible[0].model_id == "slow/best-reasoner"

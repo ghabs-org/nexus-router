@@ -104,6 +104,25 @@ final_score =
 
 Models below `health_hard_cutoff` (default: 0.30) are excluded.
 
+### Task objective weights (latency-aware)
+
+The scorer now blends the legacy composite with explicit per-task objectives:
+
+- `fast_utility`: latency-first among healthy providers (fresh `latency_updated_at` required)
+- `reasoning`: quality-first, latency is secondary
+- `coding` / `code_review`: quality-first with reliability guardrails
+
+Default objective profiles in `src/scorer.py`:
+
+- `fast_utility`: quality 0.18, latency 0.52, reliability 0.15, cost 0.15
+- `reasoning`: quality 0.62, latency 0.05, reliability 0.23, cost 0.10
+- `coding`: quality 0.58, latency 0.08, reliability 0.22, cost 0.12
+- `code_review`: quality 0.56, latency 0.08, reliability 0.24, cost 0.12
+
+Latency freshness handling:
+- latency older than 30 minutes is down-weighted
+- latency older than 24 hours is treated as stale for objective scoring
+
 ## Supported task types
 
 | Task | Description |

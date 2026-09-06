@@ -53,6 +53,7 @@ class ProviderHealth:
     consecutive_rate_limits: int = 0
     rate_limit_cooldown_until: Optional[str] = None
     latency_ms_p50: Optional[float] = None
+    latency_updated_at: Optional[str] = None
     last_failure_at: Optional[str] = None
     last_check_at: Optional[str] = None
     health_score: float = 1.0         # composite 0.0–1.0

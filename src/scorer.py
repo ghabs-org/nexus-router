@@ -12,7 +12,7 @@ Returns:
 - Ranked list of ModelScore objects
 """
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from .types import ClassifierOutput, ModelScore, ProviderHealth
@@ -69,6 +69,21 @@ COST_PROFILE_WEIGHT = {
     "reasoning": {"task_fit": 0.62, "health": 0.14, "preference": 0.10, "learned": 0.10, "cost": 0.01, "speed": 0.02, "eco": 0.01},
     "eco":      {"eco": 0.45, "cost": 0.20, "task_fit": 0.15, "health": 0.10, "preference": 0.05, "learned": 0.05, "speed": 0.00},
 }
+
+# Per-task routing objective weights.
+# Explicitly captures task tradeoffs:
+# - fast_utility: latency-first among healthy models
+# - reasoning/coding: quality-first (latency secondary)
+TASK_OBJECTIVE_WEIGHTS = {
+    "fast_utility": {"quality": 0.18, "latency": 0.52, "reliability": 0.15, "cost": 0.15},
+    "reasoning": {"quality": 0.62, "latency": 0.05, "reliability": 0.23, "cost": 0.10},
+    "coding": {"quality": 0.58, "latency": 0.08, "reliability": 0.22, "cost": 0.12},
+    "code_review": {"quality": 0.56, "latency": 0.08, "reliability": 0.24, "cost": 0.12},
+    "default": {"quality": 0.42, "latency": 0.18, "reliability": 0.22, "cost": 0.18},
+}
+
+LATENCY_OBJECTIVE_FRESH_MINUTES = 30
+LATENCY_OBJECTIVE_STALE_HOURS = 24
 
 
 def score_models(
@@ -277,7 +292,7 @@ def score_models(
             continue
 
         # ── Composite score ──────────────────────────────────────────────────
-        total = (
+        base_total = (
             task_fit   * weights["task_fit"]
             + health   * weights["health"]
             + preference * weights["preference"]
@@ -285,7 +300,20 @@ def score_models(
             + cost_score * weights["cost"]
             + speed_score * weights["speed"]
         )
-        total -= quota_penalty
+
+        latency_component = _latency_objective_score(ph)
+        objective_weights = _task_objective_weights(classifier.task_type)
+        quality_component = _quality_component(classifier.task_type, task_fit, scores_raw)
+        reliability_component = min(1.0, max(0.0, (health + learned) / 2.0))
+        objective_total = (
+            objective_weights["quality"] * quality_component
+            + objective_weights["latency"] * latency_component
+            + objective_weights["reliability"] * reliability_component
+            + objective_weights["cost"] * cost_score
+        )
+
+        # Blend the legacy composite with explicit task objectives.
+        total = (0.45 * base_total) + (0.55 * objective_total) - quota_penalty
 
         mode = (route_mode or "").strip().lower()
         if mode == "fast":
@@ -331,6 +359,52 @@ def score_models(
     # Sort eligible descending by total score
     eligible.sort(key=lambda x: x.total_score, reverse=True)
     return eligible + excluded
+
+
+def _task_objective_weights(task_type: str) -> dict[str, float]:
+    return TASK_OBJECTIVE_WEIGHTS.get(task_type, TASK_OBJECTIVE_WEIGHTS["default"])
+
+
+def _quality_component(task_type: str, task_fit: float, scores_raw: dict) -> float:
+    if task_type == "reasoning":
+        return min(1.0, max(0.0, float(scores_raw.get("reasoning", task_fit))))
+    if task_type == "coding":
+        coding = float(scores_raw.get("coding", task_fit))
+        return min(1.0, max(0.0, (task_fit + coding) / 2.0))
+    if task_type == "code_review":
+        review = float(scores_raw.get("review", task_fit))
+        return min(1.0, max(0.0, (task_fit + review) / 2.0))
+    return min(1.0, max(0.0, task_fit))
+
+
+def _latency_objective_score(provider_health: Optional[ProviderHealth]) -> float:
+    if not provider_health:
+        return 0.55
+
+    latency = provider_health.latency_ms_p50
+    if latency is None:
+        return 0.55
+
+    try:
+        latency_ms = max(1.0, float(latency))
+    except (TypeError, ValueError):
+        return 0.55
+
+    freshness_source = provider_health.latency_updated_at or provider_health.last_check_at
+    if freshness_source:
+        try:
+            seen_at = datetime.fromisoformat(freshness_source)
+            age = datetime.now(timezone.utc) - seen_at
+            if age > timedelta(hours=LATENCY_OBJECTIVE_STALE_HOURS):
+                return 0.35
+            if age > timedelta(minutes=LATENCY_OBJECTIVE_FRESH_MINUTES):
+                latency_ms *= 1.75
+        except Exception:
+            pass
+
+    # Saturating inverse curve: 100ms ~= 0.95, 500ms ~= 0.80, 2000ms ~= 0.50.
+    score = 1.0 / (1.0 + (latency_ms / 2000.0))
+    return round(min(1.0, max(0.0, score)), 4)
 
 
 def _resolve_weights(classifier: ClassifierOutput, policy_weights: Optional[dict]) -> dict:
