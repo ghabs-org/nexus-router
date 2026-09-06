@@ -25,6 +25,12 @@ import tempfile
 DB_PATH = Path.home() / ".local/state/nexus-router/data/router.sqlite"
 ROOT = Path(__file__).resolve().parents[1]
 
+try:
+    from src.provider_freshness import evaluate_freshness_transitions
+except ImportError:
+    sys.path.insert(0, str(ROOT / "src"))
+    from provider_freshness import evaluate_freshness_transitions  # type: ignore
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Generate calibration report from routing feedback")
@@ -303,6 +309,26 @@ def main() -> None:
         params,
     ).fetchone()["c"]
 
+    provider_rows = {
+        row["provider"]: dict(row)
+        for row in conn.execute("SELECT * FROM providers").fetchall()
+    }
+    health_rows = {
+        row["provider"]: dict(row)
+        for row in conn.execute("SELECT * FROM provider_health_state").fetchall()
+    }
+    provider_freshness = evaluate_freshness_transitions(
+        provider_rows=provider_rows,
+        health_rows=health_rows,
+        stale_after_hours=24,
+    )
+    if provider_freshness["newly_stale"]:
+        print(
+            "[provider-freshness] healthy->stale transitions: "
+            + ", ".join(provider_freshness["newly_stale"]),
+            file=sys.stderr,
+        )
+
     rows = conn.execute(
         f"""
         SELECT
@@ -380,6 +406,7 @@ def main() -> None:
         "training_rows_used": int((training_export or {}).get("records_written") or 0),
         "training_rows_scanned": int((training_export or {}).get("rows_scanned") or 0),
         "feedback_fingerprint": (training_export or {}).get("feedback_fingerprint"),
+        "provider_freshness": provider_freshness,
         "task_summary": overall["task_summary"],
         "model_task_signals_top": overall["model_task_signals_top"],
         "source_summary": source_summary,
