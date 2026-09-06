@@ -2346,6 +2346,9 @@ const modeResolution = await resolveRouteModeDetailsFromContext(api, ctx);
             error_type: failure.errorType,
             quota_hint: failure.quotaHint,
             quota_remaining_ratio: failure.quotaRemainingRatio,
+            input_tokens: last?.usage?.input,
+            output_tokens: last?.usage?.output,
+            total_tokens: last?.usage?.total,
           }),
         });
 

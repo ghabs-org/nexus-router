@@ -481,6 +481,9 @@ class RouterHandler(BaseHTTPRequestHandler):
                 fallback_model=body.get("fallback_model"),
                 user_override=bool(body.get("user_override", False)),
                 user_override_model=body.get("user_override_model"),
+                input_tokens=body.get("input_tokens"),
+                output_tokens=body.get("output_tokens"),
+                total_tokens=body.get("total_tokens"),
             )
 
             provider = body.get("provider")

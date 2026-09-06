@@ -257,6 +257,45 @@ def _training_export_summary(conn: sqlite3.Connection, where_sql: str, params: l
         return payload
 
 
+def _weekly_spend_by_task(conn: sqlite3.Connection, where_sql: str, params: list[object]) -> dict[str, object]:
+    rows = conn.execute(
+        f"""
+        SELECT
+          COALESCE(rd.task_type, 'unknown') AS task_type,
+          COUNT(*) AS decisions,
+          SUM(COALESCE(rd.estimated_cost_usd, 0.0)) AS estimated_spend_usd,
+          SUM(COALESCE(rd.total_tokens, 0)) AS total_tokens
+        FROM routing_decisions rd
+        {where_sql}
+          {'AND' if where_sql else 'WHERE'} rd.created_at >= datetime('now', '-7 days')
+          AND rd.outcome_success IS NOT NULL
+        GROUP BY COALESCE(rd.task_type, 'unknown')
+        ORDER BY estimated_spend_usd DESC, decisions DESC
+        """,
+        params,
+    ).fetchall()
+
+    by_task = [
+        {
+            "task": row["task_type"],
+            "decisions": int(row["decisions"] or 0),
+            "estimated_spend_usd": round(float(row["estimated_spend_usd"] or 0.0), 6),
+            "total_tokens": int(row["total_tokens"] or 0),
+        }
+        for row in rows
+    ]
+    return {
+        "window": "7d",
+        "by_task": by_task,
+        "total_estimated_spend_usd": round(sum(item["estimated_spend_usd"] for item in by_task), 6),
+        "pipeline": {
+            "cost_enabled": True,
+            "co2_enabled": False,
+            "co2_note": "estimated_co2e_grams reserved in schema; provider factors not wired yet",
+        },
+    }
+
+
 def main() -> None:
     args = parse_args()
     db_path = Path(args.db).expanduser()
@@ -388,6 +427,7 @@ def main() -> None:
         )
 
     training_export = _training_export_summary(conn, where_sql, params)
+    spend_summary = _weekly_spend_by_task(conn, where_sql, params)
 
     report = {
         "ok": True,
@@ -407,6 +447,7 @@ def main() -> None:
         "training_rows_scanned": int((training_export or {}).get("rows_scanned") or 0),
         "feedback_fingerprint": (training_export or {}).get("feedback_fingerprint"),
         "provider_freshness": provider_freshness,
+        "weekly_spend_summary": spend_summary,
         "task_summary": overall["task_summary"],
         "model_task_signals_top": overall["model_task_signals_top"],
         "source_summary": source_summary,

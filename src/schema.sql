@@ -38,6 +38,7 @@ CREATE TABLE IF NOT EXISTS routing_decisions (
   selected_provider     TEXT,                  -- e.g. openai-codex
   fallbacks             TEXT,                  -- JSON array of model ids
   routing_score         REAL,                  -- final composite score 0.0–1.0
+  selected_cost_score   REAL,                  -- normalized model cost score at decision time
   reason                TEXT,                  -- JSON array of reason strings
   excluded_models       TEXT,                  -- JSON array of {model, reason}
 
@@ -51,6 +52,11 @@ CREATE TABLE IF NOT EXISTS routing_decisions (
   fallback_used         INTEGER,               -- 0/1
   fallback_model        TEXT,                  -- model actually used if fallback triggered
   latency_ms            INTEGER,               -- wall-clock time for the turn
+  input_tokens          INTEGER,               -- prompt tokens (if runtime reports usage)
+  output_tokens         INTEGER,               -- completion tokens
+  total_tokens          INTEGER,               -- total runtime tokens
+  estimated_cost_usd    REAL,                  -- estimated cost for the turn
+  estimated_co2e_grams  REAL,                  -- reserved for eco/CO2 pipeline (nullable)
   user_override         INTEGER,               -- 0/1; user manually switched model
   user_override_model   TEXT,                  -- model user switched to
 

@@ -49,6 +49,39 @@ def _connect() -> sqlite3.Connection:
     return conn
 
 
+def _selected_score_component(decision: RoutingDecision, field: str) -> Optional[float]:
+    for score in decision.all_scores or []:
+        if score.model_id == decision.selected_model:
+            value = getattr(score, field, None)
+            try:
+                return None if value is None else float(value)
+            except (TypeError, ValueError):
+                return None
+    return None
+
+
+def _estimate_cost_usd(total_tokens: Optional[int], selected_cost_score: Optional[float]) -> Optional[float]:
+    if total_tokens is None:
+        return None
+    try:
+        tokens = max(0, int(total_tokens))
+    except (TypeError, ValueError):
+        return None
+    if tokens == 0:
+        return 0.0
+
+    try:
+        cost_score = 0.65 if selected_cost_score is None else max(0.0, min(1.0, float(selected_cost_score)))
+    except (TypeError, ValueError):
+        cost_score = 0.65
+
+    # Pricing proxy until provider-true tariff ingestion is wired.
+    # Higher cost_score => cheaper model; lower score => pricier model.
+    usd_per_million_tokens = 1.5 + (1.0 - cost_score) * 18.5
+    estimated = (tokens / 1_000_000.0) * usd_per_million_tokens
+    return round(estimated, 8)
+
+
 def ensure_schema():
     """Create tables if they don't exist yet."""
     with open(SCHEMA_PATH) as f:
@@ -107,6 +140,12 @@ def _ensure_routing_decisions_compat(conn: sqlite3.Connection) -> None:
         "source_tag": "TEXT",
         "message_text": "TEXT",       # truncated user message for classifier training
         "classifier_source": "TEXT",  # llm | heuristic | local | explicit | fallback
+        "selected_cost_score": "REAL",
+        "input_tokens": "INTEGER",
+        "output_tokens": "INTEGER",
+        "total_tokens": "INTEGER",
+        "estimated_cost_usd": "REAL",
+        "estimated_co2e_grams": "REAL",
     }
     for column, column_type in expected.items():
         if column not in columns:
@@ -370,14 +409,14 @@ def write_decision(
               cost_profile, classifier_confidence, detected_language,
               has_image, has_code, has_diff, has_logs, estimated_tokens,
               selected_model, selected_provider,
-              fallbacks, routing_score, reason, excluded_models,
+              fallbacks, routing_score, selected_cost_score, reason, excluded_models,
               provider_health_score, quota_state, provider_auth_ok,
               nexus_workflow_id, nexus_step_id, nexus_issue_id, nexus_project,
               route_mode, mode, source_type, source_tag,
               message_text, classifier_source
             ) VALUES (
               ?,?,  ?,?,?,  ?,?,?,  ?,?,?,
-              ?,?,?,?,?,  ?,?,  ?,?,?,?,  ?,?,?,  ?,?,?,?,
+              ?,?,?,?,?,  ?,?,  ?,?,?,?,?,  ?,?,?,  ?,?,?,?,
               ?,?,?,?,  ?,?
             )
             """,
@@ -391,6 +430,7 @@ def write_decision(
                 pre_signals.estimated_tokens,
                 decision.selected_model, decision.selected_provider,
                 json.dumps(decision.fallbacks), decision.score,
+                _selected_score_component(decision, "cost"),
                 json.dumps(decision.reason),
                 json.dumps(decision.excluded_models),
                 provider_health.health_score, provider_health.quota,
@@ -419,6 +459,9 @@ def update_outcome(
     fallback_model: Optional[str] = None,
     user_override: bool = False,
     user_override_model: Optional[str] = None,
+    input_tokens: Optional[int] = None,
+    output_tokens: Optional[int] = None,
+    total_tokens: Optional[int] = None,
 ):
     """
     Record the outcome of a routing decision after the turn completes.
@@ -426,27 +469,39 @@ def update_outcome(
     """
     conn = _connect()
     try:
+        row = conn.execute(
+            "SELECT selected_model, selected_provider, task_type, routing_score, selected_cost_score FROM routing_decisions WHERE id=?",
+            (decision_id,),
+        ).fetchone()
+
+        total_tokens_value = total_tokens
+        if total_tokens_value is None and (input_tokens is not None or output_tokens is not None):
+            total_tokens_value = int(input_tokens or 0) + int(output_tokens or 0)
+
+        estimated_cost_usd = _estimate_cost_usd(
+            total_tokens=total_tokens_value,
+            selected_cost_score=(row["selected_cost_score"] if row else None),
+        )
+
         conn.execute(
             """
             UPDATE routing_decisions
             SET outcome_success=?, latency_ms=?,
                 fallback_used=?, fallback_model=?,
-                user_override=?, user_override_model=?
+                user_override=?, user_override_model=?,
+                input_tokens=?, output_tokens=?, total_tokens=?,
+                estimated_cost_usd=?
             WHERE id=?
             """,
             (
                 int(success), latency_ms,
                 int(fallback_used), fallback_model,
                 int(user_override), user_override_model,
+                input_tokens, output_tokens, total_tokens_value,
+                estimated_cost_usd,
                 decision_id,
             ),
         )
-
-        # fetch decision for stats update
-        row = conn.execute(
-            "SELECT selected_model, selected_provider, task_type, routing_score FROM routing_decisions WHERE id=?",
-            (decision_id,),
-        ).fetchone()
 
         if row:
             _update_model_stats(
