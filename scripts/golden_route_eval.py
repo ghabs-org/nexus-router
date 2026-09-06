@@ -81,7 +81,7 @@ def _apply_golden_confidence_gate(classifier: ClassifierOutput, route_mode: str,
     mechanisms.append("confidence_gate")
     return gated, mechanisms
 
-def evaluate_golden_set(path: Path = GOLDEN_PATH) -> dict[str, Any]:
+def evaluate_golden_set(path: Path = GOLDEN_PATH, fitted_weights_bundle: dict[str, Any] | None = None) -> dict[str, Any]:
     payload = json.loads(path.read_text())
     if not isinstance(payload, list):
         raise ValueError("golden set must be a JSON array")
@@ -111,6 +111,7 @@ def evaluate_golden_set(path: Path = GOLDEN_PATH) -> dict[str, Any]:
             provider_health=health,
             learned_stats={},
             route_mode=route_mode,
+            fitted_weights_bundle=fitted_weights_bundle,
             free_only=bool(row.get("free_only") or False),
         )
         eligible = [s for s in scored if not s.excluded]

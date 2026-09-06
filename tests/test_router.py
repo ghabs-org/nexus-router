@@ -1334,3 +1334,67 @@ def test_confidence_gate_respects_routing_yaml_threshold_override(tmp_path):
     assert decision.task_type == "general_chat"
     assert decision.selected_component_scores
     assert decision.selected_component_contributions
+
+
+def test_router_applies_activated_fitted_weight_artifact(tmp_path):
+    registry_path = tmp_path / "models.json"
+    registry_path.write_text(
+        json.dumps(
+            {
+                "models": [
+                    {
+                        "id": "p/high-fit",
+                        "provider": "p",
+                        "scores": {"coding": 0.95, "review": 0.75, "reasoning": 0.75, "summarize": 0.72, "fast": 0.42, "cost": 0.30, "eco": 0.35},
+                        "features": {"contextWindow": 250000, "is_free": False},
+                        "availability": {"authed": True},
+                    },
+                    {
+                        "id": "p/cheap",
+                        "provider": "p",
+                        "scores": {"coding": 0.72, "review": 0.70, "reasoning": 0.70, "summarize": 0.72, "fast": 0.94, "cost": 0.95, "eco": 0.88},
+                        "features": {"contextWindow": 250000, "is_free": True},
+                        "availability": {"authed": True},
+                    },
+                ]
+            }
+        )
+    )
+
+    artifact = tmp_path / "fitted_weights.active.json"
+    artifact.write_text(
+        json.dumps(
+            {
+                "activated": True,
+                "task_weights": {
+                    "coding": {
+                        "samples": 60,
+                        "weights": {
+                            "task_fit": 0.06,
+                            "health": 0.10,
+                            "preference": 0.03,
+                            "learned": 0.05,
+                            "cost": 0.52,
+                            "speed": 0.18,
+                            "eco": 0.06,
+                        },
+                    }
+                },
+            }
+        )
+    )
+
+    routing = tmp_path / "routing.yaml"
+    routing.write_text(
+        "scoring:\n"
+        "  fitted_weights:\n"
+        "    enabled: true\n"
+        f"    artifact_path: {artifact}\n"
+        "    min_samples_per_task: 40\n"
+    )
+
+    router = Router(registry_path=registry_path, routing_path=routing, persist=False)
+    decision = router.route(ClassifierOutput(task_type="coding", confidence=0.9), PreSignals(message_length=30, estimated_tokens=10))
+
+    assert decision.selected_model == "p/cheap"
+    assert "fitted_weights" in decision.mechanisms

@@ -92,6 +92,8 @@ def score_models(
     provider_health: dict[str, ProviderHealth],
     learned_stats: dict[str, dict],
     policy_weights: Optional[dict] = None,
+    fitted_weights_bundle: Optional[dict] = None,
+    fitted_weights_min_samples: int = 40,
     routing_policy: Optional[dict] = None,
     route_mode: Optional[str] = None,
     free_only: bool = False,
@@ -111,9 +113,14 @@ def score_models(
         List of ModelScore sorted by total_score descending.
         Excluded models are appended at the end with excluded=True.
     """
-    weights = _resolve_weights(classifier, policy_weights)
+    weights, weight_source = _resolve_weights(
+        classifier,
+        policy_weights,
+        fitted_weights_bundle=fitted_weights_bundle,
+        fitted_weights_min_samples=fitted_weights_min_samples,
+    )
     task_dim = TASK_TO_DIMENSION.get(classifier.task_type, "reasoning")
-    score_mechanisms_base = ["static_weights"]
+    score_mechanisms_base = [weight_source]
     preference_order = _build_preference_order(classifier.task_type, routing_policy)
     # Build preference config: merge routing_policy overrides over safe defaults.
     # Feedback is ALWAYS enabled regardless of routing_policy state.
@@ -441,11 +448,38 @@ def _latency_objective_score(provider_health: Optional[ProviderHealth]) -> float
     return round(min(1.0, max(0.0, score)), 4)
 
 
-def _resolve_weights(classifier: ClassifierOutput, policy_weights: Optional[dict]) -> dict:
-    """Resolve scoring weights from cost_profile and optional policy override."""
+def _resolve_weights(
+    classifier: ClassifierOutput,
+    policy_weights: Optional[dict],
+    fitted_weights_bundle: Optional[dict] = None,
+    fitted_weights_min_samples: int = 40,
+) -> tuple[dict, str]:
+    """Resolve scoring weights from policy override, learned fit, or static defaults."""
     if policy_weights:
-        return policy_weights
-    return COST_PROFILE_WEIGHT.get(classifier.cost_profile, DEFAULT_WEIGHTS)
+        normalized = _normalize_weight_map(policy_weights)
+        if normalized:
+            return normalized, "policy_weights"
+
+    fitted_weights = ((fitted_weights_bundle or {}).get("task_weights") or {}) if isinstance(fitted_weights_bundle, dict) else {}
+    activated = bool((fitted_weights_bundle or {}).get("activated", False)) if isinstance(fitted_weights_bundle, dict) else False
+    task_payload = fitted_weights.get(classifier.task_type) if isinstance(fitted_weights, dict) else None
+    if activated and isinstance(task_payload, dict):
+        samples = int(task_payload.get("samples") or 0)
+        weights = _normalize_weight_map(task_payload.get("weights") or {})
+        if samples >= max(1, int(fitted_weights_min_samples or 1)) and weights:
+            return weights, "fitted_weights"
+
+    static = COST_PROFILE_WEIGHT.get(classifier.cost_profile, DEFAULT_WEIGHTS)
+    return _normalize_weight_map(static), "static_weights"
+
+
+def _normalize_weight_map(weights: dict) -> dict[str, float]:
+    keys = ("task_fit", "health", "preference", "learned", "cost", "speed", "eco")
+    raw = {k: float(weights.get(k, 0.0) or 0.0) for k in keys}
+    total = sum(v for v in raw.values() if v > 0)
+    if total <= 0:
+        return {}
+    return {k: round(max(0.0, raw[k]) / total, 6) for k in keys}
 
 
 def _quota_pressure(

@@ -25,7 +25,7 @@ from .types import ClassifierOutput, PreSignals, RoutingDecision
 from .health import load_provider_health
 from .scorer import score_models
 from .db import ensure_schema, load_model_stats, load_model_metadata, write_decision
-from .paths import REGISTRY_FILE, POLICIES_ROOT
+from .paths import ARTIFACTS_ROOT, REGISTRY_FILE, POLICIES_ROOT
 
 ROOT = Path(__file__).parent.parent
 
@@ -61,6 +61,8 @@ class Router:
 
         self._registry     = self._load_registry()
         self._routing      = self._load_routing()
+        self._fitted_weights_cache: dict | None = None
+        self._fitted_weights_cache_mtime: float | None = None
         # Temporary switch: keep routing.yaml on disk but ignore it unless explicitly enabled.
         # Re-enable by setting NEXUS_ROUTER_ENABLE_ROUTING_POLICY=1.
         self._use_routing_policy = os.getenv(
@@ -146,6 +148,7 @@ class Router:
             if self._use_routing_policy
             else None
         )
+        fitted_weights_bundle, fitted_weights_min_samples = self._load_fitted_weights_bundle()
         live_registry = self._registry
         if free_only or normalized_route_mode == "free":
             metadata = load_model_metadata()
@@ -166,6 +169,8 @@ class Router:
             provider_health=provider_health,
             learned_stats=learned_stats,
             policy_weights=policy_weights,
+            fitted_weights_bundle=fitted_weights_bundle,
+            fitted_weights_min_samples=fitted_weights_min_samples,
             routing_policy=routing_policy,
             route_mode=normalized_route_mode,
             free_only=(free_only or normalized_route_mode == "free"),
@@ -249,6 +254,39 @@ class Router:
             decision.decision_id = decision_id
 
         return decision
+
+    def _load_fitted_weights_bundle(self) -> tuple[dict | None, int]:
+        cfg = ((self._routing or {}).get("scoring", {}) or {}).get("fitted_weights", {}) or {}
+        enabled = bool(cfg.get("enabled", True))
+        min_samples = max(1, int(cfg.get("min_samples_per_task", 40) or 40))
+        if not enabled:
+            return None, min_samples
+
+        artifact_raw = str(cfg.get("artifact_path") or (ARTIFACTS_ROOT / "scorer" / "fitted_weights.active.json"))
+        artifact_path = Path(os.path.expanduser(artifact_raw))
+        if not artifact_path.exists():
+            return None, min_samples
+
+        try:
+            stat = artifact_path.stat()
+            mtime = float(stat.st_mtime)
+        except OSError:
+            return None, min_samples
+
+        if self._fitted_weights_cache is not None and self._fitted_weights_cache_mtime == mtime:
+            return self._fitted_weights_cache, min_samples
+
+        try:
+            payload = json.loads(artifact_path.read_text())
+        except Exception:
+            return None, min_samples
+
+        if not isinstance(payload, dict):
+            return None, min_samples
+
+        self._fitted_weights_cache = payload
+        self._fitted_weights_cache_mtime = mtime
+        return payload, min_samples
 
     def explain(self, decision: RoutingDecision) -> str:
         """Return a human-readable explanation of a routing decision."""
@@ -369,6 +407,7 @@ def _apply_confidence_gate(
         gated,
         f"confidence={original_classifier.confidence:.2f} below threshold={min_confidence:.2f} -> {target_task} ({reason})",
     )
+
 
 
 

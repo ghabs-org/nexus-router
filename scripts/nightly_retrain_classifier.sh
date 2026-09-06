@@ -6,6 +6,7 @@ BUILD_VENV="${NEXUS_ROUTER_CLASSIFIER_BUILD_VENV:-$HOME/.local/state/nexus-route
 PYTHON_BIN="$BUILD_VENV/bin/python"
 STATE_ROOT="${NEXUS_ROUTER_STATE_ROOT:-$HOME/.local/state/nexus-router}"
 DATA_DIR="$STATE_ROOT/artifacts/router-classifier/data"
+SCORER_DIR="$STATE_ROOT/artifacts/scorer"
 REPORT_DIR="$STATE_ROOT/reports"
 LOG_DIR="$STATE_ROOT/logs"
 STAMP_DIR="$STATE_ROOT/retrain"
@@ -14,7 +15,7 @@ TRAIN_FILE="$DATA_DIR/train.jsonl"
 EVAL_FILE="$DATA_DIR/eval.jsonl"
 SPLIT_SUMMARY="$REPORT_DIR/training-split-$(date -u +%F).json"
 
-mkdir -p "$DATA_DIR" "$REPORT_DIR" "$LOG_DIR" "$STAMP_DIR"
+mkdir -p "$DATA_DIR" "$REPORT_DIR" "$LOG_DIR" "$STAMP_DIR" "$SCORER_DIR"
 LOG_FILE="$LOG_DIR/nightly-retrain-classifier-$(date -u +%F).log"
 exec > >(tee -a "$LOG_FILE") 2>&1
 
@@ -67,6 +68,11 @@ summary = {'total': len(rows), 'train': len(train), 'eval': len(eval_), 'export_
 summary_path.write_text(json.dumps(summary, indent=2) + '\n')
 print(summary)
 PY
+
+
+SCORER_CANDIDATE="$SCORER_DIR/fitted_weights.candidate.json"
+SCORER_ACTIVE="$SCORER_DIR/fitted_weights.active.json"
+$PYTHON_BIN scripts/fit_scoring_weights.py   --candidate-output "$SCORER_CANDIDATE"   --active-output "$SCORER_ACTIVE"   --min-samples-per-task 40   --activate-on-golden-pass
 
 if [[ "$DRY_RUN" == "--dry-run" ]]; then
   echo "[nightly-retrain] dry-run complete before train/export/deploy"
