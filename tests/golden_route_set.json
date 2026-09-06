@@ -1,0 +1,666 @@
+[
+  {
+    "id": "coding-01",
+    "prompt": "Implement JWT middleware with refresh-token rotation.",
+    "expected_task": "coding",
+    "route_mode": "auto",
+    "complexity": "medium",
+    "cost_profile": "balanced",
+    "free_only": false,
+    "acceptable_routes": [
+      "lab/quality-coder",
+      "lab/deep-reasoner"
+    ]
+  },
+  {
+    "id": "coding-02",
+    "prompt": "Refactor this Python module to remove duplicated retry logic.",
+    "expected_task": "coding",
+    "route_mode": "auto",
+    "complexity": "medium",
+    "cost_profile": "balanced",
+    "free_only": false,
+    "acceptable_routes": [
+      "lab/quality-coder",
+      "lab/deep-reasoner"
+    ]
+  },
+  {
+    "id": "coding-03",
+    "prompt": "Write unit tests for order reconciliation edge cases.",
+    "expected_task": "coding",
+    "route_mode": "auto",
+    "complexity": "high",
+    "cost_profile": "balanced",
+    "free_only": false,
+    "acceptable_routes": [
+      "lab/quality-coder",
+      "lab/deep-reasoner"
+    ]
+  },
+  {
+    "id": "coding-04",
+    "prompt": "Debug why webhook signature validation fails in staging.",
+    "expected_task": "coding",
+    "route_mode": "auto",
+    "complexity": "medium",
+    "cost_profile": "balanced",
+    "free_only": false,
+    "acceptable_routes": [
+      "lab/quality-coder",
+      "lab/deep-reasoner"
+    ]
+  },
+  {
+    "id": "coding-05",
+    "prompt": "Create a migration to add provider health indexes.",
+    "expected_task": "coding",
+    "route_mode": "auto",
+    "complexity": "medium",
+    "cost_profile": "balanced",
+    "free_only": false,
+    "acceptable_routes": [
+      "lab/quality-coder",
+      "lab/deep-reasoner"
+    ]
+  },
+  {
+    "id": "coding-06",
+    "prompt": "Add idempotency guard for payment callback processing.",
+    "expected_task": "coding",
+    "route_mode": "auto",
+    "complexity": "high",
+    "cost_profile": "balanced",
+    "free_only": false,
+    "acceptable_routes": [
+      "lab/quality-coder",
+      "lab/deep-reasoner"
+    ]
+  },
+  {
+    "id": "coding-07",
+    "prompt": "Fix race condition in async queue worker shutdown.",
+    "expected_task": "coding",
+    "route_mode": "auto",
+    "complexity": "medium",
+    "cost_profile": "balanced",
+    "free_only": false,
+    "acceptable_routes": [
+      "lab/quality-coder",
+      "lab/deep-reasoner"
+    ]
+  },
+  {
+    "id": "coding-08",
+    "prompt": "Implement a typed API client for benchmark ingestion.",
+    "expected_task": "coding",
+    "route_mode": "auto",
+    "complexity": "medium",
+    "cost_profile": "balanced",
+    "free_only": false,
+    "acceptable_routes": [
+      "lab/quality-coder",
+      "lab/deep-reasoner"
+    ]
+  },
+  {
+    "id": "coding-09",
+    "prompt": "Patch Dockerfile to shrink build image size safely.",
+    "expected_task": "coding",
+    "route_mode": "auto",
+    "complexity": "high",
+    "cost_profile": "balanced",
+    "free_only": false,
+    "acceptable_routes": [
+      "lab/quality-coder",
+      "lab/deep-reasoner"
+    ]
+  },
+  {
+    "id": "coding-10",
+    "prompt": "Review and harden SQL query against injection.",
+    "expected_task": "coding",
+    "route_mode": "auto",
+    "complexity": "medium",
+    "cost_profile": "balanced",
+    "free_only": false,
+    "acceptable_routes": [
+      "lab/quality-coder",
+      "lab/deep-reasoner"
+    ]
+  },
+  {
+    "id": "coding-11",
+    "prompt": "Generate a CLI command to replay failed jobs.",
+    "expected_task": "coding",
+    "route_mode": "auto",
+    "complexity": "medium",
+    "cost_profile": "balanced",
+    "free_only": false,
+    "acceptable_routes": [
+      "lab/quality-coder",
+      "lab/deep-reasoner"
+    ]
+  },
+  {
+    "id": "coding-12",
+    "prompt": "Add circuit breaker wrapper to external provider calls.",
+    "expected_task": "coding",
+    "route_mode": "auto",
+    "complexity": "high",
+    "cost_profile": "balanced",
+    "free_only": false,
+    "acceptable_routes": [
+      "lab/quality-coder",
+      "lab/deep-reasoner"
+    ]
+  },
+  {
+    "id": "reasoning-01",
+    "prompt": "Compare two rollout plans and choose lower operational risk.",
+    "expected_task": "reasoning",
+    "route_mode": "reasoning",
+    "complexity": "high",
+    "cost_profile": "premium",
+    "free_only": false,
+    "acceptable_routes": [
+      "lab/deep-reasoner",
+      "lab/quality-coder"
+    ]
+  },
+  {
+    "id": "reasoning-02",
+    "prompt": "Design a strategy for quota-aware fallback under burst traffic.",
+    "expected_task": "reasoning",
+    "route_mode": "reasoning",
+    "complexity": "high",
+    "cost_profile": "premium",
+    "free_only": false,
+    "acceptable_routes": [
+      "lab/deep-reasoner",
+      "lab/quality-coder"
+    ]
+  },
+  {
+    "id": "reasoning-03",
+    "prompt": "Should we split router and classifier into separate services?",
+    "expected_task": "reasoning",
+    "route_mode": "reasoning",
+    "complexity": "high",
+    "cost_profile": "premium",
+    "free_only": false,
+    "acceptable_routes": [
+      "lab/deep-reasoner",
+      "lab/quality-coder"
+    ]
+  },
+  {
+    "id": "reasoning-04",
+    "prompt": "Evaluate tradeoffs between high-accuracy and low-latency modes.",
+    "expected_task": "reasoning",
+    "route_mode": "reasoning",
+    "complexity": "high",
+    "cost_profile": "premium",
+    "free_only": false,
+    "acceptable_routes": [
+      "lab/deep-reasoner",
+      "lab/quality-coder"
+    ]
+  },
+  {
+    "id": "reasoning-05",
+    "prompt": "Plan incident response when model auth expires mid-shift.",
+    "expected_task": "reasoning",
+    "route_mode": "reasoning",
+    "complexity": "high",
+    "cost_profile": "premium",
+    "free_only": false,
+    "acceptable_routes": [
+      "lab/deep-reasoner",
+      "lab/quality-coder"
+    ]
+  },
+  {
+    "id": "reasoning-06",
+    "prompt": "Prioritize technical debt items for next sprint with rationale.",
+    "expected_task": "reasoning",
+    "route_mode": "reasoning",
+    "complexity": "high",
+    "cost_profile": "premium",
+    "free_only": false,
+    "acceptable_routes": [
+      "lab/deep-reasoner",
+      "lab/quality-coder"
+    ]
+  },
+  {
+    "id": "reasoning-07",
+    "prompt": "Propose architecture for multi-tenant routing state.",
+    "expected_task": "reasoning",
+    "route_mode": "reasoning",
+    "complexity": "high",
+    "cost_profile": "premium",
+    "free_only": false,
+    "acceptable_routes": [
+      "lab/deep-reasoner",
+      "lab/quality-coder"
+    ]
+  },
+  {
+    "id": "reasoning-08",
+    "prompt": "Choose between SQLite and Postgres for growth path.",
+    "expected_task": "reasoning",
+    "route_mode": "reasoning",
+    "complexity": "high",
+    "cost_profile": "premium",
+    "free_only": false,
+    "acceptable_routes": [
+      "lab/deep-reasoner",
+      "lab/quality-coder"
+    ]
+  },
+  {
+    "id": "reasoning-09",
+    "prompt": "Assess risk of enabling experimental providers in production.",
+    "expected_task": "reasoning",
+    "route_mode": "reasoning",
+    "complexity": "high",
+    "cost_profile": "premium",
+    "free_only": false,
+    "acceptable_routes": [
+      "lab/deep-reasoner",
+      "lab/quality-coder"
+    ]
+  },
+  {
+    "id": "reasoning-10",
+    "prompt": "Decide policy for confidence-gated overrides.",
+    "expected_task": "reasoning",
+    "route_mode": "reasoning",
+    "complexity": "high",
+    "cost_profile": "premium",
+    "free_only": false,
+    "acceptable_routes": [
+      "lab/deep-reasoner",
+      "lab/quality-coder"
+    ]
+  },
+  {
+    "id": "reasoning-11",
+    "prompt": "Create decision memo for eco mode default behavior.",
+    "expected_task": "reasoning",
+    "route_mode": "reasoning",
+    "complexity": "high",
+    "cost_profile": "premium",
+    "free_only": false,
+    "acceptable_routes": [
+      "lab/deep-reasoner",
+      "lab/quality-coder"
+    ]
+  },
+  {
+    "id": "reasoning-12",
+    "prompt": "Compare three caching strategies for classifier prompts.",
+    "expected_task": "reasoning",
+    "route_mode": "reasoning",
+    "complexity": "high",
+    "cost_profile": "premium",
+    "free_only": false,
+    "acceptable_routes": [
+      "lab/deep-reasoner",
+      "lab/quality-coder"
+    ]
+  },
+  {
+    "id": "fast_utility-01",
+    "prompt": "What is the command to pull latest branch?",
+    "expected_task": "fast_utility",
+    "route_mode": "fast",
+    "complexity": "low",
+    "cost_profile": "cheap",
+    "free_only": false,
+    "acceptable_routes": [
+      "lab/fast-cheap",
+      "lab/eco-efficient"
+    ]
+  },
+  {
+    "id": "fast_utility-02",
+    "prompt": "Summarize this in one sentence.",
+    "expected_task": "fast_utility",
+    "route_mode": "fast",
+    "complexity": "low",
+    "cost_profile": "cheap",
+    "free_only": false,
+    "acceptable_routes": [
+      "lab/fast-cheap",
+      "lab/eco-efficient"
+    ]
+  },
+  {
+    "id": "fast_utility-03",
+    "prompt": "Rename this variable to be clearer.",
+    "expected_task": "fast_utility",
+    "route_mode": "fast",
+    "complexity": "low",
+    "cost_profile": "cheap",
+    "free_only": false,
+    "acceptable_routes": [
+      "lab/fast-cheap",
+      "lab/eco-efficient"
+    ]
+  },
+  {
+    "id": "fast_utility-04",
+    "prompt": "Give me a quick regex for UUID v4.",
+    "expected_task": "fast_utility",
+    "route_mode": "fast",
+    "complexity": "low",
+    "cost_profile": "cheap",
+    "free_only": false,
+    "acceptable_routes": [
+      "lab/fast-cheap",
+      "lab/eco-efficient"
+    ]
+  },
+  {
+    "id": "fast_utility-05",
+    "prompt": "Is this JSON valid?",
+    "expected_task": "fast_utility",
+    "route_mode": "fast",
+    "complexity": "low",
+    "cost_profile": "cheap",
+    "free_only": false,
+    "acceptable_routes": [
+      "lab/fast-cheap",
+      "lab/eco-efficient"
+    ]
+  },
+  {
+    "id": "fast_utility-06",
+    "prompt": "One-line commit message for docs tweak.",
+    "expected_task": "fast_utility",
+    "route_mode": "fast",
+    "complexity": "low",
+    "cost_profile": "cheap",
+    "free_only": false,
+    "acceptable_routes": [
+      "lab/fast-cheap",
+      "lab/eco-efficient"
+    ]
+  },
+  {
+    "id": "fast_utility-07",
+    "prompt": "Short answer: use ff-only or rebase?",
+    "expected_task": "fast_utility",
+    "route_mode": "fast",
+    "complexity": "low",
+    "cost_profile": "cheap",
+    "free_only": false,
+    "acceptable_routes": [
+      "lab/fast-cheap",
+      "lab/eco-efficient"
+    ]
+  },
+  {
+    "id": "fast_utility-08",
+    "prompt": "Convert this timestamp to UTC quickly.",
+    "expected_task": "fast_utility",
+    "route_mode": "fast",
+    "complexity": "low",
+    "cost_profile": "cheap",
+    "free_only": false,
+    "acceptable_routes": [
+      "lab/fast-cheap",
+      "lab/eco-efficient"
+    ]
+  },
+  {
+    "id": "fast_utility-09",
+    "prompt": "Tiny shell command to list open ports.",
+    "expected_task": "fast_utility",
+    "route_mode": "fast",
+    "complexity": "low",
+    "cost_profile": "cheap",
+    "free_only": false,
+    "acceptable_routes": [
+      "lab/fast-cheap",
+      "lab/eco-efficient"
+    ]
+  },
+  {
+    "id": "fast_utility-10",
+    "prompt": "Quickly rewrite this sentence formally.",
+    "expected_task": "fast_utility",
+    "route_mode": "fast",
+    "complexity": "low",
+    "cost_profile": "cheap",
+    "free_only": false,
+    "acceptable_routes": [
+      "lab/fast-cheap",
+      "lab/eco-efficient"
+    ]
+  },
+  {
+    "id": "fast_utility-11",
+    "prompt": "One bullet summary of yesterday report.",
+    "expected_task": "fast_utility",
+    "route_mode": "fast",
+    "complexity": "low",
+    "cost_profile": "cheap",
+    "free_only": false,
+    "acceptable_routes": [
+      "lab/fast-cheap",
+      "lab/eco-efficient"
+    ]
+  },
+  {
+    "id": "fast_utility-12",
+    "prompt": "How to check disk usage per directory?",
+    "expected_task": "fast_utility",
+    "route_mode": "fast",
+    "complexity": "low",
+    "cost_profile": "cheap",
+    "free_only": false,
+    "acceptable_routes": [
+      "lab/fast-cheap",
+      "lab/eco-efficient"
+    ]
+  },
+  {
+    "id": "general_chat-01",
+    "prompt": "Hey, can you help with router checks?",
+    "expected_task": "general_chat",
+    "route_mode": "auto",
+    "complexity": "low",
+    "cost_profile": "balanced",
+    "free_only": false,
+    "acceptable_routes": [
+      "lab/deep-reasoner",
+      "lab/quality-coder",
+      "lab/fast-cheap"
+    ]
+  },
+  {
+    "id": "general_chat-02",
+    "prompt": "Thanks, that worked.",
+    "expected_task": "general_chat",
+    "route_mode": "auto",
+    "complexity": "medium",
+    "cost_profile": "balanced",
+    "free_only": false,
+    "acceptable_routes": [
+      "lab/deep-reasoner",
+      "lab/quality-coder",
+      "lab/fast-cheap"
+    ]
+  },
+  {
+    "id": "general_chat-03",
+    "prompt": "Can we continue from before?",
+    "expected_task": "general_chat",
+    "route_mode": "auto",
+    "complexity": "low",
+    "cost_profile": "balanced",
+    "free_only": false,
+    "acceptable_routes": [
+      "lab/deep-reasoner",
+      "lab/quality-coder",
+      "lab/fast-cheap"
+    ]
+  },
+  {
+    "id": "general_chat-04",
+    "prompt": "Please proceed with the safe default.",
+    "expected_task": "general_chat",
+    "route_mode": "auto",
+    "complexity": "medium",
+    "cost_profile": "balanced",
+    "free_only": false,
+    "acceptable_routes": [
+      "lab/deep-reasoner",
+      "lab/quality-coder",
+      "lab/fast-cheap"
+    ]
+  },
+  {
+    "id": "general_chat-05",
+    "prompt": "What do you think about this approach?",
+    "expected_task": "general_chat",
+    "route_mode": "auto",
+    "complexity": "low",
+    "cost_profile": "balanced",
+    "free_only": false,
+    "acceptable_routes": [
+      "lab/deep-reasoner",
+      "lab/quality-coder",
+      "lab/fast-cheap"
+    ]
+  },
+  {
+    "id": "general_chat-06",
+    "prompt": "Need quick status update.",
+    "expected_task": "general_chat",
+    "route_mode": "auto",
+    "complexity": "medium",
+    "cost_profile": "balanced",
+    "free_only": false,
+    "acceptable_routes": [
+      "lab/deep-reasoner",
+      "lab/quality-coder",
+      "lab/fast-cheap"
+    ]
+  },
+  {
+    "id": "general_chat-07",
+    "prompt": "Let's keep it simple tonight.",
+    "expected_task": "general_chat",
+    "route_mode": "auto",
+    "complexity": "low",
+    "cost_profile": "balanced",
+    "free_only": false,
+    "acceptable_routes": [
+      "lab/deep-reasoner",
+      "lab/quality-coder",
+      "lab/fast-cheap"
+    ]
+  },
+  {
+    "id": "general_chat-08",
+    "prompt": "Any blockers on your side?",
+    "expected_task": "general_chat",
+    "route_mode": "auto",
+    "complexity": "medium",
+    "cost_profile": "balanced",
+    "free_only": false,
+    "acceptable_routes": [
+      "lab/deep-reasoner",
+      "lab/quality-coder",
+      "lab/fast-cheap"
+    ]
+  },
+  {
+    "id": "general_chat-09",
+    "prompt": "Ok run with it.",
+    "expected_task": "general_chat",
+    "route_mode": "auto",
+    "complexity": "low",
+    "cost_profile": "balanced",
+    "free_only": false,
+    "acceptable_routes": [
+      "lab/deep-reasoner",
+      "lab/quality-coder",
+      "lab/fast-cheap"
+    ]
+  },
+  {
+    "id": "general_chat-10",
+    "prompt": "Can you explain that in plain English.",
+    "expected_task": "general_chat",
+    "route_mode": "auto",
+    "complexity": "medium",
+    "cost_profile": "balanced",
+    "free_only": false,
+    "acceptable_routes": [
+      "lab/deep-reasoner",
+      "lab/quality-coder",
+      "lab/fast-cheap"
+    ]
+  },
+  {
+    "id": "general_chat-11",
+    "prompt": "Do we have tests for this?",
+    "expected_task": "general_chat",
+    "route_mode": "auto",
+    "complexity": "low",
+    "cost_profile": "balanced",
+    "free_only": false,
+    "acceptable_routes": [
+      "lab/deep-reasoner",
+      "lab/quality-coder",
+      "lab/fast-cheap"
+    ]
+  },
+  {
+    "id": "general_chat-12",
+    "prompt": "Sounds good, continue.",
+    "expected_task": "general_chat",
+    "route_mode": "auto",
+    "complexity": "medium",
+    "cost_profile": "balanced",
+    "free_only": false,
+    "acceptable_routes": [
+      "lab/deep-reasoner",
+      "lab/quality-coder",
+      "lab/fast-cheap"
+    ]
+  },
+  {
+    "id": "general_chat-13",
+    "prompt": "Double-check before pushing.",
+    "expected_task": "general_chat",
+    "route_mode": "auto",
+    "complexity": "low",
+    "cost_profile": "balanced",
+    "free_only": false,
+    "acceptable_routes": [
+      "lab/deep-reasoner",
+      "lab/quality-coder",
+      "lab/fast-cheap"
+    ]
+  },
+  {
+    "id": "general_chat-14",
+    "prompt": "What changed since last run?",
+    "expected_task": "general_chat",
+    "route_mode": "auto",
+    "complexity": "medium",
+    "cost_profile": "balanced",
+    "free_only": false,
+    "acceptable_routes": [
+      "lab/deep-reasoner",
+      "lab/quality-coder",
+      "lab/fast-cheap"
+    ]
+  }
+]
