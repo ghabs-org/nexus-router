@@ -18,12 +18,14 @@ from typing import Any, Optional
 try:
     from .types import ClassifierOutput, PreSignals, ProviderHealth, RoutingDecision
     from .paths import ROUTER_DB_PATH, REGISTRY_FILE, ensure_parent
+    from .feedback_taxonomy import normalize_reason_tag
 except ImportError:
     import sys
     from pathlib import Path as _Path
     sys.path.insert(0, str(_Path(__file__).parent))
     from types import SimpleNamespace as _ignore  # noqa: F401
     from paths import ROUTER_DB_PATH, REGISTRY_FILE, ensure_parent  # type: ignore
+    from feedback_taxonomy import normalize_reason_tag  # type: ignore
     from importlib import util as _importlib_util
     _types_spec = _importlib_util.spec_from_file_location("nexus_router_local_types", _Path(__file__).parent / "types.py")
     _types_mod = _importlib_util.module_from_spec(_types_spec)
@@ -1038,6 +1040,14 @@ def record_feedback(
     if not clean_decision_id:
         raise ValueError("decision_id required")
 
+    normalized_reason_tag = normalize_reason_tag(
+        reason_tag=reason_tag,
+        verdict=verdict,
+        corrected_task=corrected_task,
+        model_verdict=model_verdict,
+        preferred_model=preferred_model,
+    )
+
     conn = _connect()
     try:
         linked = conn.execute(
@@ -1063,7 +1073,7 @@ def record_feedback(
                 corrected_task,
                 model_verdict,
                 preferred_model,
-                reason_tag,
+                normalized_reason_tag,
                 source_surface,
                 source_channel,
                 source_message_id,

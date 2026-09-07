@@ -1207,6 +1207,42 @@ def test_load_model_stats_includes_feedback_preferences(tmp_path, monkeypatch):
     assert stats["model/a"]["feedback_preference"]["reasoning"]["samples"] == 1
 
 
+def test_record_feedback_normalizes_unknown_reason_tag_to_other(tmp_path, monkeypatch):
+    import importlib
+
+    monkeypatch.setenv("NEXUS_ROUTER_DB_PATH", str(tmp_path / "routing.sqlite"))
+    import src.db as db
+    importlib.reload(db)
+
+    db.ensure_schema()
+    conn = db._connect()
+    try:
+        conn.execute(
+            "INSERT INTO routing_decisions (id, created_at, task_type, selected_model, selected_provider) VALUES (?,?,?,?,?)",
+            ("dec-reason-tag-1", db._now_iso(), "reasoning", "model/a", "provider-a"),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    db.record_feedback(
+        decision_id="dec-reason-tag-1",
+        verdict="wrong",
+        corrected_task="coding",
+        reason_tag="non_standard_custom_reason",
+        source_surface="telegram",
+    )
+
+    conn = db._connect()
+    try:
+        row = conn.execute("SELECT reason_tag FROM route_feedback WHERE decision_id=?", ("dec-reason-tag-1",)).fetchone()
+    finally:
+        conn.close()
+
+    assert row is not None
+    assert row["reason_tag"] == "other"
+
+
 def test_load_model_stats_maps_too_cheap_feedback_to_selected_model_when_preferred_model_missing(tmp_path, monkeypatch):
     import importlib
 

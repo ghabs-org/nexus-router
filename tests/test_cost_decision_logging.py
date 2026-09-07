@@ -59,6 +59,49 @@ def test_update_outcome_records_tokens_and_estimated_cost(tmp_path, monkeypatch)
     assert float(row["estimated_cost_usd"]) > 0
 
 
+def test_wrong_verdict_split_counts_task_vs_model_signals(tmp_path):
+    db_path = tmp_path / "router.sqlite"
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    conn.executescript((ROOT / "src" / "schema.sql").read_text())
+    conn.execute(
+        "INSERT INTO routing_decisions (id, created_at, task_type, selected_model, selected_provider) VALUES (?,?,?,?,?)",
+        ("d1", "2099-01-01T00:00:00+00:00", "coding", "m/a", "p"),
+    )
+    conn.execute(
+        "INSERT INTO routing_decisions (id, created_at, task_type, selected_model, selected_provider) VALUES (?,?,?,?,?)",
+        ("d2", "2099-01-01T00:00:00+00:00", "reasoning", "m/a", "p"),
+    )
+    conn.execute(
+        "INSERT INTO routing_decisions (id, created_at, task_type, selected_model, selected_provider) VALUES (?,?,?,?,?)",
+        ("d3", "2099-01-01T00:00:00+00:00", "reasoning", "m/a", "p"),
+    )
+    conn.execute(
+        "INSERT INTO route_feedback (id, created_at, decision_id, verdict, corrected_task, model_verdict, preferred_model, reason_tag) VALUES (?,?,?,?,?,?,?,?)",
+        ("f1", "2099-01-01T00:00:00+00:00", "d1", "wrong", "code_review", "", "", "task_mismatch"),
+    )
+    conn.execute(
+        "INSERT INTO route_feedback (id, created_at, decision_id, verdict, corrected_task, model_verdict, preferred_model, reason_tag) VALUES (?,?,?,?,?,?,?,?)",
+        ("f2", "2099-01-01T00:00:00+00:00", "d2", "wrong", "", "too_cheap", "", "too_cheap"),
+    )
+    conn.execute(
+        "INSERT INTO route_feedback (id, created_at, decision_id, verdict, corrected_task, model_verdict, preferred_model, reason_tag) VALUES (?,?,?,?,?,?,?,?)",
+        ("f3", "2099-01-01T00:00:00+00:00", "d3", "wrong", "coding", "bad", "m/b", "task_and_model_mismatch"),
+    )
+    conn.commit()
+
+    from scripts.feedback_calibration_report import _wrong_verdict_split
+
+    split = _wrong_verdict_split(conn, "", [])
+    conn.close()
+
+    assert split["wrong_total"] == 3
+    assert split["split"]["wrong_task_only"] == 1
+    assert split["split"]["wrong_model_only"] == 1
+    assert split["split"]["both"] == 1
+    assert split["dominant_error_side"] == "tie"
+
+
 def test_weekly_spend_summary_aggregates_by_task(tmp_path):
     db_path = tmp_path / "router.sqlite"
     conn = sqlite3.connect(db_path)
