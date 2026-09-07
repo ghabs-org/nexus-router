@@ -15,6 +15,7 @@ import json
 import os
 import sys
 import inspect
+from collections import Counter
 from pathlib import Path
 
 from datasets import Dataset
@@ -78,6 +79,21 @@ def tokenize_dataset(dataset: Dataset, tokenizer):
     return tokenized
 
 
+def compute_class_weights(rows: list[dict], *, smoothing: float = 1.0) -> list[float]:
+    counts = Counter(int(row["label"]) for row in rows)
+    n_labels = len(ROUTER_TASK_LABELS)
+    total = float(sum(counts.values()))
+    weights: list[float] = []
+    for label_idx in range(n_labels):
+        c = float(counts.get(label_idx, 0.0))
+        # Inverse-frequency weighting with smoothing to avoid exploding values.
+        weight = total / max(1.0, (c + smoothing) * n_labels)
+        weights.append(weight)
+    # Normalize around 1.0 so learning rate remains intuitive.
+    mean = sum(weights) / max(1, len(weights))
+    return [w / mean for w in weights]
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--train-file", default=f"{DEFAULT_DATA_DIR}/train.jsonl")
@@ -90,6 +106,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--learning-rate", type=float, default=2e-5)
     parser.add_argument("--weight-decay", type=float, default=0.01)
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument(
+        "--class-weighting",
+        choices=["off", "balanced"],
+        default="balanced",
+        help="Class weighting strategy for rare-label recall (default: balanced)",
+    )
     return parser.parse_args()
 
 
@@ -115,6 +137,10 @@ def main() -> int:
     eval_ds = tokenize_dataset(Dataset.from_list(eval_rows), tokenizer)
     collator = DataCollatorWithPadding(tokenizer=tokenizer)
 
+    class_weights = None
+    if args.class_weighting == "balanced":
+        class_weights = compute_class_weights(train_rows)
+
     if args.dry_run:
         print(
             json.dumps(
@@ -125,6 +151,8 @@ def main() -> int:
                     "model_name": args.model_name,
                     "num_labels": len(ROUTER_TASK_LABELS),
                     "output_dir": args.output_dir,
+                    "class_weighting": args.class_weighting,
+                    "class_weights": class_weights,
                 },
                 indent=2,
             )
@@ -154,13 +182,34 @@ def main() -> int:
 
     training_args = TrainingArguments(**training_kwargs)
 
-    trainer = Trainer(
-        model=model,
-        args=training_args,
-        train_dataset=train_ds,
-        eval_dataset=eval_ds,
-        data_collator=collator,
-    )
+    if class_weights is not None:
+        import torch
+
+        class WeightedTrainer(Trainer):
+            def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
+                labels = inputs.pop("labels")
+                outputs = model(**inputs)
+                logits = outputs.get("logits")
+                weight_tensor = torch.tensor(class_weights, dtype=logits.dtype, device=logits.device)
+                loss_fn = torch.nn.CrossEntropyLoss(weight=weight_tensor)
+                loss = loss_fn(logits.view(-1, logits.size(-1)), labels.view(-1))
+                return (loss, outputs) if return_outputs else loss
+
+        trainer = WeightedTrainer(
+            model=model,
+            args=training_args,
+            train_dataset=train_ds,
+            eval_dataset=eval_ds,
+            data_collator=collator,
+        )
+    else:
+        trainer = Trainer(
+            model=model,
+            args=training_args,
+            train_dataset=train_ds,
+            eval_dataset=eval_ds,
+            data_collator=collator,
+        )
     # attach tokenizer for compatibility with some Trainer utilities
     trainer.tokenizer = tokenizer
     trainer.train()

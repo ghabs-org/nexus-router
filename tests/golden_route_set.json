@@ -662,5 +662,83 @@
       "lab/quality-coder",
       "lab/fast-cheap"
     ]
+  },
+  {
+    "id": "code_review-01",
+    "prompt": "Review this pull request diff and flag regressions in retry backoff logic.",
+    "expected_task": "code_review",
+    "route_mode": "auto",
+    "complexity": "medium",
+    "cost_profile": "balanced",
+    "free_only": false,
+    "acceptable_routes": [
+      "lab/quality-coder",
+      "lab/deep-reasoner"
+    ]
+  },
+  {
+    "id": "code_review-02",
+    "prompt": "Audit the attached patch for SQL injection and auth bypass risks.",
+    "expected_task": "code_review",
+    "route_mode": "auto",
+    "complexity": "high",
+    "cost_profile": "balanced",
+    "free_only": false,
+    "acceptable_routes": [
+      "lab/quality-coder",
+      "lab/deep-reasoner"
+    ]
+  },
+  {
+    "id": "code_review-03",
+    "prompt": "Check this code diff for race conditions and incorrect lock ordering.",
+    "expected_task": "code_review",
+    "route_mode": "auto",
+    "complexity": "high",
+    "cost_profile": "balanced",
+    "free_only": false,
+    "acceptable_routes": [
+      "lab/quality-coder",
+      "lab/deep-reasoner"
+    ]
+  },
+  {
+    "id": "long_context-01",
+    "prompt": "I pasted a 300k-token incident timeline and need root-cause extraction across the full context.",
+    "expected_task": "long_context",
+    "route_mode": "auto",
+    "complexity": "high",
+    "cost_profile": "balanced",
+    "free_only": false,
+    "acceptable_routes": [
+      "lab/deep-reasoner",
+      "lab/quality-coder"
+    ]
+  },
+  {
+    "id": "long_context-02",
+    "prompt": "Compare policy versions across 250k tokens of docs and produce a unified change matrix.",
+    "expected_task": "long_context",
+    "route_mode": "auto",
+    "complexity": "high",
+    "cost_profile": "balanced",
+    "free_only": false,
+    "acceptable_routes": [
+      "lab/deep-reasoner",
+      "lab/quality-coder"
+    ]
+  },
+  {
+    "id": "long_context-03",
+    "prompt": "Use the full 220k-token transcript to map contradictions and unresolved decisions.",
+    "expected_task": "long_context",
+    "route_mode": "auto",
+    "complexity": "high",
+    "cost_profile": "balanced",
+    "free_only": false,
+    "acceptable_routes": [
+      "lab/deep-reasoner",
+      "lab/quality-coder"
+    ]
   }
 ]
