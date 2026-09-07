@@ -98,6 +98,29 @@ def test_classify_with_local_model_rejects_ambiguous_result(monkeypatch):
     assert classify_with_local_model("maybe this maybe that", PreSignals(message_length=20)) is None
 
 
+def test_classify_with_local_model_allows_rare_labels_with_per_class_threshold(monkeypatch):
+    class FakeClassifier:
+        load_error = None
+        available = True
+
+        def classify(self, message, pre_signals):
+            from src.local_classifier import LocalClassifierResult
+            from src.types import ClassifierOutput
+            return LocalClassifierResult(
+                classifier=ClassifierOutput(task_type="code_review", confidence=0.58),
+                top_label="code_review",
+                confidence=0.58,
+                margin=0.03,
+                top2=[("code_review", 0.58), ("coding", 0.55)],
+                artifact_dir="/tmp/router-classifier",
+            )
+
+    monkeypatch.setattr("src.local_classifier.get_local_classifier", lambda: FakeClassifier())
+    result = classify_with_local_model("Can you review this patch and list regressions?", PreSignals(message_length=42))
+    assert result is not None
+    assert result.classifier.task_type == "code_review"
+
+
 def test_route_prefers_local_classifier_when_available(monkeypatch):
     from src.types import ClassifierOutput
 

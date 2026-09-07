@@ -24,6 +24,14 @@ DEFAULT_LOCAL_CLASSIFIER_MIN_CONFIDENCE = float(
 DEFAULT_LOCAL_CLASSIFIER_MARGIN = float(
     os.environ.get("NEXUS_ROUTER_LOCAL_CLASSIFIER_MARGIN", "0.05")
 )
+DEFAULT_LOCAL_CLASSIFIER_MIN_CONFIDENCE_BY_LABEL: dict[str, float] = {
+    "code_review": float(os.environ.get("NEXUS_ROUTER_LOCAL_CLASSIFIER_MIN_CONFIDENCE_CODE_REVIEW", "0.55")),
+    "long_context": float(os.environ.get("NEXUS_ROUTER_LOCAL_CLASSIFIER_MIN_CONFIDENCE_LONG_CONTEXT", "0.50")),
+}
+DEFAULT_LOCAL_CLASSIFIER_MARGIN_BY_LABEL: dict[str, float] = {
+    "code_review": float(os.environ.get("NEXUS_ROUTER_LOCAL_CLASSIFIER_MARGIN_CODE_REVIEW", "0.02")),
+    "long_context": float(os.environ.get("NEXUS_ROUTER_LOCAL_CLASSIFIER_MARGIN_LONG_CONTEXT", "0.02")),
+}
 DEFAULT_LOCAL_CLASSIFIER_MAX_LENGTH = int(
     os.environ.get("NEXUS_ROUTER_LOCAL_CLASSIFIER_MAX_LENGTH", "512")
 )
@@ -241,6 +249,13 @@ def get_local_classifier() -> LocalRouteClassifier:
     return _LOCAL_CLASSIFIER
 
 
+def _threshold_for_label(label: str, global_threshold: float, per_label: dict[str, float]) -> float:
+    specific = per_label.get(label)
+    if specific is None:
+        return global_threshold
+    return min(global_threshold, float(specific))
+
+
 def classify_with_local_model(
     message: str,
     pre_signals: PreSignals,
@@ -263,8 +278,20 @@ def classify_with_local_model(
         result = classifier.classify(message, pre_signals)
     if result is None:
         return None
-    if result.confidence < min_confidence:
+
+    effective_min_confidence = _threshold_for_label(
+        result.top_label,
+        min_confidence,
+        DEFAULT_LOCAL_CLASSIFIER_MIN_CONFIDENCE_BY_LABEL,
+    )
+    effective_min_margin = _threshold_for_label(
+        result.top_label,
+        min_margin,
+        DEFAULT_LOCAL_CLASSIFIER_MARGIN_BY_LABEL,
+    )
+
+    if result.confidence < effective_min_confidence:
         return None
-    if result.margin < min_margin:
+    if result.margin < effective_min_margin:
         return None
     return result

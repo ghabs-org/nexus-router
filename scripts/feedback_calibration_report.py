@@ -24,12 +24,11 @@ import tempfile
 
 DB_PATH = Path.home() / ".local/state/nexus-router/data/router.sqlite"
 ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
-try:
-    from src.provider_freshness import evaluate_freshness_transitions
-except ImportError:
-    sys.path.insert(0, str(ROOT / "src"))
-    from provider_freshness import evaluate_freshness_transitions  # type: ignore
+from src.provider_freshness import evaluate_freshness_transitions
+from src.feedback_taxonomy import ALLOWED_REASON_TAGS
 
 
 def parse_args() -> argparse.Namespace:
@@ -296,6 +295,94 @@ def _weekly_spend_by_task(conn: sqlite3.Connection, where_sql: str, params: list
     }
 
 
+def _wrong_verdict_split(conn: sqlite3.Connection, where_sql: str, params: list[object]) -> dict[str, object]:
+    rows = conn.execute(
+        f"""
+        SELECT
+          LOWER(TRIM(COALESCE(rf.verdict, ''))) AS verdict,
+          TRIM(COALESCE(rf.corrected_task, '')) AS corrected_task,
+          TRIM(COALESCE(rf.model_verdict, '')) AS model_verdict,
+          TRIM(COALESCE(rf.preferred_model, '')) AS preferred_model,
+          TRIM(COALESCE(rd.selected_model, '')) AS selected_model
+        FROM route_feedback rf
+        JOIN routing_decisions rd ON rd.id = rf.decision_id
+        {where_sql}
+        """,
+        params,
+    ).fetchall()
+
+    split = {
+        "wrong_task_only": 0,
+        "wrong_model_only": 0,
+        "both": 0,
+        "unattributed": 0,
+    }
+    wrong_total = 0
+
+    for row in rows:
+        if row["verdict"] != "wrong":
+            continue
+        wrong_total += 1
+
+        has_task_signal = bool(row["corrected_task"])
+        model_verdict = str(row["model_verdict"] or "").lower()
+        has_model_signal = model_verdict in {"bad", "neutral", "too_cheap", "too_powerful"} or (
+            bool(row["preferred_model"]) and row["preferred_model"] != row["selected_model"]
+        )
+        if has_task_signal and has_model_signal:
+            split["both"] += 1
+        elif has_task_signal:
+            split["wrong_task_only"] += 1
+        elif has_model_signal:
+            split["wrong_model_only"] += 1
+        else:
+            split["unattributed"] += 1
+
+    task_side = split["wrong_task_only"] + split["both"]
+    model_side = split["wrong_model_only"] + split["both"]
+    if task_side > model_side:
+        dominant = "task"
+    elif model_side > task_side:
+        dominant = "model"
+    else:
+        dominant = "tie"
+
+    return {
+        "wrong_total": wrong_total,
+        "split": split,
+        "task_side_total": task_side,
+        "model_side_total": model_side,
+        "dominant_error_side": dominant,
+        "dominant_margin": abs(task_side - model_side),
+    }
+
+
+def _reason_tag_summary(conn: sqlite3.Connection, where_sql: str, params: list[object]) -> dict[str, object]:
+    rows = conn.execute(
+        f"""
+        SELECT LOWER(TRIM(COALESCE(rf.reason_tag, ''))) AS reason_tag, COUNT(*) AS n
+        FROM route_feedback rf
+        JOIN routing_decisions rd ON rd.id = rf.decision_id
+        {where_sql}
+        GROUP BY LOWER(TRIM(COALESCE(rf.reason_tag, '')))
+        ORDER BY n DESC, reason_tag ASC
+        """,
+        params,
+    ).fetchall()
+    counts = {
+        (str(row["reason_tag"]) if str(row["reason_tag"]) else "<empty>"): int(row["n"] or 0)
+        for row in rows
+    }
+    non_vocab = sorted(
+        tag for tag in counts.keys() if tag not in ALLOWED_REASON_TAGS and tag != "<empty>"
+    )
+    return {
+        "vocabulary": list(ALLOWED_REASON_TAGS),
+        "counts": counts,
+        "non_vocabulary_tags": non_vocab,
+    }
+
+
 def main() -> None:
     args = parse_args()
     db_path = Path(args.db).expanduser()
@@ -428,7 +515,8 @@ def main() -> None:
 
     training_export = _training_export_summary(conn, where_sql, params)
     spend_summary = _weekly_spend_by_task(conn, where_sql, params)
-
+    wrong_split = _wrong_verdict_split(conn, where_sql, params)
+    reason_tag_summary = _reason_tag_summary(conn, where_sql, params)
     report = {
         "ok": True,
         "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -448,6 +536,16 @@ def main() -> None:
         "feedback_fingerprint": (training_export or {}).get("feedback_fingerprint"),
         "provider_freshness": provider_freshness,
         "weekly_spend_summary": spend_summary,
+        "wrong_verdict_split": wrong_split,
+        "reason_tag_summary": reason_tag_summary,
+        "weekly_calibration_summary": {
+            "feedback_total": overall["feedback_total"],
+            "wrong_total": wrong_split["wrong_total"],
+            "wrong_split": wrong_split["split"],
+            "dominant_error_side": wrong_split["dominant_error_side"],
+            "dominant_margin": wrong_split["dominant_margin"],
+            "reason_tag_non_vocabulary": reason_tag_summary["non_vocabulary_tags"],
+        },
         "task_summary": overall["task_summary"],
         "model_task_signals_top": overall["model_task_signals_top"],
         "source_summary": source_summary,

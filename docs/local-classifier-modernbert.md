@@ -83,10 +83,15 @@ The live routing stack now uses the local ONNX classifier first when the artifac
 
 Default runtime gates:
 
-- minimum confidence: `0.68`
-- minimum top-1 vs top-2 margin: `0.12`
+- global minimum confidence: `0.70`
+- global minimum top-1 vs top-2 margin: `0.05`
+- per-class recall gates (override global when lower):
+  - `code_review`: confidence `0.55`, margin `0.02`
+  - `long_context`: confidence `0.50`, margin `0.02`
 
 If those gates are not met, the router falls through to heuristic and then LLM classification.
+
+Training now supports class-weighted loss (`--class-weighting balanced`) so underrepresented labels (notably `code_review` and `long_context`) are upweighted without adding new labels.
 
 Relevant env vars:
 
@@ -94,4 +99,8 @@ Relevant env vars:
 - `NEXUS_ROUTER_LOCAL_CLASSIFIER_MODEL_FILE`
 - `NEXUS_ROUTER_LOCAL_CLASSIFIER_MIN_CONFIDENCE`
 - `NEXUS_ROUTER_LOCAL_CLASSIFIER_MARGIN`
+- `NEXUS_ROUTER_LOCAL_CLASSIFIER_MIN_CONFIDENCE_CODE_REVIEW`
+- `NEXUS_ROUTER_LOCAL_CLASSIFIER_MIN_CONFIDENCE_LONG_CONTEXT`
+- `NEXUS_ROUTER_LOCAL_CLASSIFIER_MARGIN_CODE_REVIEW`
+- `NEXUS_ROUTER_LOCAL_CLASSIFIER_MARGIN_LONG_CONTEXT`
 - `NEXUS_ROUTER_LOCAL_CLASSIFIER_MAX_LENGTH`
