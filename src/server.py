@@ -39,6 +39,12 @@ except Exception:  # pragma: no cover - optional local ML deps
 
     def classify_with_local_model(*args, **kwargs):
         return None
+
+try:
+    from .jev_classifier import classify_with_jev
+except Exception:  # pragma: no cover - never optional in practice (stdlib only)
+    def classify_with_jev(*args, **kwargs):
+        return None
 from .health import load_provider_health
 from .health_updater import probe_all_providers, observe_turn_outcome
 from .db import ensure_schema, update_outcome, load_model_stats, record_feedback, set_route_mode_preference, get_route_mode_preference
@@ -323,6 +329,28 @@ class RouterHandler(BaseHTTPRequestHandler):
                     local_classifier = get_local_classifier()
                     if local_classifier.load_error:
                         classifier_debug["local_unavailable"] = local_classifier.load_error
+
+            # Jev decision model: typed Choice with calibrated confidence.
+            # Runs when nothing classified yet, or when the local model is
+            # weak (below JEV_LOCAL_FLOOR) — Jev wins ties and up. Low
+            # Jev confidence or any failure returns None -> keep local,
+            # then heuristic/LLM next as before.
+            _local_conf = getattr(local_result, "confidence", 1.0) if classifier_source == "local" else 1.0
+            if classifier is None or _local_conf < float(os.getenv("JEV_LOCAL_FLOOR", "0.6")):
+                jev_result = classify_with_jev(
+                    message,
+                    pre_signals,
+                    conversation_context=classifier_context,
+                )
+                if jev_result is not None and (classifier is None or jev_result.confidence >= _local_conf):
+                    classifier = jev_result.classifier
+                    classifier_source = "jev"
+                    classifier_debug["jev_confidence"] = round(jev_result.confidence, 4)
+                    classifier_debug["jev_top2"] = sorted(
+                        jev_result.probabilities.items(),
+                        key=lambda item: item[1],
+                        reverse=True,
+                    )[:2]
 
             if classifier is None:
                 # Heuristic fallback — only for unambiguous structural signals

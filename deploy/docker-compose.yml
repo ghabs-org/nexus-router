@@ -20,6 +20,7 @@ services:
       - /home/ubuntu/.codex:/root/.codex:ro
     environment:
       - PYTHONUNBUFFERED=1
+      - OPENCODE_API_KEY=${OPENCODE_API_KEY:-}
       - NEXUS_ROUTER_STATE_ROOT=/app
       - NEXUS_ROUTER_DB_PATH=/app/data/router.sqlite
       - NEXUS_ROUTER_GENERATED_ROOT=/app/generated
