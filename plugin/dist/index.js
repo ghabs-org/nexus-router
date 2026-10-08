@@ -1684,6 +1684,10 @@ export default definePluginEntry({
             const shouldUseLlmClassifier = shouldUseContextualLlmClassifier(routeMode, conversationContext, routingText);
             await debugLog(`[hook-enter] source=${source} source_tag=${sourceTag} trigger=${ctx?.trigger ?? "unknown"} route=${routeMode} prompt_len=${routingText.length} profile=${firstPassCostProfile}`);
             const sessionKind = classifySessionKind(ctx?.sessionKey);
+            // Hoisted: the route=off shadow branch below resolves the feedback sender
+            // with this key; declaring it here avoids a TDZ ReferenceError that
+            // silently killed every shadow observation (no card, no outcome).
+            const conversationKey = buildConversationKeyFromContext(ctx) ?? resolveConversationKeyForSession(ctx.sessionKey);
             if (ctx?.trigger === "cron" || sessionKind === "cron") {
                 if (sessionRef) {
                     recentRouteCacheBySession.set(sessionRef, { text: dedupeText, mode: routeMode, at: Date.now() });
@@ -1778,7 +1782,6 @@ export default definePluginEntry({
                 await debugLog(`[hook-result] source=${source} source_tag=${sourceTag} route=blocked burst session=${sessionRef}`);
                 return;
             }
-            const conversationKey = buildConversationKeyFromContext(ctx) ?? resolveConversationKeyForSession(ctx.sessionKey);
             const cached = sessionRef ? recentRouteCacheBySession.get(sessionRef) : undefined;
             if (sessionRef &&
                 cached &&
@@ -1988,6 +1991,7 @@ export default definePluginEntry({
         });
         api.on("agent_end", async (event, ctx) => {
             const pending = ctx.sessionId ? shiftPendingOutcome(ctx.sessionId) : undefined;
+            await debugLog(`[hook-agent-end] sessionId=${String(ctx?.sessionId ?? "none")} pending=${pending ? pending.decisionId : "none"}`);
             if (!pending)
                 return;
             try {

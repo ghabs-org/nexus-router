@@ -1955,6 +1955,10 @@ const modeResolution = await resolveRouteModeDetailsFromContext(api, ctx);
       );
 
       const sessionKind = classifySessionKind(ctx?.sessionKey);
+      // Hoisted: the route=off shadow branch below resolves the feedback sender
+      // with this key; declaring it here avoids a TDZ ReferenceError that
+      // silently killed every shadow observation (no card, no outcome).
+      const conversationKey = buildConversationKeyFromContext(ctx) ?? resolveConversationKeyForSession(ctx.sessionKey);
       if (ctx?.trigger === "cron" || sessionKind === "cron") {
         if (sessionRef) {
           recentRouteCacheBySession.set(sessionRef, { text: dedupeText, mode: routeMode, at: Date.now() });
@@ -2060,7 +2064,6 @@ const modeResolution = await resolveRouteModeDetailsFromContext(api, ctx);
         return;
       }
 
-      const conversationKey = buildConversationKeyFromContext(ctx) ?? resolveConversationKeyForSession(ctx.sessionKey);
       const cached = sessionRef ? recentRouteCacheBySession.get(sessionRef) : undefined;
       if (
         sessionRef &&
@@ -2300,6 +2303,9 @@ const modeResolution = await resolveRouteModeDetailsFromContext(api, ctx);
 
     api.on("agent_end", async (event: any, ctx: any) => {
       const pending = ctx.sessionId ? shiftPendingOutcome(ctx.sessionId) : undefined;
+      await debugLog(
+        `[hook-agent-end] sessionId=${String(ctx?.sessionId ?? "none")} pending=${pending ? pending.decisionId : "none"}`,
+      );
       if (!pending) return;
 
       try {
