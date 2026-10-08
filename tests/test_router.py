@@ -1309,7 +1309,7 @@ def test_provider_table_seed_enables_only_primary_runtime_providers(tmp_path, mo
     finally:
         conn.close()
 
-    assert enabled == {"openai-codex", "google-gemini-cli", "openrouter", "nvidia"}
+    assert enabled == {"anthropic", "openai-codex", "google-gemini-cli", "openrouter", "nvidia"}
     assert "github-copilot" in disabled
 
 

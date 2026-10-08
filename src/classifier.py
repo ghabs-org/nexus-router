@@ -332,10 +332,18 @@ def _prepare_openclaw_profile(profile: str = CLASSIFIER_PROFILE) -> None:
     source = Path.home() / ".openclaw"
     target = Path.home() / f".openclaw-{profile}"
 
+    # Bulk data dirs are never needed for `models status/set` or a classifier
+    # turn (auth + model config only). The home dir can be many GB (caches,
+    # logs, sessions) — copying it verbatim hangs tests and slows prod routes.
+    _profile_copy_ignore = shutil.ignore_patterns(
+        "npm", "logs", "tmp", "agents", "state", "codex-home", "memory",
+        "cache", "backups", "canvas", "cron", "completions", "flows",
+        "extensions*",
+    )
     try:
         if source.exists():
             target.mkdir(parents=True, exist_ok=True)
-            shutil.copytree(source, target, dirs_exist_ok=True)
+            shutil.copytree(source, target, dirs_exist_ok=True, ignore=_profile_copy_ignore)
 
         # Keep the classifier profile lean: auth + model config only.
         ext_dir = target / "extensions"
