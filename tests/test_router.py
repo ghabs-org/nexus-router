@@ -1437,3 +1437,40 @@ def test_router_applies_activated_fitted_weight_artifact(tmp_path):
 
     assert decision.selected_model == "p/cheap"
     assert "fitted_weights" in decision.mechanisms
+
+
+def test_shadow_compiled_prompt_persists_for_training(tmp_path, monkeypatch):
+    """Shadow/off observation of compiled prompts persists (cards need the id).
+
+    Auto mode still skips compiled-prompt persistence to avoid polluting
+    training data; source_type stays on the record for purity filtering.
+    """
+    import importlib
+
+    import src.db as db
+    import src.paths as paths
+
+    monkeypatch.setenv("NEXUS_ROUTER_DB_PATH", str(tmp_path / "routing.sqlite"))
+    importlib.reload(paths)
+    importlib.reload(db)
+    monkeypatch.setattr("src.router.write_decision", db.write_decision)
+    from src.router import Router
+
+    classifier = ClassifierOutput(
+        task_type="general_chat", complexity="low", needs_tools=False,
+        needs_vision=False, needs_long_context=False, cost_profile="balanced",
+        confidence=0.9,
+    )
+    signals = PreSignals(message_length=2)
+
+    shadow = Router(persist=True).route(
+        classifier, pre_signals=signals, route_mode="off", mode="shadow",
+        source_type="compiled-prompt",
+    )
+    assert shadow.decision_id, "shadow observation must persist for feedback/training"
+
+    auto = Router(persist=True).route(
+        classifier, pre_signals=signals, route_mode="auto",
+        source_type="compiled-prompt",
+    )
+    assert auto.decision_id is None, "auto compiled-prompt probes must not persist"

@@ -239,7 +239,15 @@ class Router:
 
         # Persist if enabled. Skip ephemeral compiled prompt probes: they pollute
         # training data and are not actual user messages.
-        should_persist = self.persist and (source_type or 'standalone') != 'compiled-prompt'
+        # Exception: explicit shadow/off observation exists to collect training
+        # signal (feedback cards need the decision_id); source_type stays on the
+        # record so training queries can filter for raw-user purity.
+        shadow_observation = (str(mode or "").strip().lower() == "shadow") or (
+            normalized_route_mode in ("off", "shadow")
+        )
+        should_persist = self.persist and (
+            (source_type or 'standalone') != 'compiled-prompt' or shadow_observation
+        )
         if should_persist:
             ph = provider_health.get(primary.provider)
             if ph is None:

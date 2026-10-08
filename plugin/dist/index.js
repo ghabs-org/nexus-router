@@ -115,6 +115,7 @@ const recentLastDecisionByDecisionId = new Map();
 const pendingOutcomeQueueBySessionId = new Map();
 const recentRouteCacheBySession = new Map();
 const recentSenderBySession = new Map();
+const recentSenderByConversation = new Map();
 const recentFeedbackPromptByDecisionId = new Map();
 const recentFeedbackSuppressedBySession = new Map();
 function rememberFeedbackSuppressed(sessionKey, suppressed) {
@@ -254,11 +255,15 @@ function rememberConversationContextForSession(sessionKey, context) {
         return;
     recentConversationContextBySession.set(sessionKey, { context: context.trim(), at: Date.now() });
 }
-function rememberSenderForSession(sessionKey, senderId, channelId) {
+function rememberSenderForSession(sessionKey, senderId, channelId, conversationKey) {
     const trimmedSender = String(senderId ?? "").trim();
     if (!sessionKey || !trimmedSender)
         return;
-    recentSenderBySession.set(sessionKey, { senderId: trimmedSender, channelId: channelId?.trim() || undefined, at: Date.now() });
+    const payload = { senderId: trimmedSender, channelId: channelId?.trim() || undefined, at: Date.now() };
+    recentSenderBySession.set(sessionKey, payload);
+    if (conversationKey?.trim()) {
+        recentSenderByConversation.set(conversationKey.trim(), payload);
+    }
 }
 function resolveSenderForSession(sessionKey) {
     if (!sessionKey)
@@ -271,6 +276,45 @@ function resolveSenderForSession(sessionKey) {
         return null;
     }
     return { senderId: entry.senderId, channelId: entry.channelId };
+}
+function resolveSenderForConversation(conversationKey) {
+    if (!conversationKey)
+        return null;
+    const entry = recentSenderByConversation.get(conversationKey);
+    if (!entry)
+        return null;
+    if (Date.now() - entry.at > RECENT_MESSAGE_TTL_MS) {
+        recentSenderByConversation.delete(conversationKey);
+        return null;
+    }
+    return { senderId: entry.senderId, channelId: entry.channelId };
+}
+function resolveSenderIdFromContext(ctx, event) {
+    const candidates = [
+        ctx?.senderId,
+        event?.senderId,
+        ctx?.from,
+        event?.from,
+        ctx?.userId,
+        event?.userId,
+        ctx?.telegramUserId,
+        event?.telegramUserId,
+        event?.telegram_user_id,
+    ];
+    for (const candidate of candidates) {
+        const trimmed = String(candidate ?? "").trim();
+        if (trimmed)
+            return trimmed;
+    }
+    return undefined;
+}
+function resolveFeedbackSender(ctx, event, sessionKey, conversationKey) {
+    return (resolveSenderForSession(sessionKey)
+        ?? resolveSenderForSession(ctx?.sessionKey)
+        ?? resolveSenderForConversation(conversationKey)
+        ?? (resolveSenderIdFromContext(ctx, event)
+            ? { senderId: String(resolveSenderIdFromContext(ctx, event)), channelId: ctx?.channelId ? String(ctx.channelId) : undefined }
+            : null));
 }
 function rememberFeedbackPrompt(decisionId) {
     const trimmed = String(decisionId ?? "").trim();
@@ -450,7 +494,7 @@ async function sendTelegramFeedbackCard(api, targetSenderId, decision, sourceTag
     const text = lines.join("\n");
     try {
         const telegram = api?.runtime?.telegram;
-        if (telegram?.sendMessageTelegram) {
+        if (targetSenderId && telegram?.sendMessageTelegram) {
             try {
                 const result = await telegram.sendMessageTelegram(targetSenderId, text, {
                     buttons: buildFeedbackKeyboard(decisionId),
@@ -478,6 +522,7 @@ async function sendTelegramFeedbackCard(api, targetSenderId, decision, sourceTag
             actual_model: actualModel || undefined,
             source_channel: "telegram",
             source_message_preview: opts?.messagePreview,
+            session_key: opts?.sessionKey,
         };
         const runtimePluginConfig = (api?.config?.plugins?.entries?.["nexus-router"]?.config ?? {});
         const loadedConfig = api?.config?.loadConfig?.();
@@ -594,6 +639,10 @@ function clearRecentRoutingState(sessionKey) {
     recentStartupBySession.delete(sessionKey);
     recentLastDecisionBySession.delete(sessionKey);
     recentSenderBySession.delete(sessionKey);
+    const conversationKey = resolveConversationKeyForSession(sessionKey);
+    if (conversationKey) {
+        recentSenderByConversation.delete(conversationKey);
+    }
 }
 function resetInMemoryRoutingState() {
     recentUserMessages.clear();
@@ -609,6 +658,7 @@ function resetInMemoryRoutingState() {
     pendingOutcomeQueueBySessionId.clear();
     recentRouteCacheBySession.clear();
     recentSenderBySession.clear();
+    recentSenderByConversation.clear();
     recentFeedbackPromptByDecisionId.clear();
     routeBurstBySession.clear();
     recentSlashCommandBySession.clear();
@@ -1322,10 +1372,7 @@ export default definePluginEntry({
                     if (!last || !last.decisionId) {
                         return { text: `No recent routing decision found. ${statusText} Send a message first, then use /route feedback to request a feedback card (or /route feedback on|off to toggle).` };
                     }
-                    const sender = resolveSenderForSession(ctx.sessionKey) ?? (ctx.senderId ? { senderId: String(ctx.senderId) } : null);
-                    if (!sender?.senderId) {
-                        return { text: "Cannot send feedback card: sender not resolved for this session." };
-                    }
+                    const sender = resolveFeedbackSender(ctx, event, ctx.sessionKey, conversationKey);
                     const syntheticDecision = {
                         decision_id: last.decisionId,
                         task_type: last.taskType,
@@ -1338,7 +1385,10 @@ export default definePluginEntry({
                         classifier_source: last.classifierSource,
                         reply_context_used: last.replyContextUsed,
                     };
-                    const sent = await sendTelegramFeedbackCard(api, sender.senderId, syntheticDecision, last.sourceTag, { messagePreview: last.promptText, sessionKey: ctx.sessionKey });
+                    const sent = await sendTelegramFeedbackCard(api, sender?.senderId, syntheticDecision, last.sourceTag, {
+                        messagePreview: last.promptText,
+                        sessionKey: ctx.sessionKey,
+                    });
                     const currentState = suppressed ? 'OFF' : 'ON';
                     return { text: (sent ? `Feedback card sent.` : `Failed to send feedback card (rate limited or bridge error).`) + ` Current: ${currentState}.` };
                 }
@@ -1572,8 +1622,9 @@ export default definePluginEntry({
             if (sessionKey && ctx.conversationId) {
                 rememberConversationKeyForSession(sessionKey, conversationKey);
             }
-            if (sessionKey && (ctx.senderId || event?.senderId)) {
-                rememberSenderForSession(sessionKey, String(ctx.senderId ?? event.senderId ?? ""), String(ctx.channelId ?? event.channel ?? ""));
+            const resolvedSenderId = resolveSenderIdFromContext(ctx, event);
+            if (sessionKey && resolvedSenderId) {
+                rememberSenderForSession(sessionKey, resolvedSenderId, String(ctx.channelId ?? event.channel ?? ""), conversationKey);
             }
             if (debugMode && sessionKey && rawText) {
                 console.log(`[nexus-router] captured inbound text for ${sessionKey} (${rawText.length} chars)`);
@@ -1704,7 +1755,7 @@ export default definePluginEntry({
                         selectedProvider: shadowDecision.selected_provider,
                         sessionKey: ctx.sessionKey,
                         shadowMode: true,
-                        targetSenderId: (resolveSenderForSession(ctx.sessionKey ?? sessionRef) ?? (ctx.senderId ? { senderId: String(ctx.senderId) } : undefined))?.senderId,
+                        targetSenderId: resolveFeedbackSender(ctx, event, ctx.sessionKey ?? sessionRef, conversationKey)?.senderId,
                     });
                 }
                 await debugLog(`[hook-result] source=${source} source_tag=${sourceTag} route=${routeMode} shadow decision=${shadowDecision.selected_model} task=${shadowDecision.task_type} confidence=${shadowDecision.confidence.toFixed(2)} score=${shadowDecision.score.toFixed(3)}`);
@@ -1753,8 +1804,8 @@ export default definePluginEntry({
                             const lastDecision = (ctx.sessionKey && recentLastDecisionBySession.get(ctx.sessionKey))
                                 || (conversationKey && takeLastDecisionForConversation(conversationKey))
                                 || recentLastDecisionGlobal;
-                            const sender = resolveSenderForSession(ctx.sessionKey ?? sessionRef) ?? (ctx.senderId ? { senderId: String(ctx.senderId) } : null);
-                            if (lastDecision && lastDecision.decisionId && sender?.senderId) {
+                            const sender = resolveFeedbackSender(ctx, event, ctx.sessionKey ?? sessionRef, conversationKey);
+                            if (lastDecision && lastDecision.decisionId) {
                                 // Build a minimal RouteResponse-like object from LastRouteDecision
                                 const syntheticDecision = {
                                     decision_id: lastDecision.decisionId,
@@ -1770,7 +1821,10 @@ export default definePluginEntry({
                                     reply_context_used: lastDecision.replyContextUsed,
                                 };
                                 // Fire-and-forget; do not block routing on notification success
-                                void sendTelegramFeedbackCard(api, sender.senderId, syntheticDecision, sourceTag, { messagePreview: routingText });
+                                void sendTelegramFeedbackCard(api, sender?.senderId, syntheticDecision, sourceTag, {
+                                    messagePreview: routingText,
+                                    sessionKey: ctx.sessionKey,
+                                });
                             }
                         }
                         catch (err) {
@@ -1852,13 +1906,14 @@ export default definePluginEntry({
                     selectedModel: decision.selected_model,
                 });
             }
-            const sender = resolveSenderForSession(ctx.sessionKey ?? sessionRef) ?? (ctx.senderId ? { senderId: String(ctx.senderId), channelId: ctx.channelId ? String(ctx.channelId) : undefined } : null);
+            const sender = resolveFeedbackSender(ctx, event, ctx.sessionKey ?? sessionRef, conversationKey);
             if (decision.decision_id) {
-                if (sender) {
-                    await sendTelegramFeedbackCard(api, sender.senderId, decision, sourceTag, { messagePreview: routingText, sessionKey: ctx.sessionKey });
-                }
-                else {
-                    await debugLog(`[feedback-card] skipped decision=${decision.decision_id} reason=missing_sender session=${ctx.sessionKey ?? sessionRef ?? ""}`);
+                const sent = await sendTelegramFeedbackCard(api, sender?.senderId, decision, sourceTag, {
+                    messagePreview: routingText,
+                    sessionKey: ctx.sessionKey,
+                });
+                if (!sent) {
+                    await debugLog(`[feedback-card] failed decision=${decision.decision_id} sender=${sender?.senderId ?? "bridge_only"}`);
                 }
             }
             const lastDecision = {
@@ -1971,15 +2026,18 @@ export default definePluginEntry({
                         error_type: failure.errorType,
                         quota_hint: failure.quotaHint,
                         quota_remaining_ratio: failure.quotaRemainingRatio,
+                        input_tokens: last?.usage?.input,
+                        output_tokens: last?.usage?.output,
+                        total_tokens: last?.usage?.total,
                     }),
                 });
                 if (pending.shadowMode) {
                     const decision = last;
                     const sender = pending.targetSenderId
                         ? { senderId: pending.targetSenderId }
-                        : resolveSenderForSession(pending.sessionKey ?? ctx.sessionKey);
-                    if (decision?.decisionId && sender?.senderId) {
-                        await sendTelegramFeedbackCard(api, sender.senderId, {
+                        : resolveFeedbackSender(ctx, event, pending.sessionKey ?? ctx.sessionKey, resolveConversationKeyForSession(pending.sessionKey ?? ctx.sessionKey));
+                    if (decision?.decisionId) {
+                        const sent = await sendTelegramFeedbackCard(api, sender?.senderId, {
                             decision_id: decision.decisionId,
                             task_type: decision.taskType,
                             confidence: decision.confidence,
@@ -1990,10 +2048,13 @@ export default definePluginEntry({
                             reason: decision.reason,
                             classifier_source: decision.classifierSource,
                             reply_context_used: decision.replyContextUsed,
-                        }, decision.sourceTag, { shadowMode: true, actualModel: outcomeModel, messagePreview: decision.promptText });
+                        }, decision.sourceTag, { shadowMode: true, actualModel: outcomeModel, messagePreview: decision.promptText, sessionKey: pending.sessionKey ?? ctx.sessionKey });
+                        if (!sent) {
+                            await debugLog(`[feedback-card] shadow failed decision=${pending.decisionId} sender=${sender?.senderId ?? "bridge_only"}`);
+                        }
                     }
                     else {
-                        await debugLog(`[feedback-card] shadow skipped decision=${pending.decisionId} reason=${decision ? 'missing_sender' : 'missing_decision'}`);
+                        await debugLog(`[feedback-card] shadow skipped decision=${pending.decisionId} reason=missing_decision`);
                     }
                 }
             }
