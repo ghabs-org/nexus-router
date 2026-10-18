@@ -77,3 +77,21 @@ def test_fetch_with_cache_retries_on_transient_errors(monkeypatch, tmp_path):
 
     assert payload["ok"] is True
     assert attempts["count"] == 3
+
+
+def test_supported_normalizers_preserve_bounds_and_direction():
+    for normalize, ceiling in (
+        (fb.normalize_coding, 100.0),
+        (fb.normalize_reasoning, 100.0),
+        (fb.normalize_speed, 200.0),
+        (fb.normalize_tools, 100.0),
+        (fb.normalize_multilingual, 100.0),
+    ):
+        assert normalize(-1.0) == 0.0
+        assert normalize(0.0) == 0.0
+        assert normalize(ceiling / 2) == 0.5
+        assert normalize(ceiling * 2) == 1.0
+    assert fb.normalize_cost(-1.0) == 1.0
+    assert fb.normalize_cost(0.0) == 1.0
+    assert fb.normalize_cost(10.0) == 0.5
+    assert fb.normalize_cost(40.0) == 0.0
