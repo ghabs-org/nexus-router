@@ -16,8 +16,6 @@ services:
       - /home/ubuntu/.local/state/nexus-router/generated:/app/generated
       - /home/ubuntu/.local/state/nexus-router/cache:/app/cache
       - /home/ubuntu/.local/state/nexus-router/artifacts:/app/artifacts
-      - /home/ubuntu/.openclaw:/root/.openclaw:ro
-      - /home/ubuntu/.codex:/root/.codex:ro
     environment:
       - PYTHONUNBUFFERED=1
       - OPENCODE_API_KEY=${OPENCODE_API_KEY:-}

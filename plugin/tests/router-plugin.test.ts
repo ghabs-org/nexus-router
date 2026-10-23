@@ -251,3 +251,14 @@ test("auto escalation threshold is calibrated to avoid escalating ordinary 0.72 
   assert.equal(shouldAutoEscalate(0.70), false);
   assert.equal(shouldAutoEscalate(0.72), false);
 });
+
+test("route command evidence lines record channel and session so probes cannot pass as Telegram", () => {
+  const receipt = __testHelpers.routeCommandLogLine("telegram", "agent:main:telegram:direct:1", "/route status");
+  assert.equal(receipt, "[hook-command] source=command channel=telegram session=agent:main:telegram:direct:1 cmd=/route status");
+  assert.match(__testHelpers.routeCommandLogLine(undefined, "", "/route"), /channel=unknown session=unknown cmd=\/route$/);
+  assert.match(__testHelpers.routeCommandLogLine("web chat", "s", "/route"), /channel=web_chat /);
+
+  const reply = __testHelpers.routeReplyLogLine("telegram", "s1", "set", "auto", "3/3");
+  assert.equal(reply, "[route-command] channel=telegram session=s1 action=set mode=auto persisted=3/3 replied");
+  assert.equal(__testHelpers.routeReplyLogLine("telegram", "s1", "status", "off"), "[route-command] channel=telegram session=s1 action=status mode=off replied");
+});

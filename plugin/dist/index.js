@@ -209,9 +209,9 @@ function rememberConversationRouteMode(conversationKey, mode, freeFilter) {
 async function persistRouteModePreference(routerUrl, key, mode, scope = "conversation", freeFilter = false) {
     const trimmedKey = key.trim();
     if (!trimmedKey)
-        return;
+        return false;
     try {
-        await fetch(`${routerUrl}/route-mode`, {
+        const res = await fetch(`${routerUrl}/route-mode`, {
             method: "POST",
             headers: {
                 "Content-Type": "application/json",
@@ -219,10 +219,28 @@ async function persistRouteModePreference(routerUrl, key, mode, scope = "convers
             },
             body: JSON.stringify({ key: trimmedKey, mode, scope, free_filter: freeFilter }),
         });
+        if (!res.ok)
+            await debugLog(`[route-persist] scope=${scope} status=${res.status} failed`);
+        return res.ok;
     }
-    catch {
+    catch (e) {
         // best-effort only; in-memory sticky mode remains as fallback
+        await debugLog(`[route-persist] scope=${scope} error=${e?.message ?? String(e)}`);
+        return false;
     }
+}
+// Live-path evidence: the checker reads these lines, so a /route command must
+// leave a trace even when no model turn follows it. Channel and session are
+// recorded so a synthetic probe can never stand in for a real Telegram command.
+function logField(value) {
+    return String(value ?? "unknown").replace(/\s+/g, "_") || "unknown";
+}
+function routeCommandLogLine(channel, sessionKey, rawText) {
+    return `[hook-command] source=command channel=${logField(channel)} session=${logField(sessionKey)} cmd=${rawText.slice(0, 80)}`;
+}
+function routeReplyLogLine(channel, sessionKey, action, mode, persisted) {
+    const suffix = persisted ? ` persisted=${persisted}` : "";
+    return `[route-command] channel=${logField(channel)} session=${logField(sessionKey)} action=${action} mode=${mode}${suffix} replied`;
 }
 async function loadPersistedRouteModePreference(routerUrl, key, scope = "conversation") {
     const trimmedKey = key.trim();
@@ -1282,6 +1300,8 @@ function shouldAutoEscalate(confidence) {
     return confidence < AUTO_ESCALATE_CONFIDENCE;
 }
 export const __testHelpers = {
+    routeCommandLogLine,
+    routeReplyLogLine,
     rememberRouteMode,
     rememberLastDecision,
     rememberFailedOverride,
@@ -1356,6 +1376,7 @@ export default definePluginEntry({
                 }
                 if (firstToken === "status") {
                     const scopeLabel = modeResolution.source === "default" ? "default" : `resolved from ${modeResolution.source}`;
+                    await debugLog(routeReplyLogLine(ctx.channelId ?? ctx.channel, ctx.sessionKey, "status", currentMode));
                     return buildRouteInteractiveReply(currentMode, scopeLabel, modeResolution.freeFilter);
                 }
                 // Handle /route free as shorthand for /route auto free
@@ -1419,12 +1440,15 @@ export default definePluginEntry({
                 if (channelOnlyKey && channelOnlyKey !== conversationKey) {
                     rememberConversationRouteMode(channelOnlyKey, normalized, hasFreeModifier);
                 }
+                const persisted = [];
                 if (conversationKey)
-                    await persistRouteModePreference(routerUrl, conversationKey, normalized, "conversation", hasFreeModifier);
+                    persisted.push(await persistRouteModePreference(routerUrl, conversationKey, normalized, "conversation", hasFreeModifier));
                 if (ctx.sessionKey)
-                    await persistRouteModePreference(routerUrl, ctx.sessionKey, normalized, "session", hasFreeModifier);
+                    persisted.push(await persistRouteModePreference(routerUrl, ctx.sessionKey, normalized, "session", hasFreeModifier));
                 if (channelOnlyKey)
-                    await persistRouteModePreference(routerUrl, channelOnlyKey, normalized, "channel", hasFreeModifier);
+                    persisted.push(await persistRouteModePreference(routerUrl, channelOnlyKey, normalized, "channel", hasFreeModifier));
+                const persistedLabel = `${persisted.filter(Boolean).length}/${persisted.length}`;
+                await debugLog(routeReplyLogLine(channelOnlyKey, ctx.sessionKey, "set", hasFreeModifier ? `${normalized}+free` : normalized, persistedLabel));
                 return buildRouteInteractiveReply(normalized, "this conversation", hasFreeModifier, false);
             },
         });
@@ -1611,6 +1635,9 @@ export default definePluginEntry({
             const isSlashCommand = rawText.startsWith("/");
             if (sessionKey && rawText && isSlashCommand) {
                 recentSlashCommandBySession.set(sessionKey, { at: Date.now(), cmd: rawText });
+            }
+            if (/^\/route(\s|$)/i.test(rawText)) {
+                void debugLog(routeCommandLogLine(channel, sessionKey, rawText));
             }
             if (sessionKey && rawText && !isSlashCommand) {
                 const previousConversationContext = rememberRecentConversationText(conversationKey, rawText);
