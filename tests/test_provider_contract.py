@@ -512,6 +512,41 @@ class TestUnknownProviderHealth:
                         f"{s.model_id} score {s.total_score} out of range for {task}"
 
 
+class TestLongContextAndVisionQuality:
+    """Fitting the input (window size, image support) is not enough: among
+    models that can take it, the stronger reasoner should win."""
+
+    def test_long_context_prefers_stronger_reasoner_at_equal_window(self):
+        models = [
+            _model("p/weak", "p", context=0.90, context_window=400_000, reasoning=0.60),
+            _model("p/strong", "p", context=0.90, context_window=400_000, reasoning=0.92),
+        ]
+        classifier = ClassifierOutput(task_type="long_context", needs_long_context=True, confidence=0.90)
+        scored = score_models(classifier, models, {"p": _health("p")}, {})
+        ranked = sorted((s for s in scored if not s.excluded), key=lambda s: -s.total_score)
+        assert ranked[0].model_id == "p/strong"
+
+    def test_long_context_prefers_larger_window_at_equal_quality(self):
+        models = [
+            _model("p/200k", "p", context=0.80, context_window=200_000),
+            _model("p/1m", "p", context=0.986, context_window=1_000_000),
+        ]
+        classifier = ClassifierOutput(task_type="long_context", needs_long_context=True, confidence=0.90)
+        scored = score_models(classifier, models, {"p": _health("p")}, {})
+        ranked = sorted((s for s in scored if not s.excluded), key=lambda s: -s.total_score)
+        assert ranked[0].model_id == "p/1m"
+
+    def test_vision_tie_is_broken_by_reasoning(self):
+        models = [
+            _model("p/weak", "p", vision=0.50, reasoning=0.60),
+            _model("p/strong", "p", vision=0.50, reasoning=0.92),
+        ]
+        classifier = ClassifierOutput(task_type="vision", needs_vision=True, confidence=0.90)
+        scored = score_models(classifier, models, {"p": _health("p")}, {})
+        weak, strong = (next(s for s in scored if s.model_id == m) for m in ("p/weak", "p/strong"))
+        assert strong.total_score > weak.total_score
+
+
 class TestLatencyAwareObjectives:
     def test_fast_utility_prefers_lowest_latency_healthy_provider(self):
         models = [

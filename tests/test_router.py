@@ -141,14 +141,24 @@ class TestScorer:
         assert text_only_grok, "Expected text-only Grok variants in scored models"
         assert all(s.excluded for s in text_only_grok), "Text-only models should be excluded from vision task"
 
-    def test_long_context_excludes_small_context_models(self, authed_models, provider_health_ok):
+    def test_long_context_excludes_small_context_models(self, provider_health_ok):
         classifier = ClassifierOutput(
             task_type="long_context", needs_long_context=True, confidence=0.85
         )
-        scored = score_models(classifier, authed_models, provider_health_ok, {})
+        models = [
+            {
+                "id": f"nvidia/{name}",
+                "provider": "nvidia",
+                "scores": {"context": 0.8, "reasoning": 0.8},
+                "features": {"contextWindow": window},
+                "availability": {"authed": True},
+            }
+            for name, window in (("small", 32_000), ("large", 1_000_000))
+        ]
+        scored = {s.model_id: s for s in score_models(classifier, models, provider_health_ok, {})}
         # Models with small context windows should be excluded
-        excluded = [s for s in scored if s.excluded and "context_too_small" in (s.exclusion_reason or "")]
-        assert excluded, "Should exclude models with insufficient context window"
+        assert "context_too_small" in (scored["nvidia/small"].exclusion_reason or "")
+        assert not scored["nvidia/large"].excluded
 
     def test_degraded_provider_excluded(self, authed_models):
         degraded_health = {
@@ -469,14 +479,14 @@ class TestScorer:
         weak = _reasoning_mode_total(task_fit=0.75, reasoning_score=0.80, health=0.80, learned=0.78, preference=0.5, speed_score=0.5, quota_penalty=0.0)
         assert strong > weak
 
-    def test_fast_utility_preference_order_prefers_gemini_3_flash_preview_over_2_5_flash(self):
+    def test_fast_utility_preference_order_prefers_gpt_6_luna_over_nemotron_ultra(self):
         import yaml
         policy_path = Path(__file__).parent.parent / "policies" / "routing.yaml"
         with open(policy_path) as f:
             routing_policy = yaml.safe_load(f)
 
         order = _build_preference_order("fast_utility", routing_policy)
-        assert order.index("google-gemini-cli/gemini-3-flash-preview") < order.index("google-gemini-cli/gemini-2.5-flash")
+        assert order.index("openai/gpt-6-luna") < order.index("nvidia/nemotron-3-ultra-550b-a55b")
 
     def test_fast_route_mode_changes_ranking_bias(self):
         classifier = ClassifierOutput(task_type="coding", complexity="medium", confidence=0.80)

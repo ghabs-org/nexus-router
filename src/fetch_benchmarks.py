@@ -126,6 +126,53 @@ def normalize_multilingual(mgsm_score: float, max_score: float = 100.0) -> float
 
 # ── Source fetchers (stubs — implement as data access becomes available) ──────
 
+def _mean(*values) -> Optional[float]:
+    present = [float(v) for v in values if isinstance(v, (int, float))]
+    return sum(present) / len(present) if present else None
+
+
+def score_aa_models(models_raw: list[dict]) -> dict[str, dict]:
+    """Turn Artificial Analysis leaderboard rows into score dimensions, keyed by slug.
+
+    The leaderboard uses camelCase fields and no longer publishes AA's coding
+    or agentic index, so both are rebuilt from their component evals. Quality
+    scores are relative to the leaderboard leader and mapped onto 0.5-1.0, the
+    range of the 0.70 default and the manual overrides, so a benchmarked
+    mid-tier model does not rank below one with no benchmark at all.
+
+    List prices are left out: the paid models OpenClaw runs here go through
+    subscriptions (Claude login, ChatGPT), where the quota penalty, not the
+    per-token price, is what limits use.
+    """
+    raw = {
+        m["slug"]: {
+            "reasoning": m.get("intelligenceIndex"),
+            "coding": _mean(m.get("terminalbenchHard"), m.get("scicode")),
+            "tools": _mean(m.get("terminalbenchHard"), m.get("tau2")),
+        }
+        for m in models_raw
+        if m.get("slug")
+    }
+    leaders = {
+        dim: max((dims[dim] for dims in raw.values() if isinstance(dims[dim], (int, float))), default=0.0)
+        for dim in ("reasoning", "coding", "tools")
+    }
+
+    result: dict[str, dict] = {}
+    for m in models_raw:
+        slug = m.get("slug")
+        if not slug:
+            continue
+        entry = {
+            dim: round(0.5 + 0.5 * max(0.0, min(1.0, value / leaders[dim])), 4)
+            for dim, value in raw[slug].items()
+            if isinstance(value, (int, float)) and leaders[dim] > 0
+        }
+        if entry:
+            result[slug] = entry
+    return result
+
+
 def fetch_artificialanalysis() -> dict[str, dict]:
     """
     Fetch speed, cost, and quality data from artificialanalysis.ai.
@@ -133,15 +180,10 @@ def fetch_artificialanalysis() -> dict[str, dict]:
     Uses the RSC (React Server Components) payload embedded in the page response.
     The data is a JSON array starting at a predictable offset in the payload.
 
-    Fields extracted:
-      coding_index       → coding
-      intelligence_index → reasoning
-      agentic_index      → proxy for tools
-      gpqa               → proxy for reasoning (cross-check)
-      livecodebench      → proxy for coding (cross-check)
-      price_1m_blended   → cost (inverted, normalized)
-      multilingual_aa.average.score → multilingual
-      context_window_tokens → context (derived)
+    Fields extracted (see score_aa_models):
+      intelligenceIndex                → reasoning
+      terminalbenchHard + scicode      → coding
+      terminalbenchHard + tau2         → tools
 
     The slug field is used for model name mapping.
     """
@@ -258,70 +300,11 @@ def fetch_artificialanalysis() -> dict[str, dict]:
         "gemini-2-0-flash":                "google-gemini-cli/gemini-2.0-flash",
     }
 
-    # Normalisation helpers (local to this function to avoid name collisions)
-    def _norm(val: float, ceiling: float, invert: bool = False) -> float:
-        if val is None:
-            return None
-        v = max(0.0, min(1.0, val / ceiling))
-        return round(1.0 - v if invert else v, 4)
-
-    MAX_INTELLIGENCE = 70.0  # approximate max observed intelligence_index
-    MAX_CODING       = 70.0
-    MAX_AGENTIC      = 80.0
-    MAX_BLENDED_COST = 15.0  # $/M — above this = cost score 0.0
-
     result: dict[str, dict] = {}
-    for m in models_raw:
-        slug = m.get("slug", "")
+    for slug, scores in score_aa_models(models_raw).items():
         oc_model = SLUG_MAP.get(slug) or _map_public_model_name(slug.replace("-", " ")) or _map_public_model_name(slug)
-        if not oc_model:
-            continue
-
-        entry: dict = {"_source": "artificialanalysis", "_updated_at": TODAY}
-
-        # Coding
-        ci = m.get("coding_index")
-        if ci is not None:
-            entry["coding"] = _norm(ci, MAX_CODING)
-
-        # Reasoning (intelligence_index + gpqa cross-check)
-        ii = m.get("intelligence_index")
-        gpqa = m.get("gpqa")
-        if ii is not None:
-            reasoning = _norm(ii, MAX_INTELLIGENCE)
-            if gpqa is not None:
-                reasoning = round((reasoning + float(gpqa)) / 2, 4)
-            entry["reasoning"] = reasoning
-        elif gpqa is not None:
-            entry["reasoning"] = round(float(gpqa), 4)
-
-        # Tools (agentic_index)
-        ai = m.get("agentic_index")
-        if ai is not None:
-            entry["tools"] = _norm(ai, MAX_AGENTIC)
-
-        # Cost (blended price, inverted)
-        price = m.get("price_1m_blended_3_to_1")
-        if price is not None and price > 0:
-            entry["cost"] = _norm(price, MAX_BLENDED_COST, invert=True)
-
-        # Multilingual
-        multi = m.get("multilingual_aa")
-        if multi and isinstance(multi, dict):
-            avg = multi.get("average", {})
-            ml_score = avg.get("score")
-            if ml_score is not None:
-                entry["multilingual"] = round(float(ml_score), 4)
-
-        # Coding cross-check with livecodebench
-        lcb = m.get("livecodebench")
-        if lcb is not None and "coding" in entry:
-            entry["coding"] = round((entry["coding"] + float(lcb)) / 2, 4)
-        elif lcb is not None:
-            entry["coding"] = round(float(lcb), 4)
-
-        if len(entry) > 2:
-            result[oc_model] = entry
+        if oc_model:
+            result[oc_model] = {"_source": "artificialanalysis", "_updated_at": TODAY, **scores}
 
     # gemini-3.1-pro-preview should be in both providers
     g31 = result.get("google-gemini-cli/gemini-3.1-pro-preview")

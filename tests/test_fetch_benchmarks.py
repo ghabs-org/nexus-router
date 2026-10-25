@@ -95,3 +95,20 @@ def test_supported_normalizers_preserve_bounds_and_direction():
     assert fb.normalize_cost(0.0) == 1.0
     assert fb.normalize_cost(10.0) == 0.5
     assert fb.normalize_cost(40.0) == 0.0
+
+
+def test_score_aa_models_reads_camelcase_fields_relative_to_the_leader():
+    rows = [
+        {"slug": "leader", "intelligenceIndex": 60.0, "scicode": 0.6, "terminalbenchHard": 0.4,
+         "price1mInputTokens": 4, "price1mOutputTokens": 20},
+        {"slug": "mid", "intelligenceIndex": 30.0, "scicode": 0.25, "tau2": 0.9},
+        {"slug": "unscored", "gpqa": 0.9},
+    ]
+
+    scores = fb.score_aa_models(rows)
+
+    # List prices do not become cost scores
+    assert scores["leader"] == {"reasoning": 1.0, "coding": 1.0, "tools": 0.7222}
+    # Half the leader's index lands halfway between 0.5 and 1.0
+    assert scores["mid"] == {"reasoning": 0.75, "coding": 0.75, "tools": 1.0}
+    assert "unscored" not in scores

@@ -73,12 +73,14 @@ COST_PROFILE_WEIGHT = {
 # Per-task routing objective weights.
 # Explicitly captures task tradeoffs:
 # - fast_utility: latency-first among healthy models
-# - reasoning/coding: quality-first (latency secondary)
+# - reasoning/coding/long_context/vision: quality-first (latency secondary)
 TASK_OBJECTIVE_WEIGHTS = {
     "fast_utility": {"quality": 0.18, "latency": 0.52, "reliability": 0.15, "cost": 0.15},
     "reasoning": {"quality": 0.62, "latency": 0.05, "reliability": 0.23, "cost": 0.10},
     "coding": {"quality": 0.58, "latency": 0.08, "reliability": 0.22, "cost": 0.12},
     "code_review": {"quality": 0.56, "latency": 0.08, "reliability": 0.24, "cost": 0.12},
+    "long_context": {"quality": 0.60, "latency": 0.05, "reliability": 0.23, "cost": 0.12},
+    "vision": {"quality": 0.58, "latency": 0.08, "reliability": 0.22, "cost": 0.12},
     "default": {"quality": 0.42, "latency": 0.18, "reliability": 0.22, "cost": 0.18},
 }
 
@@ -415,6 +417,11 @@ def _quality_component(task_type: str, task_fit: float, scores_raw: dict) -> flo
     if task_type == "code_review":
         review = float(scores_raw.get("review", task_fit))
         return min(1.0, max(0.0, (task_fit + review) / 2.0))
+    if task_type in ("long_context", "vision"):
+        # Window size / image support only say the model can take the input;
+        # reasoning (the dimension with benchmark data) says how well it uses it.
+        reasoning = float(scores_raw.get("reasoning", task_fit))
+        return min(1.0, max(0.0, (task_fit + reasoning) / 2.0))
     return min(1.0, max(0.0, task_fit))
 
 

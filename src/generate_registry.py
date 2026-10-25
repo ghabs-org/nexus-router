@@ -8,14 +8,23 @@ Generate normalized model registry from:
 
 Output: generated/models.json
 
+Only models OpenClaw is configured to use are included; OpenClaw refuses to
+run the rest. That means the catalog tag "configured" and, when the catalog
+carries it (scripts/refresh_catalog.py adds it), a match in OpenClaw's
+agents.defaults.modelPolicy.allow ("modelPolicyAllow"): some built-in models
+are tagged "configured" without being allowed.
+
 Flags:
   --only-configured       Include only models whose provider has auth=true
   --providers A,B,C       Include only models from listed providers
   --all                   Include all 800+ catalog models (default without flags)
+  --include-unconfigured  Also include models without the "configured" tag
 """
 
 import argparse
+import fnmatch
 import json
+import math
 import re
 import sys
 from datetime import datetime, timezone
@@ -244,19 +253,11 @@ def resolve_scores(
             defaults[k] = v
             source[k] = "family:default"
 
-    # Apply context score from context window size
+    # Apply context score from context window size: 0.80 at 200k (the
+    # long_context minimum), +0.08 per doubling, so 1M clearly outranks 200k
     ctx = features.get("contextWindow", 0)
-    if ctx >= 900_000:
-        defaults["context"] = 0.96
-        source["context"] = "derived:context_window"
-    elif ctx >= 200_000:
-        defaults["context"] = 0.90
-        source["context"] = "derived:context_window"
-    elif ctx >= 100_000:
-        defaults["context"] = 0.80
-        source["context"] = "derived:context_window"
-    elif ctx > 0:
-        defaults["context"] = 0.65
+    if ctx > 0:
+        defaults["context"] = round(min(1.0, max(0.5, 0.80 + 0.08 * math.log2(ctx / 200_000))), 4)
         source["context"] = "derived:context_window"
 
     # Apply vision score from modalities
@@ -293,6 +294,16 @@ def resolve_scores(
                 source[k] = f"benchmark:{source_name}"
             else:
                 source[k] = f"benchmark-inherited:{bench_key_used}:{source_name}"
+
+    # No public benchmark covers code review or summarization; derive them from
+    # the benchmarked dimensions they lean on rather than keep the 0.70 default
+    if isinstance(bench_entry.get("reasoning"), (int, float)):
+        if "summarize" not in bench_entry:
+            defaults["summarize"] = bench_entry["reasoning"]
+            source["summarize"] = "derived:benchmark_reasoning"
+        if "review" not in bench_entry and isinstance(bench_entry.get("coding"), (int, float)):
+            defaults["review"] = round((bench_entry["coding"] + bench_entry["reasoning"]) / 2, 4)
+            source["review"] = "derived:benchmark_coding_reasoning"
 
     return defaults, source
 
@@ -331,13 +342,23 @@ def _expand_cli_backed_entries(raw_models: list[dict]) -> list[dict]:
         clone["key"] = cli_key
         clone["available"] = True
         clone["local"] = False
-        tags = list(clone.get("tags") or [])
+        # The clone key is not on OpenClaw's allowlist, so it is never "configured".
+        tags = [t for t in clone.get("tags") or [] if t != "configured"]
         if "runtime:google-gemini-cli" not in tags:
             tags.append("runtime:google-gemini-cli")
         clone["tags"] = tags
         models.append(clone)
         existing.add(cli_key)
     return models
+
+
+def _is_configured(entry: dict) -> bool:
+    return "configured" in (entry.get("tags") or [])
+
+
+def _is_allowed(key: str, allow: list[str] | None) -> bool:
+    """Match OpenClaw's model allowlist; None or empty allows every model."""
+    return not allow or any(fnmatch.fnmatchcase(key, pattern) for pattern in allow)
 
 
 def normalize(
@@ -347,8 +368,10 @@ def normalize(
     benchmarks: dict,
     only_providers: set[str] | None = None,
     outcome_counts: dict[str, int] | None = None,
+    configured_only: bool = False,
 ) -> list[dict]:
     models = []
+    allow = raw.get("modelPolicyAllow") if configured_only else None
     raw_models = _expand_cli_backed_entries(raw.get("models", []))
     for entry in raw_models:
         key = entry.get("key", "")
@@ -359,6 +382,10 @@ def normalize(
 
         # Provider filter
         if only_providers and provider not in only_providers:
+            continue
+
+        # Allowlist filter: OpenClaw tags the models it is configured to use
+        if configured_only and not (_is_configured(entry) and _is_allowed(key, allow)):
             continue
 
         input_modalities = _input_modalities(entry.get("input"))
@@ -382,10 +409,18 @@ def normalize(
         for k, v in manual.items():
             if k == "is_free":
                 continue
+            if k == "available":
+                # Lets overrides.yaml retire a model the catalog still lists
+                availability["authed"] = availability["available"] = bool(v)
+                continue
             scores[k] = v
             score_source[k] = "override:manual"
 
         features["is_free"] = resolve_is_free(provider, model_id, key, manual)
+        # A free endpoint costs nothing, whatever the model's list price
+        if features["is_free"] and "cost" not in manual:
+            scores["cost"] = 1.0
+            score_source["cost"] = "derived:is_free"
 
         models.append({
             "id": key,
@@ -409,6 +444,8 @@ def main():
                         help="Comma-separated provider ids to include, e.g. openai-codex,github-copilot")
     parser.add_argument("--all", dest="include_all", action="store_true",
                         help="Include all 800+ catalog models (default without filters)")
+    parser.add_argument("--include-unconfigured", action="store_true",
+                        help="Also include models OpenClaw is not configured to use (no 'configured' tag)")
     parser.add_argument("--purge-cold-start", action="store_true",
                         help=(
                             f"Skip family priors for models with >= {_COLD_START_MIN_OUTCOMES} outcomes "
@@ -464,14 +501,28 @@ def main():
         only_providers = authed_providers
         print(f"Only-configured filter: {sorted(only_providers)}")
 
+    configured_only = not args.include_unconfigured
+    if configured_only:
+        if any(_is_configured(m) for m in raw.get("models", [])):
+            print("Allowlist filter: skipping models without OpenClaw's 'configured' tag")
+            if raw.get("modelPolicyAllow"):
+                print(f"  and models outside its {len(raw['modelPolicyAllow'])}-entry modelPolicy.allow")
+        else:
+            print("WARNING: no catalog model has the 'configured' tag — including all models")
+            configured_only = False
+
     print("Normalizing...")
-    models = normalize(raw, families, overrides, benchmarks, only_providers, outcome_counts=outcome_counts)
+    models = normalize(
+        raw, families, overrides, benchmarks, only_providers,
+        outcome_counts=outcome_counts, configured_only=configured_only,
+    )
 
     result = {
         "generatedAt": datetime.now(timezone.utc).isoformat(),
         "totalModels": len(models),
         "filter": {
             "onlyConfigured": args.only_configured,
+            "configuredOnly": configured_only,
             "providers": sorted(only_providers) if only_providers else None,
         },
         "models": models,

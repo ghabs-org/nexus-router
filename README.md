@@ -118,6 +118,26 @@ Default objective profiles in `src/scorer.py`:
 - `reasoning`: quality 0.62, latency 0.05, reliability 0.23, cost 0.10
 - `coding`: quality 0.58, latency 0.08, reliability 0.22, cost 0.12
 - `code_review`: quality 0.56, latency 0.08, reliability 0.24, cost 0.12
+- `long_context`: quality 0.60, latency 0.05, reliability 0.23, cost 0.12
+- `vision`: quality 0.58, latency 0.08, reliability 0.22, cost 0.12
+
+For `long_context` and `vision`, quality averages the task score (context
+window, which scales +0.08 per doubling from 0.80 at 200k, or vision support)
+with the model's reasoning score, so the stronger model wins among those that
+can take the input.
+
+### Where model scores come from
+
+- Artificial Analysis: Intelligence Index → `reasoning`, Terminal-Bench Hard +
+  SciCode → `coding`. Scores are relative to the leaderboard leader, mapped
+  onto 0.5–1.0 (the range of the 0.70 default for models with no benchmark).
+- `review` and `summarize` have no public benchmark; they derive from
+  coding + reasoning and from reasoning.
+- Free endpoints (`nvidia/*`, OpenRouter `:free`) score `cost` 1.0; other
+  models keep 0.70. List prices are not used: the paid models here run on
+  subscriptions, where the quota penalty limits use.
+- `policies/overrides.yaml` sets scores by hand, and `available: false` there
+  retires a model its provider has shut down but the catalog still lists.
 
 Latency freshness handling:
 - latency older than 30 minutes is down-weighted
@@ -143,7 +163,7 @@ Latency freshness handling:
 pip install pyyaml
 
 # Refresh model catalog
-openclaw models list --all --json > ~/.local/state/nexus-router/generated/openclaw-models.json
+python scripts/refresh_catalog.py
 
 # Generate normalized registry
 python src/generate_registry.py
@@ -151,10 +171,24 @@ python src/generate_registry.py
 
 ## Regenerate catalog
 
+The daily `nexus-router-benchmark-sync` job refreshes the catalog, the
+benchmarks and the registry, then restarts the router (it loads the registry
+once at startup). To do it by hand:
+
 ```bash
-openclaw models list --all --json > ~/.local/state/nexus-router/generated/openclaw-models.json
+python scripts/refresh_catalog.py   # add --dry-run to only show the diff
 python src/generate_registry.py
+docker restart nexus-router-1
 ```
+
+`refresh_catalog.py` keeps the previous catalog (exit 2) when the fetch looks
+partial: no models, the total halving, or a provider losing most of its models
+while its discovery reports a sign-in error. A provider that vanishes without a
+discovery outcome is treated as disabled in OpenClaw. It also stores OpenClaw's
+`agents.defaults.modelPolicy.allow` in the catalog. The registry includes only
+models OpenClaw is configured to use: tagged `configured` and matching that
+allowlist (some built-in models are tagged without being allowed). Pass
+`--include-unconfigured` to `generate_registry.py` to keep the rest.
 
 ## Local ModernBERT classifier
 

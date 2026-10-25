@@ -14,6 +14,7 @@ overrides:
     tools: 0.94
 
   openrouter/qwen/qwen3-coder:free:
+    available: false  # OpenRouter returns 404, checked 2026-10-25
     coding: 0.84
     review: 0.80
     reasoning: 0.78
@@ -26,6 +27,7 @@ overrides:
     is_free: true
 
   nvidia/qwen/qwen3-coder-480b-a35b-instruct:
+    available: false  # NVIDIA end of life (410), checked 2026-10-25
     coding: 0.86
     review: 0.82
     reasoning: 0.80
@@ -38,6 +40,7 @@ overrides:
     is_free: true
 
   nvidia/deepseek-ai/deepseek-v4-pro:
+    available: false  # NVIDIA end of life 2026-08-07 (410), checked 2026-10-25
     coding: 0.84
     review: 0.83
     reasoning: 0.88
@@ -50,6 +53,7 @@ overrides:
     is_free: true
 
   nvidia/deepseek-ai/deepseek-v4-flash:
+    available: false  # NVIDIA end of life 2026-08-07 (410), checked 2026-10-25
     coding: 0.78
     review: 0.76
     reasoning: 0.76
@@ -60,6 +64,39 @@ overrides:
     tools: 0.72
     multilingual: 0.80
     is_free: true
+
+  # Still in OpenClaw's catalog but unusable, checked 2026-10-25 with
+  # `openclaw infer model run --local`. Recheck before re-enabling.
+  # NVIDIA free tier: end of life (HTTP 410)
+  nvidia/minimaxai/minimax-m2.7: {available: false}
+  nvidia/minimaxai/minimax-m3: {available: false}
+  nvidia/qwen/qwen3.5-397b-a17b: {available: false}
+  nvidia/qwen/qwen3.5-122b-a10b: {available: false}
+  nvidia/qwen/qwen3-next-80b-a3b-instruct: {available: false}
+  nvidia/z-ai/glm-5.1: {available: false}
+  nvidia/z-ai/glm-5.2: {available: false}
+  nvidia/meta/llama-3.3-70b-instruct: {available: false}
+  nvidia/mistralai/mistral-medium-3.5-128b: {available: false}
+  nvidia/mistralai/mistral-small-4-119b-2603: {available: false}
+  nvidia/nemotron-3-nano-30b-a3b: {available: false}
+  nvidia/openai/gpt-oss-120b: {available: false}
+  nvidia/stepfun-ai/step-3.5-flash: {available: false}
+  nvidia/stepfun-ai/step-3.7-flash: {available: false}
+  # NVIDIA: not found (HTTP 404)
+  nvidia/moonshotai/kimi-k2.6: {available: false}
+  nvidia/nemotron-3-super-120b-a12b: {available: false}
+  # OpenRouter: not found (HTTP 404)
+  openrouter/arcee-ai/trinity-large-preview:free: {available: false}
+  openrouter/deepseek/deepseek-v4-flash:free: {available: false}
+  openrouter/elephant-alpha:free: {available: false}
+  openrouter/minimax/minimax-m2.5:free: {available: false}
+  openrouter/meta-llama/llama-3.3-70b-instruct:free: {available: false}
+  openrouter/openai/gpt-oss-120b:free: {available: false}
+  # OpenRouter: bills per token and the account has no credits (HTTP 402)
+  openrouter/auto: {available: false}
+  # OpenRouter: rerankers, not chat models
+  openrouter/cohere/rerank-4-fast:free: {available: false}
+  openrouter/cohere/rerank-4-pro:free: {available: false}
 
 # Example:
 # overrides:
