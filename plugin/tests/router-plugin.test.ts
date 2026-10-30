@@ -20,6 +20,10 @@ const {
   chooseUnblockedFallback,
   shouldAutoEscalate,
   resetInMemoryRoutingState,
+  normalizeAgentEndEvent,
+  toModelRef,
+  hasExplicitModelSelection,
+  isConfiguredOwner,
 } = __testHelpers;
 
 test("explicit auto mode stays sticky beyond the recent-message TTL", async () => {
@@ -261,4 +265,56 @@ test("route command evidence lines record channel and session so probes cannot p
   const reply = __testHelpers.routeReplyLogLine("telegram", "s1", "set", "auto", "3/3");
   assert.equal(reply, "[route-command] channel=telegram session=s1 action=set mode=auto persisted=3/3 replied");
   assert.equal(__testHelpers.routeReplyLogLine("telegram", "s1", "status", "off"), "[route-command] channel=telegram session=s1 action=status mode=off replied");
+});
+
+test("provider errors on the last assistant message count as failures", () => {
+  const event = normalizeAgentEndEvent({
+    success: true,
+    messages: [
+      { role: "user", content: "hi" },
+      { role: "assistant", stopReason: "error", errorMessage: "429 Provider returned error" },
+    ],
+  });
+  assert.equal(event.success, false);
+  const failure = inferFailureFromRuntime(event);
+  assert.equal(failure.httpStatus, 429);
+  assert.equal(failure.shouldCooldownOverride, true);
+
+  const ok = { success: true, messages: [{ role: "assistant", stopReason: "stop" }] };
+  assert.equal(normalizeAgentEndEvent(ok).success, true);
+});
+
+test("model refs compare with the provider prefix", () => {
+  assert.equal(toModelRef("openrouter", "google/gemma:free"), "openrouter/google/gemma:free");
+  assert.equal(toModelRef("openai", "openai/gpt"), "openai/gpt");
+  assert.equal(toModelRef("openai", undefined), undefined);
+});
+
+test("a run off the configured default is left alone by the router", () => {
+  const config = { agents: { defaults: { model: { primary: "nvidia/default" } } } };
+  assert.equal(hasExplicitModelSelection(config, { modelProviderId: "openai", modelId: "pinned" }), true);
+  assert.equal(hasExplicitModelSelection(config, { modelProviderId: "nvidia", modelId: "default" }), false);
+  assert.equal(hasExplicitModelSelection(config, {}), false);
+  assert.equal(hasExplicitModelSelection({}, { modelProviderId: "openai", modelId: "pinned" }), false);
+});
+
+test("the /route shortcut only accepts configured owners", () => {
+  const config = { commands: { ownerAllowFrom: ["telegram:123"] } };
+  assert.equal(isConfiguredOwner(config, "telegram", "123"), true);
+  assert.equal(isConfiguredOwner(config, "telegram", "999"), false);
+  assert.equal(isConfiguredOwner(config, "webchat", "123"), false);
+  assert.equal(isConfiguredOwner(config, "telegram", "telegram:123"), true);
+  assert.equal(isConfiguredOwner(config, "webchat", "telegram:123"), false);
+  assert.equal(isConfiguredOwner(config, "telegram", ""), false);
+  assert.equal(isConfiguredOwner({}, "telegram", "123"), false);
+});
+
+test("system wake-ups skip routing but real user turns do not", () => {
+  const { isBackgroundTrigger } = __testHelpers;
+  assert.equal(isBackgroundTrigger("event", "compiled-prompt"), true);
+  assert.equal(isBackgroundTrigger("heartbeat", "compiled-prompt"), true);
+  assert.equal(isBackgroundTrigger("memory", "compiled-prompt"), true);
+  assert.equal(isBackgroundTrigger("event", "raw-user"), false);
+  assert.equal(isBackgroundTrigger("user", "compiled-prompt"), false);
+  assert.equal(isBackgroundTrigger(undefined, "compiled-prompt"), false);
 });

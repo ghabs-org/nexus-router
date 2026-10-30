@@ -669,7 +669,10 @@ def classify_with_model(
                 object.__setattr__(parsed, "classifier_model", candidate)
                 return parsed
 
-    # OpenClaw CLI fallback
+    # OpenClaw CLI fallback. The Docker deploy disables it: the container has no
+    # gateway credentials, so each candidate burns ~7s and fails.
+    if os.environ.get("NEXUS_ROUTER_DISABLE_CLI_CLASSIFIER", "").strip() == "1":
+        return None
     if not shutil.which(binary):
         return None
 

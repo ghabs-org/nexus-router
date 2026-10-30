@@ -180,3 +180,54 @@ def test_route_falls_back_to_llm_when_local_unavailable(monkeypatch):
     assert status == 200
     assert body["classifier_source"] == "llm"
     assert "local_unavailable" in body["classifier_debug"]
+
+
+def test_failed_llm_reclassification_keeps_local_result(monkeypatch):
+    from src.types import ClassifierOutput
+
+    monkeypatch.setattr(
+        "src.server.classify_with_local_model",
+        lambda *_args, **_kwargs: type(
+            "Result",
+            (),
+            {
+                "classifier": ClassifierOutput(
+                    task_type="general_chat",
+                    complexity="medium",
+                    confidence=0.91,
+                    classifier_provider="local",
+                    classifier_model="onnx:/app/artifacts/router-classifier/onnx/model.onnx",
+                ),
+                "confidence": 0.91,
+                "margin": 0.31,
+                "top2": [("general_chat", 0.91), ("reasoning", 0.40)],
+                "artifact_dir": "/app/artifacts/router-classifier/onnx",
+            },
+        )(),
+    )
+    monkeypatch.setattr("src.server.classify_with_model", lambda **_kwargs: None)
+
+    status, body = _MockHandler().call_route({
+        "message": "What do you think about the plan we discussed earlier today?",
+        "use_llm_classifier": True,
+        "conversation_context": "We were discussing the rollout plan.",
+    })
+    assert status == 200
+    assert body["classifier_source"] == "local"
+
+
+def test_cli_classifier_can_be_disabled(monkeypatch):
+    from src import classifier as classifier_module
+
+    calls = []
+    monkeypatch.setenv("NEXUS_ROUTER_DISABLE_CLI_CLASSIFIER", "1")
+    monkeypatch.setattr(classifier_module, "_call_direct_provider_classifier", lambda *_a, **_k: None)
+    monkeypatch.setattr(classifier_module, "_run_openclaw_classifier_turn", lambda *_a, **_k: calls.append(1))
+
+    result = classifier_module.classify_with_model(
+        message="hello there",
+        pre_signals=classifier_module.extract_pre_signals("hello there"),
+        model="nvidia/google/gemma-4-31b-it",
+    )
+    assert result is None
+    assert calls == []

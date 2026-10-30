@@ -366,6 +366,9 @@ class RouterHandler(BaseHTTPRequestHandler):
                     classifier_source = "heuristic"
                     classifier_debug["heuristic_reason"] = heuristic_reason
 
+            # Keep the earlier result so a failed LLM pass can't discard it.
+            pre_llm_classifier = classifier
+            pre_llm_source = classifier_source
             if should_reclassify_with_llm(classifier, use_llm, classifier_context, message):
                 classifier = None
                 classifier_source = "fallback"
@@ -382,6 +385,9 @@ class RouterHandler(BaseHTTPRequestHandler):
                 )
                 if classifier is not None:
                     classifier_source = "llm"
+                elif pre_llm_classifier is not None:
+                    classifier = pre_llm_classifier
+                    classifier_source = pre_llm_source
 
             reply_context_used = (
                 classifier_source == "llm"

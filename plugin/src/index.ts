@@ -789,6 +789,13 @@ function inferCronLabel(prompt: string): string {
   return "job";
 }
 
+// System wake-ups (exec completions, memory flushes) stay on the configured
+// default instead of spending a routed model on an acknowledgement.
+function isBackgroundTrigger(trigger: string | undefined, source: "compiled-prompt" | "raw-user"): boolean {
+  if (trigger === "heartbeat") return true;
+  return (trigger === "memory" || trigger === "event") && source !== "raw-user";
+}
+
 function buildSourceTag(ctx: any, source: "compiled-prompt" | "raw-user", prompt: string, startupReason?: string | null): string {
   if (ctx?.trigger === "cron" || classifySessionKind(ctx?.sessionKey) === "cron") {
     return `cron:${inferCronLabel(prompt)}`;
@@ -911,6 +918,45 @@ function chooseUnblockedFallback(fallbacks: string[], sessionKey: string | undef
     }
   }
   return null;
+}
+
+// A provider error ends the run with success=true and leaves the failure on the
+// final assistant message, so read it from there as well.
+function normalizeAgentEndEvent(event: any): any {
+  const messages = Array.isArray(event?.messages) ? event.messages : [];
+  const lastAssistant = [...messages].reverse().find((m: any) => m?.role === "assistant");
+  if (!event?.success || lastAssistant?.stopReason !== "error") return event;
+  return { ...event, success: false, error: event.error ?? String(lastAssistant.errorMessage ?? "provider error") };
+}
+
+function toModelRef(provider?: string, model?: string): string | undefined {
+  if (!model) return undefined;
+  return provider && !model.startsWith(`${provider}/`) ? `${provider}/${model}` : model;
+}
+
+// A run on anything other than the configured default means the session has a
+// /model pin, or core is already walking its fallback chain. Either way the
+// router must not replace it: a pin disables fallbacks, so a bad pick is fatal.
+function hasExplicitModelSelection(config: any, ctx: any): boolean {
+  if (!ctx?.modelProviderId || !ctx?.modelId) return false;
+  const agent = (config?.agents?.list ?? []).find((a: any) => a?.id === ctx.agentId);
+  const configured = agent?.model ?? config?.agents?.defaults?.model;
+  const primary = typeof configured === "string" ? configured : configured?.primary;
+  if (typeof primary !== "string" || !primary) return false;
+  return toModelRef(ctx.modelProviderId, ctx.modelId) !== primary;
+}
+
+// Only configured owners may use the before_dispatch shortcut; anyone else goes
+// through core's normal command authorization.
+function isConfiguredOwner(config: any, channel: unknown, senderId: unknown): boolean {
+  const sender = String(senderId ?? "").trim();
+  if (!sender) return false;
+  const owners = config?.commands?.ownerAllowFrom;
+  if (!Array.isArray(owners)) return false;
+  // Never trust a channel prefix in the sender id: it must match the real channel.
+  const prefix = `${String(channel ?? "")}:`;
+  const qualified = sender.startsWith(prefix) ? sender : `${prefix}${sender}`;
+  return owners.map(String).includes(qualified);
 }
 
 function inferFailureFromRuntime(event: any): FailureInference {
@@ -1536,6 +1582,10 @@ function shouldAutoEscalate(confidence: number): boolean {
 }
 
 export const __testHelpers = {
+  normalizeAgentEndEvent,
+  toModelRef,
+  hasExplicitModelSelection,
+  isConfiguredOwner,
   routeCommandLogLine,
   routeReplyLogLine,
   rememberRouteMode,
@@ -1546,6 +1596,7 @@ export const __testHelpers = {
   rememberConversationContextForSession,
   resolveRouteModeDetailsFromContext,
   shouldUseContextualLlmClassifier,
+  isBackgroundTrigger,
   shouldBypassCompiledRetryRouting,
   classifySessionKind,
   isShortFollowUpForContextualRouting,
@@ -1587,12 +1638,7 @@ export default definePluginEntry({
       await debugLog(`[route-reset] session=${sessionKey ?? "unknown"} cleared-ephemeral-state reason=${event.reason ?? "unknown"}`);
     });
 
-    api.registerCommand({
-      name: "route",
-      description: "Choose routing mode for model selection.",
-      acceptsArgs: true,
-      requireAuth: true,
-      handler: async (ctx: any) => {
+    const handleRouteCommand = async (ctx: any): Promise<any> => {
       const rawArgs = ctx.args?.trim() ?? "";
       const loweredArgs = rawArgs.toLowerCase();
       const tokens = loweredArgs.split(/\s+/).filter(Boolean);
@@ -1701,7 +1747,14 @@ export default definePluginEntry({
         const persistedLabel = `${persisted.filter(Boolean).length}/${persisted.length}`;
         await debugLog(routeReplyLogLine(channelOnlyKey, ctx.sessionKey, "set", hasFreeModifier ? `${normalized}+free` : normalized, persistedLabel));
         return buildRouteInteractiveReply(normalized, "this conversation", hasFreeModifier, false);
-      },
+    };
+
+    api.registerCommand({
+      name: "route",
+      description: "Choose routing mode for model selection.",
+      acceptsArgs: true,
+      requireAuth: true,
+      handler: handleRouteCommand,
     });
 
     // ── Feedback card interactive handler ─────────────────────────────────────
@@ -1881,7 +1934,7 @@ export default definePluginEntry({
       void debugLog(`[feedback-handler] failed to register: ${e?.message ?? String(e)}`);
     }
 
-    api.on("before_dispatch", (event: any, ctx: any) => {
+    api.on("before_dispatch", async (event: any, ctx: any) => {
       const rawText = (event.body ?? event.content ?? "").trim();
       const sessionKey = ctx.sessionKey ?? event.sessionKey;
       const channel = ctx.channelId ?? event.channel ?? "unknown";
@@ -1889,11 +1942,24 @@ export default definePluginEntry({
 
       // Skip slash commands — they are not user prompts and should not be routed.
       const isSlashCommand = rawText.startsWith("/");
+      const routeCommand = /^\/route(?:\s+([\s\S]*))?$/i.exec(rawText);
+      if (routeCommand) {
+        void debugLog(routeCommandLogLine(channel, sessionKey, rawText));
+        // Telegram text commands can reach this hook and then miss the registered
+        // command, which hands "/route off" to the agent as a plain message.
+        if (isConfiguredOwner(api.config, channel, resolveSenderIdFromContext(ctx, event))) {
+          const reply = await handleRouteCommand({
+            ...ctx,
+            channel,
+            sessionKey,
+            args: routeCommand[1] ?? "",
+            isAuthorizedSender: true,
+          });
+          return { handled: true, text: reply?.text ?? "Route command applied." };
+        }
+      }
       if (sessionKey && rawText && isSlashCommand) {
         recentSlashCommandBySession.set(sessionKey, { at: Date.now(), cmd: rawText });
-      }
-      if (/^\/route(\s|$)/i.test(rawText)) {
-        void debugLog(routeCommandLogLine(channel, sessionKey, rawText));
       }
       if (sessionKey && rawText && !isSlashCommand) {
         const previousConversationContext = rememberRecentConversationText(conversationKey, rawText);
@@ -2004,7 +2070,7 @@ const modeResolution = await resolveRouteModeDetailsFromContext(api, ctx);
         return;
       }
 
-      if (ctx?.trigger === "heartbeat" || (ctx?.trigger === "memory" && source !== "raw-user")) {
+      if (isBackgroundTrigger(ctx?.trigger, source)) {
         if (sessionRef) {
           recentRouteCacheBySession.set(sessionRef, { text: dedupeText, mode: routeMode, at: Date.now() });
         }
@@ -2072,6 +2138,14 @@ const modeResolution = await resolveRouteModeDetailsFromContext(api, ctx);
         await debugLog(
           `[hook-result] source=${source} source_tag=${sourceTag} route=${routeMode} shadow decision=${shadowDecision.selected_model} task=${shadowDecision.task_type} confidence=${shadowDecision.confidence.toFixed(2)} score=${shadowDecision.score.toFixed(3)}`,
         );
+        return;
+      }
+
+      if (hasExplicitModelSelection(api.config, ctx)) {
+        if (sessionRef) {
+          recentRouteCacheBySession.set(sessionRef, { text: dedupeText, mode: routeMode, at: Date.now() });
+        }
+        await debugLog(`[hook-result] source=${source} source_tag=${sourceTag} route=${routeMode} bypassed reason=explicit-model model=${ctx.modelProviderId}/${ctx.modelId}`);
         return;
       }
 
@@ -2330,7 +2404,8 @@ const modeResolution = await resolveRouteModeDetailsFromContext(api, ctx);
       };
     });
 
-    api.on("agent_end", async (event: any, ctx: any) => {
+    api.on("agent_end", async (rawEvent: any, ctx: any) => {
+      const event = normalizeAgentEndEvent(rawEvent);
       const pending = ctx.sessionId ? shiftPendingOutcome(ctx.sessionId) : undefined;
       await debugLog(
         `[hook-agent-end] sessionId=${String(ctx?.sessionId ?? "none")} pending=${pending ? pending.decisionId : "none"}`,
@@ -2350,7 +2425,8 @@ const modeResolution = await resolveRouteModeDetailsFromContext(api, ctx);
         }
         const actualModel = last?.actualModel;
         const actualProvider = last?.actualProvider;
-        const fallbackUsed = !!actualModel && actualModel !== pending.selectedModel;
+        const actualRef = toModelRef(actualProvider, actualModel);
+        const fallbackUsed = !!actualRef && actualRef !== pending.selectedModel;
         const failure = inferFailureFromRuntime(event);
         const outcomeProvider = actualProvider ?? pending.selectedProvider;
         const outcomeModel = actualModel ?? pending.selectedModel;

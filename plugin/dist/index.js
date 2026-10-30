@@ -626,6 +626,13 @@ function inferCronLabel(prompt) {
         return "backup-status";
     return "job";
 }
+// System wake-ups (exec completions, memory flushes) stay on the configured
+// default instead of spending a routed model on an acknowledgement.
+function isBackgroundTrigger(trigger, source) {
+    if (trigger === "heartbeat")
+        return true;
+    return (trigger === "memory" || trigger === "event") && source !== "raw-user";
+}
 function buildSourceTag(ctx, source, prompt, startupReason) {
     if (ctx?.trigger === "cron" || classifySessionKind(ctx?.sessionKey) === "cron") {
         return `cron:${inferCronLabel(prompt)}`;
@@ -739,6 +746,47 @@ function chooseUnblockedFallback(fallbacks, sessionKey, conversationKey) {
         }
     }
     return null;
+}
+// A provider error ends the run with success=true and leaves the failure on the
+// final assistant message, so read it from there as well.
+function normalizeAgentEndEvent(event) {
+    const messages = Array.isArray(event?.messages) ? event.messages : [];
+    const lastAssistant = [...messages].reverse().find((m) => m?.role === "assistant");
+    if (!event?.success || lastAssistant?.stopReason !== "error")
+        return event;
+    return { ...event, success: false, error: event.error ?? String(lastAssistant.errorMessage ?? "provider error") };
+}
+function toModelRef(provider, model) {
+    if (!model)
+        return undefined;
+    return provider && !model.startsWith(`${provider}/`) ? `${provider}/${model}` : model;
+}
+// A run on anything other than the configured default means the session has a
+// /model pin, or core is already walking its fallback chain. Either way the
+// router must not replace it: a pin disables fallbacks, so a bad pick is fatal.
+function hasExplicitModelSelection(config, ctx) {
+    if (!ctx?.modelProviderId || !ctx?.modelId)
+        return false;
+    const agent = (config?.agents?.list ?? []).find((a) => a?.id === ctx.agentId);
+    const configured = agent?.model ?? config?.agents?.defaults?.model;
+    const primary = typeof configured === "string" ? configured : configured?.primary;
+    if (typeof primary !== "string" || !primary)
+        return false;
+    return toModelRef(ctx.modelProviderId, ctx.modelId) !== primary;
+}
+// Only configured owners may use the before_dispatch shortcut; anyone else goes
+// through core's normal command authorization.
+function isConfiguredOwner(config, channel, senderId) {
+    const sender = String(senderId ?? "").trim();
+    if (!sender)
+        return false;
+    const owners = config?.commands?.ownerAllowFrom;
+    if (!Array.isArray(owners))
+        return false;
+    // Never trust a channel prefix in the sender id: it must match the real channel.
+    const prefix = `${String(channel ?? "")}:`;
+    const qualified = sender.startsWith(prefix) ? sender : `${prefix}${sender}`;
+    return owners.map(String).includes(qualified);
 }
 function inferFailureFromRuntime(event) {
     const errorText = typeof event?.error === "string" ? event.error.trim() : "";
@@ -1300,6 +1348,10 @@ function shouldAutoEscalate(confidence) {
     return confidence < AUTO_ESCALATE_CONFIDENCE;
 }
 export const __testHelpers = {
+    normalizeAgentEndEvent,
+    toModelRef,
+    hasExplicitModelSelection,
+    isConfiguredOwner,
     routeCommandLogLine,
     routeReplyLogLine,
     rememberRouteMode,
@@ -1310,6 +1362,7 @@ export const __testHelpers = {
     rememberConversationContextForSession,
     resolveRouteModeDetailsFromContext,
     shouldUseContextualLlmClassifier,
+    isBackgroundTrigger,
     shouldBypassCompiledRetryRouting,
     classifySessionKind,
     isShortFollowUpForContextualRouting,
@@ -1345,112 +1398,113 @@ export default definePluginEntry({
             markRecentStartup(sessionKey, `reset:${event.reason ?? "unknown"}`);
             await debugLog(`[route-reset] session=${sessionKey ?? "unknown"} cleared-ephemeral-state reason=${event.reason ?? "unknown"}`);
         });
+        const handleRouteCommand = async (ctx) => {
+            const rawArgs = ctx.args?.trim() ?? "";
+            const loweredArgs = rawArgs.toLowerCase();
+            const tokens = loweredArgs.split(/\s+/).filter(Boolean);
+            const firstToken = tokens[0] ?? "";
+            const secondToken = tokens[1] ?? "";
+            // Parse: /route [mode] [free] or /route feedback on|off
+            const hasFreeModifier = tokens.includes('free');
+            const modeToken = tokens.find((t) => ROUTE_MODES.has(t)) ?? '';
+            const arg = firstToken; // Keep for compatibility with existing checks
+            const conversationKey = buildConversationKeyFromContext(ctx) ?? [ctx.channelId ?? ctx.channel, ctx.accountId ?? "default", ctx.from ?? ctx.to ?? "", ctx.messageThreadId ?? ""].join(":");
+            const sessionKeyForConversation = conversationKey ? resolveSessionKeyForConversation(conversationKey) ?? undefined : undefined;
+            const modeResolution = await resolveRouteModeDetailsFromContext(api, ctx);
+            const currentMode = modeResolution.mode;
+            // Handle /route feedback on|off FIRST
+            if (firstToken === 'feedback' && (secondToken === 'on' || secondToken === 'off')) {
+                const suppressed = secondToken === 'off';
+                rememberFeedbackSuppressed(ctx.sessionKey, suppressed);
+                const currentState = isFeedbackSuppressed(ctx.sessionKey) ? 'OFF' : 'ON';
+                return { text: (suppressed ? '⛔ Feedback cards disabled for this session.' : '✅ Feedback cards enabled for this session.') + ` Current: ${currentState}.` };
+            }
+            if (!firstToken || firstToken === "help" || firstToken === "?") {
+                return { text: buildRouteHelpText(currentMode), interactive: buildRouteInteractiveReply(currentMode, "this conversation", modeResolution.freeFilter).interactive };
+            }
+            if (firstToken === "status") {
+                const scopeLabel = modeResolution.source === "default" ? "default" : `resolved from ${modeResolution.source}`;
+                await debugLog(routeReplyLogLine(ctx.channelId ?? ctx.channel, ctx.sessionKey, "status", currentMode));
+                return buildRouteInteractiveReply(currentMode, scopeLabel, modeResolution.freeFilter);
+            }
+            // Handle /route free as shorthand for /route auto free
+            const effectiveMode = hasFreeModifier && !modeToken ? 'auto' : modeToken;
+            const normalized = effectiveMode && ROUTE_MODES.has(effectiveMode) ? effectiveMode : undefined;
+            if (arg === "last") {
+                const last = resolveLastDecisionForContext(ctx, conversationKey);
+                return buildRouteLastReply(last);
+            }
+            if (arg === "feedback") {
+                const last = resolveLastDecisionForContext(ctx, conversationKey);
+                const suppressed = isFeedbackSuppressed(ctx.sessionKey);
+                const statusText = suppressed ? 'Feedback cards are currently OFF for this session.' : 'Feedback cards are currently ON for this session.';
+                if (!last || !last.decisionId) {
+                    return { text: `No recent routing decision found. ${statusText} Send a message first, then use /route feedback to request a feedback card (or /route feedback on|off to toggle).` };
+                }
+                const sender = resolveFeedbackSender(ctx, event, ctx.sessionKey, conversationKey);
+                const syntheticDecision = {
+                    decision_id: last.decisionId,
+                    task_type: last.taskType,
+                    confidence: last.confidence,
+                    selected_model: last.selectedModel,
+                    selected_provider: last.selectedProvider,
+                    fallbacks: last.fallbacks,
+                    score: last.score,
+                    reason: last.reason,
+                    classifier_source: last.classifierSource,
+                    reply_context_used: last.replyContextUsed,
+                };
+                const sent = await sendTelegramFeedbackCard(api, sender?.senderId, syntheticDecision, last.sourceTag, {
+                    messagePreview: last.promptText,
+                    sessionKey: ctx.sessionKey,
+                });
+                const currentState = suppressed ? 'OFF' : 'ON';
+                return { text: (sent ? `Feedback card sent.` : `Failed to send feedback card (rate limited or bridge error).`) + ` Current: ${currentState}.` };
+            }
+            if (arg === "explain") {
+                const last = resolveLastDecisionForContext(ctx, conversationKey);
+                return buildRouteExplainReply(last);
+            }
+            if (arg.startsWith("compare")) {
+                const last = resolveLastDecisionForContext(ctx, conversationKey);
+                const modeList = rawArgs.split(/\s+/).slice(1).map((m) => m.toLowerCase()).filter(Boolean);
+                const compareModes = modeList.length ? modeList : ["fast", "balanced", "reasoning", "eco", "free"];
+                return buildRouteCompareReply(routerUrl, last, compareModes, timeoutMs);
+            }
+            if (!normalized) {
+                return {
+                    text: buildRouteHelpText(currentMode),
+                    interactive: buildRouteInteractiveReply("auto").interactive,
+                };
+            }
+            const routeModeSessionKey = sessionKeyForConversation ?? ctx.conversationId ?? ctx.sessionKey ?? ctx.channelId ?? ctx.senderId ?? "";
+            rememberRouteMode(routeModeSessionKey, normalized, hasFreeModifier);
+            if (ctx.sessionKey && ctx.sessionKey !== routeModeSessionKey)
+                rememberRouteMode(ctx.sessionKey, normalized, hasFreeModifier);
+            rememberConversationRouteMode(conversationKey, normalized, hasFreeModifier);
+            // Also store with a channel-only key so before_model_resolve can find the mode
+            // even when its hook ctx does not carry the full from/to/thread fields.
+            const channelOnlyKey = ctx.channelId ?? ctx.channel ?? "";
+            if (channelOnlyKey && channelOnlyKey !== conversationKey) {
+                rememberConversationRouteMode(channelOnlyKey, normalized, hasFreeModifier);
+            }
+            const persisted = [];
+            if (conversationKey)
+                persisted.push(await persistRouteModePreference(routerUrl, conversationKey, normalized, "conversation", hasFreeModifier));
+            if (ctx.sessionKey)
+                persisted.push(await persistRouteModePreference(routerUrl, ctx.sessionKey, normalized, "session", hasFreeModifier));
+            if (channelOnlyKey)
+                persisted.push(await persistRouteModePreference(routerUrl, channelOnlyKey, normalized, "channel", hasFreeModifier));
+            const persistedLabel = `${persisted.filter(Boolean).length}/${persisted.length}`;
+            await debugLog(routeReplyLogLine(channelOnlyKey, ctx.sessionKey, "set", hasFreeModifier ? `${normalized}+free` : normalized, persistedLabel));
+            return buildRouteInteractiveReply(normalized, "this conversation", hasFreeModifier, false);
+        };
         api.registerCommand({
             name: "route",
             description: "Choose routing mode for model selection.",
             acceptsArgs: true,
             requireAuth: true,
-            handler: async (ctx) => {
-                const rawArgs = ctx.args?.trim() ?? "";
-                const loweredArgs = rawArgs.toLowerCase();
-                const tokens = loweredArgs.split(/\s+/).filter(Boolean);
-                const firstToken = tokens[0] ?? "";
-                const secondToken = tokens[1] ?? "";
-                // Parse: /route [mode] [free] or /route feedback on|off
-                const hasFreeModifier = tokens.includes('free');
-                const modeToken = tokens.find((t) => ROUTE_MODES.has(t)) ?? '';
-                const arg = firstToken; // Keep for compatibility with existing checks
-                const conversationKey = buildConversationKeyFromContext(ctx) ?? [ctx.channelId ?? ctx.channel, ctx.accountId ?? "default", ctx.from ?? ctx.to ?? "", ctx.messageThreadId ?? ""].join(":");
-                const sessionKeyForConversation = conversationKey ? resolveSessionKeyForConversation(conversationKey) ?? undefined : undefined;
-                const modeResolution = await resolveRouteModeDetailsFromContext(api, ctx);
-                const currentMode = modeResolution.mode;
-                // Handle /route feedback on|off FIRST
-                if (firstToken === 'feedback' && (secondToken === 'on' || secondToken === 'off')) {
-                    const suppressed = secondToken === 'off';
-                    rememberFeedbackSuppressed(ctx.sessionKey, suppressed);
-                    const currentState = isFeedbackSuppressed(ctx.sessionKey) ? 'OFF' : 'ON';
-                    return { text: (suppressed ? '⛔ Feedback cards disabled for this session.' : '✅ Feedback cards enabled for this session.') + ` Current: ${currentState}.` };
-                }
-                if (!firstToken || firstToken === "help" || firstToken === "?") {
-                    return { text: buildRouteHelpText(currentMode), interactive: buildRouteInteractiveReply(currentMode, "this conversation", modeResolution.freeFilter).interactive };
-                }
-                if (firstToken === "status") {
-                    const scopeLabel = modeResolution.source === "default" ? "default" : `resolved from ${modeResolution.source}`;
-                    await debugLog(routeReplyLogLine(ctx.channelId ?? ctx.channel, ctx.sessionKey, "status", currentMode));
-                    return buildRouteInteractiveReply(currentMode, scopeLabel, modeResolution.freeFilter);
-                }
-                // Handle /route free as shorthand for /route auto free
-                const effectiveMode = hasFreeModifier && !modeToken ? 'auto' : modeToken;
-                const normalized = effectiveMode && ROUTE_MODES.has(effectiveMode) ? effectiveMode : undefined;
-                if (arg === "last") {
-                    const last = resolveLastDecisionForContext(ctx, conversationKey);
-                    return buildRouteLastReply(last);
-                }
-                if (arg === "feedback") {
-                    const last = resolveLastDecisionForContext(ctx, conversationKey);
-                    const suppressed = isFeedbackSuppressed(ctx.sessionKey);
-                    const statusText = suppressed ? 'Feedback cards are currently OFF for this session.' : 'Feedback cards are currently ON for this session.';
-                    if (!last || !last.decisionId) {
-                        return { text: `No recent routing decision found. ${statusText} Send a message first, then use /route feedback to request a feedback card (or /route feedback on|off to toggle).` };
-                    }
-                    const sender = resolveFeedbackSender(ctx, event, ctx.sessionKey, conversationKey);
-                    const syntheticDecision = {
-                        decision_id: last.decisionId,
-                        task_type: last.taskType,
-                        confidence: last.confidence,
-                        selected_model: last.selectedModel,
-                        selected_provider: last.selectedProvider,
-                        fallbacks: last.fallbacks,
-                        score: last.score,
-                        reason: last.reason,
-                        classifier_source: last.classifierSource,
-                        reply_context_used: last.replyContextUsed,
-                    };
-                    const sent = await sendTelegramFeedbackCard(api, sender?.senderId, syntheticDecision, last.sourceTag, {
-                        messagePreview: last.promptText,
-                        sessionKey: ctx.sessionKey,
-                    });
-                    const currentState = suppressed ? 'OFF' : 'ON';
-                    return { text: (sent ? `Feedback card sent.` : `Failed to send feedback card (rate limited or bridge error).`) + ` Current: ${currentState}.` };
-                }
-                if (arg === "explain") {
-                    const last = resolveLastDecisionForContext(ctx, conversationKey);
-                    return buildRouteExplainReply(last);
-                }
-                if (arg.startsWith("compare")) {
-                    const last = resolveLastDecisionForContext(ctx, conversationKey);
-                    const modeList = rawArgs.split(/\s+/).slice(1).map((m) => m.toLowerCase()).filter(Boolean);
-                    const compareModes = modeList.length ? modeList : ["fast", "balanced", "reasoning", "eco", "free"];
-                    return buildRouteCompareReply(routerUrl, last, compareModes, timeoutMs);
-                }
-                if (!normalized) {
-                    return {
-                        text: buildRouteHelpText(currentMode),
-                        interactive: buildRouteInteractiveReply("auto").interactive,
-                    };
-                }
-                const routeModeSessionKey = sessionKeyForConversation ?? ctx.conversationId ?? ctx.sessionKey ?? ctx.channelId ?? ctx.senderId ?? "";
-                rememberRouteMode(routeModeSessionKey, normalized, hasFreeModifier);
-                if (ctx.sessionKey && ctx.sessionKey !== routeModeSessionKey)
-                    rememberRouteMode(ctx.sessionKey, normalized, hasFreeModifier);
-                rememberConversationRouteMode(conversationKey, normalized, hasFreeModifier);
-                // Also store with a channel-only key so before_model_resolve can find the mode
-                // even when its hook ctx does not carry the full from/to/thread fields.
-                const channelOnlyKey = ctx.channelId ?? ctx.channel ?? "";
-                if (channelOnlyKey && channelOnlyKey !== conversationKey) {
-                    rememberConversationRouteMode(channelOnlyKey, normalized, hasFreeModifier);
-                }
-                const persisted = [];
-                if (conversationKey)
-                    persisted.push(await persistRouteModePreference(routerUrl, conversationKey, normalized, "conversation", hasFreeModifier));
-                if (ctx.sessionKey)
-                    persisted.push(await persistRouteModePreference(routerUrl, ctx.sessionKey, normalized, "session", hasFreeModifier));
-                if (channelOnlyKey)
-                    persisted.push(await persistRouteModePreference(routerUrl, channelOnlyKey, normalized, "channel", hasFreeModifier));
-                const persistedLabel = `${persisted.filter(Boolean).length}/${persisted.length}`;
-                await debugLog(routeReplyLogLine(channelOnlyKey, ctx.sessionKey, "set", hasFreeModifier ? `${normalized}+free` : normalized, persistedLabel));
-                return buildRouteInteractiveReply(normalized, "this conversation", hasFreeModifier, false);
-            },
+            handler: handleRouteCommand,
         });
         // ── Feedback card interactive handler ─────────────────────────────────────
         // Handles `routefb:*` callbacks so that clicking "Wrong" does NOT
@@ -1626,18 +1680,31 @@ export default definePluginEntry({
         catch (e) {
             void debugLog(`[feedback-handler] failed to register: ${e?.message ?? String(e)}`);
         }
-        api.on("before_dispatch", (event, ctx) => {
+        api.on("before_dispatch", async (event, ctx) => {
             const rawText = (event.body ?? event.content ?? "").trim();
             const sessionKey = ctx.sessionKey ?? event.sessionKey;
             const channel = ctx.channelId ?? event.channel ?? "unknown";
             const conversationKey = [channel, ctx.accountId ?? "default", ctx.conversationId ?? "", ""].join(":");
             // Skip slash commands — they are not user prompts and should not be routed.
             const isSlashCommand = rawText.startsWith("/");
+            const routeCommand = /^\/route(?:\s+([\s\S]*))?$/i.exec(rawText);
+            if (routeCommand) {
+                void debugLog(routeCommandLogLine(channel, sessionKey, rawText));
+                // Telegram text commands can reach this hook and then miss the registered
+                // command, which hands "/route off" to the agent as a plain message.
+                if (isConfiguredOwner(api.config, channel, resolveSenderIdFromContext(ctx, event))) {
+                    const reply = await handleRouteCommand({
+                        ...ctx,
+                        channel,
+                        sessionKey,
+                        args: routeCommand[1] ?? "",
+                        isAuthorizedSender: true,
+                    });
+                    return { handled: true, text: reply?.text ?? "Route command applied." };
+                }
+            }
             if (sessionKey && rawText && isSlashCommand) {
                 recentSlashCommandBySession.set(sessionKey, { at: Date.now(), cmd: rawText });
-            }
-            if (/^\/route(\s|$)/i.test(rawText)) {
-                void debugLog(routeCommandLogLine(channel, sessionKey, rawText));
             }
             if (sessionKey && rawText && !isSlashCommand) {
                 const previousConversationContext = rememberRecentConversationText(conversationKey, rawText);
@@ -1729,7 +1796,7 @@ export default definePluginEntry({
                 await debugLog(`[hook-result] source=${source} source_tag=${sourceTag} route=${routeMode} bypassed reason=dreaming`);
                 return;
             }
-            if (ctx?.trigger === "heartbeat" || (ctx?.trigger === "memory" && source !== "raw-user")) {
+            if (isBackgroundTrigger(ctx?.trigger, source)) {
                 if (sessionRef) {
                     recentRouteCacheBySession.set(sessionRef, { text: dedupeText, mode: routeMode, at: Date.now() });
                 }
@@ -1790,6 +1857,13 @@ export default definePluginEntry({
                     });
                 }
                 await debugLog(`[hook-result] source=${source} source_tag=${sourceTag} route=${routeMode} shadow decision=${shadowDecision.selected_model} task=${shadowDecision.task_type} confidence=${shadowDecision.confidence.toFixed(2)} score=${shadowDecision.score.toFixed(3)}`);
+                return;
+            }
+            if (hasExplicitModelSelection(api.config, ctx)) {
+                if (sessionRef) {
+                    recentRouteCacheBySession.set(sessionRef, { text: dedupeText, mode: routeMode, at: Date.now() });
+                }
+                await debugLog(`[hook-result] source=${source} source_tag=${sourceTag} route=${routeMode} bypassed reason=explicit-model model=${ctx.modelProviderId}/${ctx.modelId}`);
                 return;
             }
             // Bypass routing on startup only when no explicit mode was set (auto = default).
@@ -2016,7 +2090,8 @@ export default definePluginEntry({
                 total: event.usage?.total,
             };
         });
-        api.on("agent_end", async (event, ctx) => {
+        api.on("agent_end", async (rawEvent, ctx) => {
+            const event = normalizeAgentEndEvent(rawEvent);
             const pending = ctx.sessionId ? shiftPendingOutcome(ctx.sessionId) : undefined;
             await debugLog(`[hook-agent-end] sessionId=${String(ctx?.sessionId ?? "none")} pending=${pending ? pending.decisionId : "none"}`);
             if (!pending)
@@ -2034,7 +2109,8 @@ export default definePluginEntry({
                 }
                 const actualModel = last?.actualModel;
                 const actualProvider = last?.actualProvider;
-                const fallbackUsed = !!actualModel && actualModel !== pending.selectedModel;
+                const actualRef = toModelRef(actualProvider, actualModel);
+                const fallbackUsed = !!actualRef && actualRef !== pending.selectedModel;
                 const failure = inferFailureFromRuntime(event);
                 const outcomeProvider = actualProvider ?? pending.selectedProvider;
                 const outcomeModel = actualModel ?? pending.selectedModel;

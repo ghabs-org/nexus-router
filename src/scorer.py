@@ -70,6 +70,10 @@ COST_PROFILE_WEIGHT = {
     "eco":      {"eco": 0.45, "cost": 0.20, "task_fit": 0.15, "health": 0.10, "preference": 0.05, "learned": 0.05, "speed": 0.00},
 }
 
+# Route modes where routing.yaml decides the order instead of the composite score.
+# "off" is shadow-only and must predict what "auto" would do.
+POLICY_ORDERED_MODES = {"", "auto", "balanced", "off"}
+
 # Per-task routing objective weights.
 # Explicitly captures task tradeoffs:
 # - fast_utility: latency-first among healthy models
@@ -124,6 +128,16 @@ def score_models(
     task_dim = TASK_TO_DIMENSION.get(classifier.task_type, "reasoning")
     score_mechanisms_base = [weight_source]
     preference_order = _build_preference_order(classifier.task_type, routing_policy)
+    # Default modes follow the policy order. Explicit modes (fast/eco/free/
+    # reasoning) keep scoring across the catalog because the user opted in.
+    policy_ordered = (
+        not free_only
+        and (route_mode or "").strip().lower() in POLICY_ORDERED_MODES
+        and any(
+            m["id"] in preference_order and m.get("availability", {}).get("authed", False)
+            for m in models
+        )
+    )
     # Build preference config: merge routing_policy overrides over safe defaults.
     # Feedback is ALWAYS enabled regardless of routing_policy state.
     _preference_defaults: dict = {
@@ -168,6 +182,27 @@ def score_models(
                 total_score=0.0, task_fit=0.0, health=0.0,
                 preference=0.0, learned=0.0, cost=0.0, speed=0.0,
                 excluded=True, exclusion_reason="not_free",
+            ))
+            continue
+
+        if policy_ordered and model_id not in preference_order:
+            excluded.append(ModelScore(
+                model_id=model_id, provider=provider,
+                total_score=0.0, task_fit=0.0, health=0.0,
+                preference=0.0, learned=0.0, cost=0.0, speed=0.0,
+                excluded=True, exclusion_reason="not_in_task_policy",
+            ))
+            continue
+
+        # Shared free tiers are rate limited upstream and carry no benchmark
+        # data, so they win on cost alone. Only serve them when asked to.
+        requested_mode = (route_mode or "").strip().lower()
+        if not free_only and requested_mode != "free" and _is_shared_free_tier(model_id):
+            excluded.append(ModelScore(
+                model_id=model_id, provider=provider,
+                total_score=0.0, task_fit=0.0, health=0.0,
+                preference=0.0, learned=0.0, cost=0.0, speed=0.0,
+                excluded=True, exclusion_reason="shared_free_tier",
             ))
             continue
 
@@ -401,6 +436,12 @@ def score_models(
 
     # Sort eligible descending by total score
     eligible.sort(key=lambda x: x.total_score, reverse=True)
+    if policy_ordered:
+        # Policy order wins; a provider with exhausted quota drops to the back.
+        eligible.sort(key=lambda x: (
+            (x.component_scores or {}).get("quota_penalty", 0.0) <= -1.0,
+            preference_order.index(x.model_id),
+        ))
     return eligible + excluded
 
 
@@ -734,6 +775,11 @@ def _parse_iso_utc(value: object) -> datetime | None:
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=timezone.utc)
     return parsed.astimezone(timezone.utc)
+
+
+def _is_shared_free_tier(model_id: str) -> bool:
+    """Return True for OpenRouter's shared free pool (`...:free`, `openrouter/free`)."""
+    return model_id.endswith(":free") or model_id == "openrouter/free"
 
 
 def _is_lightweight_model(model_id: str) -> bool:
