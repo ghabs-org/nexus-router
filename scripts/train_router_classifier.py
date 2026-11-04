@@ -17,15 +17,10 @@ import sys
 import inspect
 from collections import Counter
 from pathlib import Path
+from typing import TYPE_CHECKING
 
-from datasets import Dataset
-from transformers import (
-    AutoModelForSequenceClassification,
-    AutoTokenizer,
-    DataCollatorWithPadding,
-    Trainer,
-    TrainingArguments,
-)
+if TYPE_CHECKING:
+    from datasets import Dataset
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -117,6 +112,16 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
+    # Keep pure dataset/weight helpers usable in the lightweight serving/test
+    # environment. The training stack is needed only when training is invoked.
+    from datasets import Dataset
+    from transformers import (
+        AutoModelForSequenceClassification,
+        AutoTokenizer,
+        DataCollatorWithPadding,
+        Trainer,
+        TrainingArguments,
+    )
 
     os.environ.setdefault("HF_HOME", args.cache_dir)
     os.environ.setdefault("HUGGINGFACE_HUB_CACHE", str(Path(args.cache_dir) / "hub"))

@@ -19,6 +19,7 @@ Usage:
 import argparse
 import json
 import os
+import threading
 import traceback
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
@@ -146,6 +147,17 @@ DEFAULT_LOW_SIGNAL_GUARDRAIL_MIN_CONFIDENCE = float(
 
 # Lazy-init router
 _router: Router | None = None
+_cli_proxy = None
+_cli_proxy_lock = threading.Lock()
+
+
+def _get_cli_proxy():
+    global _cli_proxy
+    with _cli_proxy_lock:
+        if _cli_proxy is None:
+            from .cli_proxy import CliProxy
+            _cli_proxy = CliProxy()
+    return _cli_proxy
 
 
 def _get_router() -> Router:
@@ -184,7 +196,10 @@ class RouterHandler(BaseHTTPRequestHandler):
         path = urlparse(self.path).path
 
         try:
-            if path == "/health":
+            if path == "/v1/nexus/cli-status":
+                _json_response(self, 200, _get_cli_proxy().status(self.server.server_port))
+
+            elif path == "/health":
                 provider_health = load_provider_health()
                 _json_response(self, 200, {
                     "status": "ok",
@@ -244,7 +259,9 @@ class RouterHandler(BaseHTTPRequestHandler):
             _json_response(self, 400, {"error": f"invalid_body: {e}"})
             return
 
-        if path == "/route":
+        if path in {"/v1/messages", "/v1/chat/completions", "/v1/responses"}:
+            _get_cli_proxy().handle(self, body, path)
+        elif path == "/route":
             self._handle_route(body)
         elif path == "/outcome":
             self._handle_outcome(body)
@@ -596,22 +613,24 @@ class RouterHandler(BaseHTTPRequestHandler):
             _json_response(self, 500, {"error": str(e)})
 
 
-def run(port: int = DEFAULT_PORT):
+def run(port: int = DEFAULT_PORT, host: str = "127.0.0.1"):
     ensure_schema()
-    # Bind to all interfaces inside Docker — external access is restricted
-    # by the port mapping in docker-compose.yml (127.0.0.1:7771->7771)
-    bind_addr = "0.0.0.0"
-    server = ThreadingHTTPServer((bind_addr, port), RouterHandler)
+    _get_cli_proxy()  # Validate interception configuration before accepting traffic.
+    # Docker explicitly opts into 0.0.0.0; its published port stays loopback.
+    server = ThreadingHTTPServer((host, port), RouterHandler)
     print(f"Nexus Router server listening on http://127.0.0.1:{port}")
     print("Endpoints: POST /route  POST /outcome  POST /probe  GET /health  GET /stats")
     try:
         server.serve_forever()
     except KeyboardInterrupt:
         print("Stopped.")
+    finally:
+        server.server_close()
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Nexus Router HTTP server")
     parser.add_argument("--port", type=int, default=DEFAULT_PORT)
+    parser.add_argument("--host", default=os.environ.get("NEXUS_ROUTER_HOST", "127.0.0.1"))
     args = parser.parse_args()
-    run(args.port)
+    run(args.port, args.host)

@@ -25,6 +25,7 @@ COPY policies/ ./policies/
 VOLUME ["/app/catalog", "/app/state", "/app/data"]
 
 EXPOSE 7771
+ENV NEXUS_ROUTER_HOST=0.0.0.0
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
   CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:7771/health', timeout=3)" || exit 1

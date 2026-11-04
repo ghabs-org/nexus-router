@@ -18,6 +18,10 @@ services:
       - /home/ubuntu/.local/state/nexus-router/artifacts:/app/artifacts
     environment:
       - PYTHONUNBUFFERED=1
+      - NEXUS_ROUTER_HOST=0.0.0.0
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - NVIDIA_API_KEY=${NVIDIA_API_KEY:-}
       - NEXUS_ROUTER_ENABLE_ROUTING_POLICY=1
       - NEXUS_ROUTER_DISABLE_CLI_CLASSIFIER=1
       - OPENCODE_API_KEY=${OPENCODE_API_KEY:-}

@@ -4,6 +4,37 @@
 # auth_required: true means skip if not authed
 # min_context: minimum context window needed
 
+# CLI interception is independent of the advisory /route scoring policy.
+# Provider IDs must match enabled rows in the router's SQLite providers table.
+# base_url is the upstream origin (optionally ending in /v1), NEVER the proxy.
+cli_proxy:
+  min_health_score: 0.8
+  max_pins: 4096
+  pin_ttl_seconds: 86400
+  connect_timeout_seconds: 5
+  read_timeout_seconds: 300
+  providers:
+    anthropic:
+      base_url: https://api.anthropic.com
+      protocols: [messages]
+      api_key_env: ANTHROPIC_API_KEY
+    openai-codex:
+      base_url: https://api.openai.com
+      protocols: [chat, responses]
+      api_key_env: OPENAI_API_KEY
+    nvidia:
+      base_url: https://integrate.api.nvidia.com/v1
+      protocols: [chat]
+      api_key_env: NVIDIA_API_KEY
+    local:
+      base_url: http://127.0.0.1:11434/v1
+      protocols: [chat]
+  routes:
+    STATELESS_HOUSEKEEPING: ["local:qwen3:8b", "nvidia:google/gemma-4-31b-it", "openai-codex:gpt-6-luna"]
+    SUBAGENT_WORKER: ["local:qwen3:8b", "nvidia:google/gemma-4-31b-it", "openai-codex:gpt-6-luna"]
+    MAIN_PLANNING: ["anthropic:claude-opus-5-5", "openai-codex:gpt-6-astra"]
+    MAIN_EXECUTION: ["anthropic:claude-opus-5-5", "openai-codex:gpt-6.1-sol"]
+
 routing:
 
   coding:

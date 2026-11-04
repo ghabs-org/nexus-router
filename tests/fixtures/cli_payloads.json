@@ -1,0 +1,15 @@
+[
+  {"name":"claude_compaction", "category":"STATELESS_HOUSEKEEPING", "body":{"model":"claude-sonnet", "system":"Summarize the conversation for the next context window.", "messages":[{"role":"user","content":"Transcript"}], "tools":[], "max_tokens":2048}},
+  {"name":"claude_title", "category":"STATELESS_HOUSEKEEPING", "body":{"model":"claude-haiku", "system":"Generate a concise PR title.", "messages":[{"role":"user","content":"diff"}], "max_tokens":100}},
+  {"name":"quota_probe", "category":"STATELESS_HOUSEKEEPING", "body":{"model":"claude-sonnet", "messages":[{"role":"user","content":"ping"}], "max_tokens":1}},
+  {"name":"claude_worker", "category":"SUBAGENT_WORKER", "body":{"model":"claude-3-5-haiku-latest", "system":"You are a file search specialist.", "tools":[{"name":"Grep"}], "messages":[{"role":"user","content":"Find auth checks"}]}},
+  {"name":"delegated_worker", "category":"SUBAGENT_WORKER", "body":{"model":"sonnet", "system":"You are a delegated worker for repository search.", "tools":[{"name":"Read"}], "messages":[]}},
+  {"name":"claude_plan", "category":"MAIN_PLANNING", "body":{"model":"opusplan", "tools":[{"name":"Task"}], "messages":[]}},
+  {"name":"claude_thinking", "category":"MAIN_PLANNING", "body":{"model":"claude-opus", "thinking":{"type":"enabled","budget_tokens":2048}, "messages":[]}},
+  {"name":"codex_plan", "category":"MAIN_PLANNING", "body":{"model":"auto_codex", "instructions":"Plan the change.", "input":"Implement authentication"}},
+  {"name":"codex_debug", "category":"MAIN_PLANNING", "body":{"model":"gpt", "collaboration_mode":{"mode":"debug"}, "input":[]}},
+  {"name":"claude_execution", "category":"MAIN_EXECUTION", "body":{"model":"claude-sonnet", "system":"You are Claude Code. Summarize the conversation when needed, generate a title, delegate to a subagent.", "tools":[{"name":"Task"},{"name":"Read"}], "messages":[{"role":"user","content":[{"type":"text","text":"Fix the tests","cache_control":{"type":"ephemeral"}}]}]}},
+  {"name":"codex_execution", "category":"MAIN_EXECUTION", "body":{"model":"gpt", "instructions":"You are Codex.", "input":[{"role":"user","content":[{"type":"input_text","text":"Fix the tests"}]}], "tools":[{"type":"function","name":"exec_command"}]}},
+  {"name":"empty_tools_not_housekeeping", "category":"MAIN_EXECUTION", "body":{"model":"gpt", "tools":[], "messages":[{"role":"user","content":"Implement a parser"}], "max_tokens":4096}},
+  {"name":"user_instruction_not_system_marker", "category":"MAIN_EXECUTION", "body":{"model":"gpt", "messages":[{"role":"user","content":"Generate a title"}], "max_tokens":4096}}
+]

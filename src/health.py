@@ -279,6 +279,10 @@ def record_observation(
         pdata["rate_limit_cooldown_until"] = cooldown_until.isoformat()
         prev = float(existing.get("rate_limit_risk") or 0.0)
         pdata["rate_limit_risk"] = round(0.3 * 1.0 + 0.7 * prev, 4)
+    elif (http_status is not None and http_status >= 500) or error_type in {"timeout", "server"}:
+        # Reuse the persisted cooldown authority for transport/server circuits.
+        # This also affects existing OpenClaw routing, not just CLI requests.
+        pdata["rate_limit_cooldown_until"] = (_now_dt() + timedelta(seconds=60)).isoformat()
     else:
         pdata["consecutive_rate_limits"] = 0
         pdata["rate_limit_cooldown_until"] = None

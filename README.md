@@ -4,6 +4,94 @@ Multilingual LLM router for OpenClaw. Routes each request to the best model
 from your configured providers, based on task type, model capabilities,
 provider health, and usage history.
 
+## CLI wire proxy
+
+The same server accepts `POST /v1/messages`, `POST /v1/chat/completions`, and
+`POST /v1/responses`. Start it with `python -m src.server --port 7771`, then attach
+a local CLI shell:
+
+```bash
+export ANTHROPIC_BASE_URL=http://127.0.0.1:7771
+export OPENAI_BASE_URL=http://127.0.0.1:7771/v1
+curl -s http://127.0.0.1:7771/v1/nexus/cli-status
+```
+
+Configure ordered `provider:model` targets under `cli_proxy.routes` in
+`policies/routing.yaml`. This section is always used by the wire proxy, independent
+of `NEXUS_ROUTER_ENABLE_ROUTING_POLICY`. Upstream `base_url` values must point to
+the actual provider, never back to this proxy. Set the configured credential
+environment variables **in the server process** (`ANTHROPIC_API_KEY`,
+`OPENAI_API_KEY`, `NVIDIA_API_KEY` in the defaults). Client auth headers and cookies
+are removed; each upstream receives only its own configured credential. Existing
+CLI subscription/OAuth login is not automatically exchanged for upstream API
+credentials. Codex configurations with an explicit provider `base_url` may need
+that URL changed to the loopback `/v1` address as well.
+
+Providers must also have enabled rows in the existing SQLite `providers` table;
+YAML does not override DB controls. Unknown providers fail closed. To opt into
+the example local Ollama provider, load the configured model and explicitly add
+or enable the `local` provider in your router DB, for example:
+
+```bash
+python - <<'PY'
+from src.db import _connect, ensure_schema
+ensure_schema()
+with _connect() as db:
+    db.execute("INSERT INTO providers (provider, enabled, status) VALUES ('local', 1, 'enabled') "
+               "ON CONFLICT(provider) DO UPDATE SET enabled=1, status='enabled'")
+PY
+```
+
+The default local URL is `http://127.0.0.1:11434/v1`. Inside Docker, change it to
+the reachable Ollama host. Container port publication remains `127.0.0.1:7771`;
+standalone processes bind loopback unless `--host`/`NEXUS_ROUTER_HOST` is set.
+
+Classification runs deterministic heuristics only, never the advisory router's
+LLM classifier. Dedicated compaction/title/probe instructions and lightweight
+workers use the inexpensive ordered tier without changing a main session's pin.
+Empty tools alone are insufficient evidence for housekeeping. Explicit planning
+models, enabled thinking, or Codex plan/debug collaboration markers select the
+planning tier. All other requests use the stateful execution tier.
+
+Main sessions use a hashed `x-session-id` (also Codex `session_id`) or a fingerprint
+of system instructions plus the first user content. Pins remain stable across
+policy reorderings; explicit phase changes or unhealthy DB state permit a new
+assignment. Pins are in memory, expire after 24 hours by default, and are bounded
+to 4096 entries. Use stable session headers when compaction changes the initial
+prompt. Responses `previous_response_id` requires an existing session pin and
+stays on that exact provider/model; an unavailable pin returns an error rather
+than replaying a server-side continuation elsewhere. Pins are lost on restart.
+
+Native requests retain system/tool/message `cache_control` blocks, beta headers,
+and all protocol-specific fields. Native SSE bytes are flushed as they arrive;
+the proxy never accumulates a streamed completion. Main requests prefer native
+fallbacks. Messages ↔ Chat Completions adapters support text, standard function
+tools, usage, stop reasons, and incremental SSE text/tool deltas. Images, signed
+thinking, server tools, interleaved parallel tool deltas, and unsupported protocol-specific options require a
+native route; they are rejected for conversion. Responses requires a native
+Responses provider, including on the inexpensive tier.
+
+Before each attempt the proxy consults SQLite enablement, role controls, health,
+and cooldown. 429s use the existing escalating circuit; server errors/529s and
+transport timeouts open a 60-second DB cooldown. Expired transient circuits can
+be tried again, while disabled/auth-expired/quota-exhausted providers remain
+blocked. Failover is permitted before response headers are sent. A failure after
+streaming starts closes that response and records health without replaying text
+or tool calls against another provider.
+
+Responses include `X-Nexus-Routed-Model`, `X-Nexus-Call-Category`, and
+`X-Nexus-Cache-Pinned` (`true` means an existing pin was reused). The status endpoint
+shows active hashed pins, the last 100 decisions, DB health/controls, and export
+snippets. It stores no prompt text or credentials.
+
+Verify with `python -m pytest -q` (development dependencies include `pytest` plus
+the repository's training dependencies). `tests/test_cli_proxy.py` starts real
+loopback upstreams and the server handler, testing all three native endpoints,
+streaming without completion buffering, adapters, pinning, and SQLite failover.
+Where TCP listeners are prohibited, `NEXUS_TEST_SOCKETPAIR=1 python -m pytest -q`
+uses connected Unix sockets with real HTTP serialization and handlers. This mode
+does not establish that TCP binding or a live CLI attachment works.
+
 ## Philosophy
 - **Classify first** — a Nexus classifier agent determines task type
 - **Score everything** — capability priors + runtime health + learned history
