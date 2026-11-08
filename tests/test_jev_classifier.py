@@ -117,3 +117,12 @@ def test_posts_to_systemone_endpoint(monkeypatch):
     assert seen["url"] == "https://opencode.ai/zen/v1/systemone"
     assert seen["model"] == "jev-1.13-free"
     assert seen["ua"] and "Python-urllib" not in seen["ua"]
+
+
+def test_backend_off_wins_over_configured_keys(monkeypatch):
+    from src.jev_classifier import _jev_backend
+
+    monkeypatch.setenv("OPENCODE_API_KEY", "oc-key")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "or-key")
+    monkeypatch.setenv("JEV_BACKEND", "off")
+    assert _jev_backend() is None

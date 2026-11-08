@@ -7,7 +7,7 @@ routing falls through to heuristic/LLM — the safe default wins.
 
 Env:
     JEV_ENABLED ("true" unless set otherwise; needs OPENCODE_API_KEY or OPENROUTER_API_KEY)
-    JEV_BACKEND (openrouter|opencode; default: free opencode path when keyed)
+    JEV_BACKEND (openrouter|opencode|off; default: free opencode path when keyed)
     JEV_MODEL (default ``jev-1.13-free`` on opencode, ``typesafe/jev-1.13`` on OpenRouter)
     JEV_MIN_CONFIDENCE (default 0.6)
     JEV_TIMEOUT_SECONDS (default 15)
@@ -54,6 +54,8 @@ def _env_flag(name: str, default: bool) -> bool:
 def _jev_backend() -> tuple | None:
     """Resolve (endpoint, key, model): free OpenCode path first, else OpenRouter."""
     backend = (os.getenv("JEV_BACKEND") or "").strip().lower()
+    if backend == "off":  # never send task text to a hosted classifier, keys or not
+        return None
     openrouter_key = (os.getenv("OPENROUTER_API_KEY") or "").strip()
     opencode_key = (os.getenv("OPENCODE_API_KEY") or "").strip()
     model = (os.getenv("JEV_MODEL") or "").strip()
