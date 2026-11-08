@@ -56,11 +56,13 @@ planning tier. All other requests use the stateful execution tier.
 Main sessions use a hashed `x-session-id` (also Codex `session_id`) or a fingerprint
 of system instructions plus the first user content. Pins remain stable across
 policy reorderings; explicit phase changes or unhealthy DB state permit a new
-assignment. Pins are in memory, expire after 24 hours by default, and are bounded
-to 4096 entries. Use stable session headers when compaction changes the initial
-prompt. Responses `previous_response_id` requires an existing session pin and
-stays on that exact provider/model; an unavailable pin returns an error rather
-than replaying a server-side continuation elsewhere. Pins are lost on restart.
+assignment. Pins are persisted in SQLite (`cli_proxy_pins`, hashed session key only),
+reloaded on restart, expire after 24 hours by default, and are bounded to 4096
+entries; a reloaded pin whose target is no longer routed for its category is
+dropped. Use stable session headers when compaction changes the initial prompt.
+Responses `previous_response_id` requires an existing session pin and stays on
+that exact provider/model; an unavailable pin returns an error rather than
+replaying a server-side continuation elsewhere.
 
 Native requests retain system/tool/message `cache_control` blocks, beta headers,
 and all protocol-specific fields. Native SSE bytes are flushed as they arrive;
@@ -79,10 +81,41 @@ blocked. Failover is permitted before response headers are sent. A failure after
 streaming starts closes that response and records health without replaying text
 or tool calls against another provider.
 
+A per-model breaker sits under the provider circuit: 5xx, transport timeouts and
+404 (unknown model) count against `provider:model` for its call category, and
+`cooldowns.failures` of them within `window_seconds` skip that target for
+`cooldown_seconds` (top-level `cooldowns:` in `policies/routing.yaml`; shared with
+the advisory router, see below). 401/403/429 stay provider-wide.
+
+`cli_proxy.ordering: learned` reorders a category's targets for new sessions only:
+a later target moves ahead when `health × smoothed 24h success − latency penalty`
+beats an earlier one by `learned_margin` (0.15). Pins and native-protocol preference
+still come first; client hang-ups (recorded as 499) are left out. Default `static`.
+
+`GET /v1/models` lists the configured route models (OpenAI- and Anthropic-readable).
+`POST /v1/messages/count_tokens` goes to the first healthy Messages-native target of
+the request's category (the pin first), else 404 so Claude Code estimates locally.
+
+**Subscription backends.** [llm-cli-proxy](../llm-cli-proxy) runs the local
+claude/codex/agy/copilot/opencode logins behind Chat Completions on `:8811`. Add it
+as a keyless provider (`subscription`, commented in `routing.yaml`) and route to
+targets such as `subscription:cc:sonnet`; enable its `providers` row like `local`
+above. Limits: chat only, so Messages turns with images or thinking cannot convert
+to it (mostly housekeeping/worker and Codex chat); streaming is simulated
+(keepalives, then the whole answer); tools are emulated in the prompt; a usage
+limit hit after its keepalive commit cannot fail over. llm-cli-proxy ignores
+loopback `ANTHROPIC_BASE_URL`/`OPENAI_BASE_URL` so its CLIs cannot loop back here.
+
 Responses include `X-Nexus-Routed-Model`, `X-Nexus-Call-Category`, and
-`X-Nexus-Cache-Pinned` (`true` means an existing pin was reused). The status endpoint
-shows active hashed pins, the last 100 decisions, DB health/controls, and export
-snippets. It stores no prompt text or credentials.
+`X-Nexus-Cache-Pinned` (`true` means an existing pin was reused). Every answered or
+failed turn is a `cli_proxy_turns` row: category, target, failures, final status,
+latency and token usage read from the forwarded bytes (Messages
+`message_start`/`message_delta`, Chat final chunk, Responses `response.completed`;
+input includes cache tokens) without buffering the stream. These rows are kept out
+of `routing_decisions`, so learned stats and classifier training never see them.
+`/v1/nexus/cli-status` shows active hashed pins, the last 100 turns, 24h usage per
+target, the applied order, model cooldowns, DB health/controls, and export snippets.
+It stores no prompt text or credentials.
 
 Verify with `python -m pytest -q` (development dependencies include `pytest` plus
 the repository's training dependencies). `tests/test_cli_proxy.py` starts real
@@ -91,6 +124,26 @@ streaming without completion buffering, adapters, pinning, and SQLite failover.
 Where TCP listeners are prohibited, `NEXUS_TEST_SOCKETPAIR=1 python -m pytest -q`
 uses connected Unix sockets with real HTTP serialization and handlers. This mode
 does not establish that TCP binding or a live CLI attachment works.
+
+## Explainability, diagnostics, cooldowns, experiments (advisory `/route`)
+
+- **`/route` inputs:** `allowed_providers` (only score these providers; 409 when none
+  is eligible) and `experiment_key` (stable A/B assignment; the plugin sends its
+  conversation key).
+- **`explain`** in every `/route` response and in `routing_decisions.explain_json`:
+  rules triggered, classifier (source, task, effective task, confidence), top-5
+  model scores with components/contributions, exclusion counts, policy id.
+- **`GET /route-info?id=<decision_id>`:** stored decision + explain + outcome + tokens
+  + feedback; never the message text. Plugin: `/route info [id]`.
+- **`GET /diagnostics`:** registry/catalog age, local classifier, DB and outcome fill,
+  policy YAML parse status, provider health and quota-sync freshness, model cooldowns,
+  experiment, CLI proxy summary, and a `warnings` list. Plugin: `/route doctor`.
+- **Model cooldowns:** a failed `/outcome` counts against the decision's model on its
+  effective task type (a fallback outcome counts against the primary and is credited
+  to the fallback); cooling models are excluded as `model_cooldown`.
+- **A/B experiments:** `experiment:` in `routing.yaml` (commented example) deep-merges
+  the chosen variant over `scoring:` for that call and tags the decision `policy_id`.
+  Compare with `python scripts/policy_experiment_report.py --experiment <id>`.
 
 ## Philosophy
 - **Classify first** — a Nexus classifier agent determines task type

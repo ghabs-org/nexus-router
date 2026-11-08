@@ -29,6 +29,22 @@ cli_proxy:
     local:
       base_url: http://127.0.0.1:11434/v1
       protocols: [chat]
+    # Subscription backend: llm-cli-proxy (../llm-cli-proxy) runs claude/codex/agy/
+    # copilot/opencode on this machine's logins and serves Chat Completions on :8811.
+    # Keyless on purpose. Fail-closed until you add an enabled `subscription` row to
+    # the providers table. Targets: subscription:cc:sonnet, subscription:codex:gpt-6.1-sol ...
+    # Limits: chat only, so Messages traffic with images/thinking cannot use it (mostly
+    # housekeeping/worker and Codex chat); its streaming is simulated (keepalives, then
+    # the whole answer); tools are emulated in the prompt; a usage limit hit after the
+    # keepalive commit cannot fail over.
+    # subscription:
+    #   base_url: http://127.0.0.1:8811/v1
+    #   protocols: [chat]
+  # static: always the configured order. learned: for new (unpinned) sessions, a later
+  # target moves ahead when its health x 24h success (latency-penalized) beats an
+  # earlier one by learned_margin. Pins and native-protocol preference still win.
+  ordering: static
+  learned_margin: 0.15
   routes:
     STATELESS_HOUSEKEEPING: ["local:qwen3:8b", "nvidia:google/gemma-4-31b-it", "openai-codex:gpt-6-luna"]
     SUBAGENT_WORKER: ["local:qwen3:8b", "nvidia:google/gemma-4-31b-it", "openai-codex:gpt-6-luna"]

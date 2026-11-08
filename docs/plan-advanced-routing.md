@@ -4,6 +4,7 @@
 These features establish the foundation for observing and protecting the routing layer.
 
 ### 1. Route Explainability Payload (formerly #3)
+**Status (2026-11-08): done.** `/route` `explain`, `routing_decisions.explain_json`, `GET /route-info`, plugin `/route info`.
 **Goal:** Expose the exact reasoning behind model selection to callers so they can see why a decision was made.
 - **Router side (nexus-router):**
   - Formalize the `reason` array currently returned by the `/route` endpoint into a structured `explainability` payload.
@@ -13,6 +14,7 @@ These features establish the foundation for observing and protecting the routing
   - Nexus ARC: add a new slash command `/route-info <id>` or extend `/status` to dump the explainability payload for a given trace.
 
 ### 2. Fallback Memory + Cooldowns (formerly #4)
+**Status (2026-11-08): done** in SQLite (`src/cooldowns.py`, `model_cooldowns`), shared by `/route` scoring and the CLI proxy; no Redis.
 **Goal:** Smart, localized circuit breakers for models instead of global agent fuses.
 - **Router side:**
   - Add `cooldown_manager.py` to track transient model failures (e.g. 5xx responses, timeouts) using Redis/memory.
@@ -32,6 +34,7 @@ These features establish the foundation for observing and protecting the routing
 Once the core is transparent and resilient, we introduce experiments and deep observability.
 
 ### 4. A/B Router Policy Experiments (formerly #5)
+**Status (2026-11-08): done.** `experiment:` in routing.yaml, `policy_id`, `scripts/policy_experiment_report.py`.
 **Goal:** Test different routing strategies side-by-side to scientifically optimize decisions.
 - **Router side:**
   - Allow defining multiple active scoring policies (e.g., "Policy A: Cost-optimized", "Policy B: Quality-optimized").
@@ -40,6 +43,7 @@ Once the core is transparent and resilient, we introduce experiments and deep ob
   - **Data side:** Dashboard or script to compare feedback ("Correct" clicks) and latency/cost between the two policies.
 
 ### 5. Operator Command: `/doctor target=router` (formerly #8)
+**Status (2026-11-08): done** as `GET /diagnostics` + plugin `/route doctor`; Nexus Studio shows it in its Router panel.
 **Goal:** Dedicated health checks for the routing layer via Nexus.
 - **Router side:**
   - Expose a `GET /diagnostics` endpoint on `nexus-router`.

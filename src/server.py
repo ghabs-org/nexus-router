@@ -222,6 +222,9 @@ class RouterHandler(BaseHTTPRequestHandler):
             if path == "/v1/nexus/cli-status":
                 _json_response(self, 200, _get_cli_proxy().status(self.server.server_port))
 
+            elif path == "/v1/models":
+                _json_response(self, 200, _get_cli_proxy().models())
+
             elif path == "/health":
                 provider_health = load_provider_health()
                 _json_response(self, 200, {
@@ -302,6 +305,8 @@ class RouterHandler(BaseHTTPRequestHandler):
 
         if path in {"/v1/messages", "/v1/chat/completions", "/v1/responses"}:
             _get_cli_proxy().handle(self, body, path)
+        elif path == "/v1/messages/count_tokens":
+            _get_cli_proxy().count_tokens(self, body)
         elif path == "/route":
             self._handle_route(body)
         elif path == "/outcome":
@@ -679,7 +684,8 @@ def run(port: int = DEFAULT_PORT, host: str = "127.0.0.1"):
     # Docker explicitly opts into 0.0.0.0; its published port stays loopback.
     server = ThreadingHTTPServer((host, port), RouterHandler)
     print(f"Nexus Router server listening on http://127.0.0.1:{port}")
-    print("Endpoints: POST /route  POST /outcome  POST /probe  GET /health  GET /stats")
+    print("Endpoints: /route /outcome /feedback /route-info /diagnostics /health /stats; "
+          "CLI proxy: /v1/messages /v1/chat/completions /v1/responses /v1/models /v1/nexus/cli-status")
     try:
         server.serve_forever()
     except KeyboardInterrupt:
