@@ -24,6 +24,8 @@ const {
   toModelRef,
   hasExplicitModelSelection,
   isConfiguredOwner,
+  formatRouteInfo,
+  formatDiagnostics,
 } = __testHelpers;
 
 test("explicit auto mode stays sticky beyond the recent-message TTL", async () => {
@@ -317,4 +319,45 @@ test("system wake-ups skip routing but real user turns do not", () => {
   assert.equal(isBackgroundTrigger("event", "raw-user"), false);
   assert.equal(isBackgroundTrigger("user", "compiled-prompt"), false);
   assert.equal(isBackgroundTrigger(undefined, "compiled-prompt"), false);
+});
+
+
+test("/route info formats explain, outcome and feedback", () => {
+  const text = formatRouteInfo({
+    id: "dec-1", created_at: "2026-11-08T10:00:00Z", selected_model: "openai-codex/gpt-6.1-sol", routing_score: 0.8123,
+    task_type: "coding", fallbacks: ["anthropic/claude-opus-5-5"], outcome_success: 0, latency_ms: 900,
+    fallback_used: 1, fallback_model: "anthropic/claude-opus-5-5", input_tokens: 10, output_tokens: 5,
+    explain: {
+      rules_triggered: ["static_weights", "provider_filter"], policy_id: "exp:candidate",
+      classifier: { task_type: "coding", effective_task_type: "coding", source: "local", confidence: 0.91 },
+      model_scores: [{ model: "openai-codex/gpt-6.1-sol", total: 0.8123 }],
+      exclusions: { model_cooldown: 1, not_authed: 3 },
+    },
+    feedback: [{ verdict: "wrong", reason_tag: "quality", corrected_task: "reasoning" }],
+  });
+  assert.match(text, /Selected: openai-codex\/gpt-6.1-sol \(score 0.812\)/);
+  assert.match(text, /Rules: static_weights, provider_filter/);
+  assert.match(text, /Policy: exp:candidate/);
+  assert.match(text, /Exclusions: model_cooldown=1, not_authed=3/);
+  assert.match(text, /Outcome: failure \(900ms\) via fallback anthropic\/claude-opus-5-5; tokens: 10\/5/);
+  assert.match(text, /Feedback: wrong:quality→reasoning/);
+});
+
+test("/route doctor lists warnings, providers and cooldowns", () => {
+  const text = formatDiagnostics({
+    warnings: ["model registry is older than 48h"],
+    registry: { models: 10, authed_models: 4, updated_at: "2026-11-01" },
+    classifier: { local_available: false, local_error: "missing artifact" },
+    database: { decisions: 50, decisions_7d: 7, outcome_fill_7d: 0.5 },
+    providers: { nvidia: { enabled: true, health_score: 0.9, auth: "ok", quota: "healthy" } },
+    model_cooldowns: [{ model: "nvidia/x", scope: "coding", cooldown_until: "2026-11-08T10:05:00Z" }],
+    cli_proxy: { active_pins: 2, turns_24h: 9, ordering: "learned" },
+  });
+  assert.match(text, /1 warning\(s\)/);
+  assert.match(text, /4\/10 authed models/);
+  assert.match(text, /local unavailable \(missing artifact\)/);
+  assert.match(text, /nvidia: on health=0.9/);
+  assert.match(text, /nvidia\/x \[coding\]/);
+  assert.match(text, /CLI proxy: 2 pins, 9 turns\/24h, ordering=learned/);
+  assert.match(formatDiagnostics({ warnings: [] }), /No warnings/);
 });

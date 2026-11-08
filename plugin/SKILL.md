@@ -46,7 +46,6 @@ message → pre-signal extraction → heuristic classification
         "config": {
           "routerUrl": "http://127.0.0.1:7771",
           "costProfile": "balanced",
-          "useLlmClassifier": false,
           "debugMode": false,
           "minConfidence": 0.60
         }
@@ -61,10 +60,26 @@ message → pre-signal extraction → heuristic classification
 | Key | Default | Description |
 |---|---|---|
 | `routerUrl` | `http://127.0.0.1:7771` | Nexus Router server URL |
+| `bridgeUrl` | `http://127.0.0.1:8091` | Nexus bridge URL for feedback cards |
+| `bridgeBearerToken` | — | Optional bearer token for the bridge feedback-card endpoint |
+| `enabled` | `true` | Enable automatic model routing |
 | `costProfile` | `balanced` | cheap / balanced / premium |
-| `useLlmClassifier` | `false` | Use LLM for ambiguous messages (costs a micro-call) |
 | `debugMode` | `false` | Log routing decisions to console |
 | `minConfidence` | `0.60` | Skip routing if classifier confidence is below this |
+| `timeoutMs` | `3000` | Router request timeout in milliseconds |
+
+The schema rejects unknown keys. The LLM classifier is chosen per turn by the
+plugin for ambiguous follow-ups; it is not a config option.
+
+## Commands
+
+| Command | What it shows |
+|---|---|
+| `/route status` · `/route last` · `/route explain` | Current mode; last decision (short / detailed, with its decision id) |
+| `/route info [decision_id]` | The router's stored record: top candidate scores, rules, exclusions, policy, outcome, tokens, feedback |
+| `/route doctor` | Router health: warnings, registry age, classifier, providers, model cooldowns, CLI proxy |
+| `/route compare [modes]` | Compare modes on the last prompt |
+| `/route <mode> [free]` · `/route feedback [on\|off]` | Set mode; feedback cards |
 
 ## CLI test
 

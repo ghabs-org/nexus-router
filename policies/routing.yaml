@@ -160,3 +160,24 @@ scoring:
     family_prior_strength: 6.0
     uncertainty_bonus: 0.08
     shadow_log_challenger: true
+
+# Per-model circuit breaker (src/cooldowns.py). Advisory: a failed /outcome counts
+# against the decision's model on its task type. CLI proxy: 5xx/timeouts/404 count
+# against provider:model on its call category. 429/auth stay provider-level.
+cooldowns:
+  failures: 3
+  window_seconds: 60
+  cooldown_seconds: 300
+
+# A/B policy experiment (advisory /route only). The second variant gets `split` of
+# experiment keys (the plugin sends its conversation key); each variant deep-merges
+# over `scoring:` for that call. Decisions carry policy_id "<id>:<variant>".
+# Compare with: python scripts/policy_experiment_report.py --experiment <id>
+# experiment:
+#   id: exploration-off-2026-11
+#   split: 0.5
+#   variants:
+#     control: {}
+#     candidate:
+#       exploration:
+#         enabled: false

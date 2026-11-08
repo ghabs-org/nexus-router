@@ -238,6 +238,44 @@ CREATE TABLE IF NOT EXISTS benchmark_model_scores (
   metadata_json          TEXT
 );
 
+-- Per-model circuit breaker. scope = task type (advisory) or CLI category.
+CREATE TABLE IF NOT EXISTS model_cooldowns (
+  model                 TEXT NOT NULL,
+  scope                 TEXT NOT NULL,
+  failures              INTEGER NOT NULL DEFAULT 0,
+  window_started_at     TEXT NOT NULL,
+  cooldown_until        TEXT,
+  PRIMARY KEY (model, scope)
+);
+
+-- CLI wire proxy state. Kept apart from routing_decisions so learned stats
+-- and classifier training never see wire-proxy traffic. No prompt text.
+CREATE TABLE IF NOT EXISTS cli_proxy_pins (
+  session               TEXT PRIMARY KEY,   -- hashed session key
+  provider              TEXT NOT NULL,
+  model                 TEXT NOT NULL,
+  category              TEXT NOT NULL,
+  touched_at            REAL NOT NULL       -- unix seconds
+);
+
+CREATE TABLE IF NOT EXISTS cli_proxy_turns (
+  id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+  created_at            REAL NOT NULL,      -- unix seconds
+  session               TEXT NOT NULL,
+  category              TEXT NOT NULL,
+  reason                TEXT,
+  target                TEXT,               -- provider:model, NULL when nothing answered
+  cache_pinned          INTEGER NOT NULL DEFAULT 0,
+  failures_json         TEXT,
+  http_status           INTEGER,
+  latency_ms            INTEGER,
+  input_tokens          INTEGER,
+  output_tokens         INTEGER,
+  converted             INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_cli_turns_created_at ON cli_proxy_turns(created_at);
+CREATE INDEX IF NOT EXISTS idx_cli_turns_target ON cli_proxy_turns(target, created_at);
+
 CREATE INDEX IF NOT EXISTS idx_route_feedback_decision_id ON route_feedback(decision_id);
 CREATE INDEX IF NOT EXISTS idx_route_feedback_created_at ON route_feedback(created_at);
 CREATE INDEX IF NOT EXISTS idx_route_feedback_preferred_model ON route_feedback(preferred_model);

@@ -103,6 +103,7 @@ def score_models(
     routing_policy: Optional[dict] = None,
     route_mode: Optional[str] = None,
     free_only: bool = False,
+    cooling_models: Optional[set[str]] = None,
 ) -> list[ModelScore]:
     """
     Score all candidate models and return a ranked list.
@@ -243,6 +244,16 @@ def score_models(
                 total_score=0.0, task_fit=0.0, health=0.0,
                 preference=0.0, learned=0.0, cost=0.0, speed=0.0,
                 excluded=True, exclusion_reason="lightweight_excluded_for_high_reasoning",
+            ))
+            continue
+
+        # Per-model circuit breaker (src/cooldowns.py) for this task scope
+        if cooling_models and model_id in cooling_models:
+            excluded.append(ModelScore(
+                model_id=model_id, provider=provider,
+                total_score=0.0, task_fit=0.0, health=0.0,
+                preference=0.0, learned=0.0, cost=0.0, speed=0.0,
+                excluded=True, exclusion_reason="model_cooldown",
             ))
             continue
 

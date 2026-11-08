@@ -5,12 +5,18 @@ Exposes the router over HTTP so the OpenClaw plugin (Node.js) can call it.
 Runs on localhost only. Not intended for external exposure.
 
 Endpoints:
-  POST /route         → route a turn, returns RoutingDecision
-  POST /outcome       → record turn outcome
+  POST /route         → route a turn, returns RoutingDecision (+ explain)
+  POST /outcome       → record turn outcome (feeds per-model cooldowns)
+  GET  /route-info    → ?id=<decision_id>: stored decision, explain, outcome, feedback
+  GET  /diagnostics   → registry/classifier/DB/policy/provider/cooldown/CLI state
   GET  /health        → server + provider health check
   GET  /stats         → model stats summary
+  GET  /route-mode    → saved route-mode preference
   POST /probe         → probe all provider auth status
   POST /feedback      → record routing feedback
+  POST /route-mode    → save route-mode preference
+  POST /v1/messages | /v1/chat/completions | /v1/responses → CLI wire proxy
+  POST /v1/messages/count_tokens, GET /v1/models, GET /v1/nexus/cli-status
 
 Usage:
   python -m src.server [--port 7771]
@@ -48,7 +54,8 @@ except Exception:  # pragma: no cover - never optional in practice (stdlib only)
         return None
 from .health import load_provider_health
 from .health_updater import probe_all_providers, observe_turn_outcome
-from .db import ensure_schema, update_outcome, load_model_stats, record_feedback, set_route_mode_preference, get_route_mode_preference
+from . import cooldowns
+from .db import ensure_schema, update_outcome, load_model_stats, record_feedback, set_route_mode_preference, get_route_mode_preference, load_decision_info
 
 
 def _is_tiny_prompt(message: str) -> bool:
@@ -167,6 +174,22 @@ def _get_router() -> Router:
     return _router
 
 
+def _observe_model_outcome(decision_id: str, success: bool) -> None:
+    """Feed the per-model circuit breaker from an advisory outcome."""
+    info = load_decision_info(decision_id)
+    if not info or not info.get("selected_model"):
+        return
+    explain = info.get("explain") if isinstance(info.get("explain"), dict) else {}
+    scope = (explain.get("classifier") or {}).get("effective_task_type") or info.get("task_type") or "general_chat"
+    if info.get("fallback_used") and info.get("fallback_model"):
+        # The primary failed over; the turn's result belongs to the fallback.
+        cooldowns.record_failure(info["selected_model"], scope)
+        model = info["fallback_model"]
+    else:
+        model = info["selected_model"]
+    (cooldowns.record_success if success else cooldowns.record_failure)(model, scope)
+
+
 def _json_response(handler: BaseHTTPRequestHandler, status: int, data: Any):
     body = json.dumps(data, default=str).encode()
     try:
@@ -231,6 +254,24 @@ class RouterHandler(BaseHTTPRequestHandler):
                     ],
                 })
 
+            elif path == "/diagnostics":
+                from .diagnostics import collect
+                try:
+                    router = _get_router()
+                except FileNotFoundError:  # missing registry is itself a diagnostic
+                    router = None
+                _json_response(self, 200, collect(router, _get_cli_proxy()))
+
+            elif path == "/route-info":
+                from urllib.parse import parse_qs
+                decision_id = str((parse_qs(urlparse(self.path).query or "").get("id") or [""])[0]).strip()
+                info = load_decision_info(decision_id) if decision_id else None
+                if info is None:
+                    _json_response(self, 404 if decision_id else 400,
+                                   {"error": "decision_not_found" if decision_id else "id required"})
+                else:
+                    _json_response(self, 200, info)
+
             elif path == "/route-mode":
                 from urllib.parse import parse_qs
                 query = parse_qs(urlparse(self.path).query or "")
@@ -294,6 +335,18 @@ class RouterHandler(BaseHTTPRequestHandler):
             source_type = body.get("source_type") or "standalone"
             source_tag = body.get("source_tag")
             mode = body.get("mode")
+            allowed_providers = body.get("allowed_providers")
+            if allowed_providers is not None and (
+                not isinstance(allowed_providers, list)
+                or len(allowed_providers) > 64
+                or any(not isinstance(p, str) or not p or len(p) > 64 for p in allowed_providers)
+            ):
+                _json_response(self, 400, {"error": "allowed_providers must be a list of provider ids"})
+                return
+            experiment_key = body.get("experiment_key")
+            if experiment_key is not None and not isinstance(experiment_key, str):
+                _json_response(self, 400, {"error": "experiment_key must be a string"})
+                return
             provenance_mode = body.get("provenance_mode")
             if mode is None:
                 mode = provenance_mode
@@ -454,13 +507,9 @@ class RouterHandler(BaseHTTPRequestHandler):
                 message_text=message,
                 classifier_source=classifier_source,
                 free_only=free_only,
+                allowed_providers=allowed_providers,
+                experiment_key=experiment_key,
             )
-
-            # --- DEBUG: Print timestamp before writing decision ---
-            from datetime import datetime, timezone
-            print(f"DEBUG_WRITE_DECISION: {datetime.now(timezone.utc).isoformat()} decision_id={decision.decision_id}", flush=True)
-            # --- END DEBUG ---
-
 
             local_bits = ""
             if classifier_debug.get("local_confidence") is not None:
@@ -510,6 +559,8 @@ class RouterHandler(BaseHTTPRequestHandler):
                 "classifier_provider": getattr(classifier, "classifier_provider", None),
                 "classifier_model": getattr(classifier, "classifier_model", None),
                 "classifier_debug": classifier_debug,
+                "explain": decision.explain,
+                "policy_id": decision.policy_id,
                 "pre_signals": {
                     "has_image": pre_signals.has_image,
                     "has_code": pre_signals.has_code,
@@ -520,7 +571,12 @@ class RouterHandler(BaseHTTPRequestHandler):
             })
 
         except Exception as e:
-            _json_response(self, 500, {"error": str(e), "trace": traceback.format_exc()})
+            # No eligible model (e.g. none for the caller's allowed providers) is a
+            # conflict the caller can act on, not a server fault.
+            no_model = isinstance(e, RuntimeError) and str(e).startswith("No eligible models")
+            if not no_model:
+                traceback.print_exc()
+            _json_response(self, 409 if no_model else 500, {"error": str(e)})
 
     def _handle_outcome(self, body: dict):
         try:
@@ -541,6 +597,10 @@ class RouterHandler(BaseHTTPRequestHandler):
                 output_tokens=body.get("output_tokens"),
                 total_tokens=body.get("total_tokens"),
             )
+            try:
+                _observe_model_outcome(decision_id, bool(body.get("success", True)))
+            except Exception as exc:  # advisory accounting must not fail the outcome
+                print(f"[router] model cooldown update failed: {exc}", flush=True)
 
             provider = body.get("provider")
             if provider:

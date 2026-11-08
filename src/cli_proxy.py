@@ -161,6 +161,14 @@ class CliProxy:
                 "exports": [f"export ANTHROPIC_BASE_URL=http://127.0.0.1:{port}",
                             f"export OPENAI_BASE_URL=http://127.0.0.1:{port}/v1"]}
 
+    def summary(self):
+        """Compact state for /diagnostics."""
+        with self.lock:
+            self._expire()
+            pins = len(self.pins)
+        return {"routes": {c.value: [t.label for t in targets] for c, targets in self.routes.items()},
+                "active_pins": pins}
+
     def handle(self, handler, body, path):
         from .server import _json_response
         try:

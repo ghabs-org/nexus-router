@@ -155,6 +155,8 @@ def _ensure_routing_decisions_compat(conn: sqlite3.Connection) -> None:
         "confidence_gate_reason": "TEXT",
         "selected_component_scores": "TEXT",
         "selected_component_contributions": "TEXT",
+        "explain_json": "TEXT",       # structured explainability payload
+        "policy_id": "TEXT",          # experiment:variant when an A/B experiment is active
     }
     for column, column_type in expected.items():
         if column not in columns:
@@ -424,6 +426,7 @@ def write_decision(
             "nexus_workflow_id", "nexus_step_id", "nexus_issue_id", "nexus_project",
             "route_mode", "mode", "source_type", "source_tag",
             "message_text", "classifier_source",
+            "explain_json", "policy_id",
         ]
         values = (
             decision_id, _now_iso(),
@@ -455,6 +458,8 @@ def write_decision(
             # Truncate to 512 chars — enough for classifier, avoids storing full docs
             (message_text or "")[:512] or None,
             classifier_source,
+            json.dumps(decision.explain) if decision.explain else None,
+            decision.policy_id,
         )
         placeholders = ", ".join(["?"] * len(columns))
         sql = f"INSERT INTO routing_decisions ({', '.join(columns)}) VALUES ({placeholders})"
@@ -1097,3 +1102,45 @@ def record_feedback(
     finally:
         conn.close()
     return feedback_id
+
+
+_DECISION_INFO_COLUMNS = (
+    "id", "created_at", "task_type", "original_task_type", "subtype", "complexity",
+    "classifier_confidence", "classifier_source", "selected_model", "selected_provider",
+    "fallbacks", "routing_score", "reason", "excluded_models", "mechanisms",
+    "confidence_gate_triggered", "route_mode", "mode", "source_type", "source_tag",
+    "explain_json", "policy_id", "outcome_success", "fallback_used", "fallback_model",
+    "latency_ms", "input_tokens", "output_tokens", "total_tokens", "estimated_cost_usd",
+    "user_override", "user_override_model",
+)
+_DECISION_JSON_COLUMNS = {"fallbacks", "reason", "excluded_models", "mechanisms", "explain_json"}
+
+
+def load_decision_info(decision_id: str) -> Optional[dict[str, Any]]:
+    """One decision with its feedback, for /route-info. Never returns message_text."""
+    conn = _connect()
+    try:
+        row = conn.execute(
+            f"SELECT {', '.join(_DECISION_INFO_COLUMNS)} FROM routing_decisions WHERE id=?",
+            (str(decision_id or "").strip(),),
+        ).fetchone()
+        if row is None:
+            return None
+        info = dict(row)
+        for column in _DECISION_JSON_COLUMNS:
+            try:
+                info[column] = json.loads(info[column]) if info[column] else None
+            except (TypeError, ValueError):
+                pass
+        info["explain"] = info.pop("explain_json")
+        info["feedback"] = [
+            dict(item)
+            for item in conn.execute(
+                "SELECT created_at, verdict, corrected_task, model_verdict, preferred_model, "
+                "reason_tag, source_surface FROM route_feedback WHERE decision_id=? ORDER BY created_at",
+                (info["id"],),
+            )
+        ]
+        return info
+    finally:
+        conn.close()

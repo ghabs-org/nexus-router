@@ -49,7 +49,7 @@ async function debugLog(line) {
         // ignore debug logging failures
     }
 }
-async function routeRequest(url, prompt, costProfile, timeoutMs, routeMode, conversationContext, useLlmClassifier, sourceType, sourceTag, provenanceMode, freeFilter) {
+async function routeRequest(url, prompt, costProfile, timeoutMs, routeMode, conversationContext, useLlmClassifier, sourceType, sourceTag, provenanceMode, freeFilter, experimentKey) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
@@ -71,6 +71,8 @@ async function routeRequest(url, prompt, costProfile, timeoutMs, routeMode, conv
                 conversation_context: conversationContext,
                 use_llm_classifier: useLlmClassifier ?? false,
                 free_only: freeFilter ?? false,
+                // Stable A/B assignment per conversation (router `experiment` config).
+                experiment_key: experimentKey || undefined,
             }),
             signal: controller.signal,
         });
@@ -1094,12 +1096,93 @@ function buildRouteExplainReply(last) {
         `Fallbacks: ${fallbacks}`,
         `Excluded: ${excluded}`,
         `Reason: ${reason}`,
+        `Decision id: ${last.decisionId ?? "n/a"}${last.decisionId ? " (full record: /route info)" : ""}`,
     ];
     lines.push("Note: the message footer may still show the current session/base model for the /route command itself, not the inspected turn model above.");
     if (last.runtimeError?.trim()) {
         lines.push(`Runtime error: ${last.runtimeError.trim()}`);
     }
     return { text: lines.join("\n") };
+}
+async function fetchRouterJson(url, timeoutMs) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+        const res = await fetch(url, { headers: { "Connection": "close" }, signal: controller.signal });
+        const data = await res.json().catch(() => null);
+        return res.ok ? { data } : { data, status: res.status, error: data?.error ?? `HTTP ${res.status}` };
+    }
+    catch (error) {
+        return { data: null, error: error?.name === "AbortError" ? "timeout" : "network_error" };
+    }
+    finally {
+        clearTimeout(timer);
+    }
+}
+function formatRouteInfo(info) {
+    const explain = info?.explain ?? {};
+    const classifier = explain.classifier ?? {};
+    const scores = Array.isArray(explain.model_scores) ? explain.model_scores : [];
+    const exclusions = Object.entries(explain.exclusions ?? {}).map(([reason, n]) => `${reason}=${n}`).join(", ") || "none";
+    const outcome = info.outcome_success === null || info.outcome_success === undefined
+        ? "not recorded"
+        : `${info.outcome_success ? "success" : "failure"}${info.latency_ms ? ` (${info.latency_ms}ms)` : ""}`
+            + (info.fallback_used ? ` via fallback ${info.fallback_model ?? "?"}` : "");
+    const tokens = info.total_tokens ?? (info.input_tokens || info.output_tokens ? `${info.input_tokens ?? "?"}/${info.output_tokens ?? "?"}` : "n/a");
+    const feedback = Array.isArray(info.feedback) && info.feedback.length
+        ? info.feedback.map((f) => `${f.verdict}${f.reason_tag ? `:${f.reason_tag}` : ""}${f.corrected_task ? `→${f.corrected_task}` : ""}`).join(", ")
+        : "none";
+    return [
+        `Decision ${info.id} at ${info.created_at}`,
+        `Selected: ${info.selected_model} (score ${Number(info.routing_score ?? 0).toFixed(3)})`,
+        `Task: ${classifier.task_type ?? info.task_type} → ${classifier.effective_task_type ?? info.task_type} via ${classifier.source ?? info.classifier_source ?? "?"} (confidence ${Number(classifier.confidence ?? info.classifier_confidence ?? 0).toFixed(2)})`,
+        `Rules: ${(explain.rules_triggered ?? info.mechanisms ?? []).join(", ") || "none"}`,
+        ...(explain.policy_id || info.policy_id ? [`Policy: ${explain.policy_id ?? info.policy_id}`] : []),
+        `Top candidates:`,
+        ...scores.map((m) => `  - ${m.model} ${Number(m.total ?? 0).toFixed(3)}`),
+        `Exclusions: ${exclusions}`,
+        `Fallbacks: ${(info.fallbacks ?? []).join(", ") || "none"}`,
+        `Outcome: ${outcome}; tokens: ${tokens}`,
+        `Feedback: ${feedback}`,
+    ].join("\n");
+}
+function formatDiagnostics(d) {
+    const warnings = Array.isArray(d?.warnings) ? d.warnings : [];
+    const providers = Object.entries(d?.providers ?? {}).map(([name, p]) => `  - ${name}: ${p.enabled ? "on" : "off"} health=${p.health_score ?? "?"} auth=${p.auth ?? "?"} quota=${p.quota ?? "?"}${p.cooldown_until ? ` cooldown→${p.cooldown_until}` : ""}`);
+    const cooling = (d?.model_cooldowns ?? []).map((c) => `  - ${c.model} [${c.scope}] until ${c.cooldown_until}`);
+    const cli = d?.cli_proxy;
+    return [
+        warnings.length ? `⚠️ ${warnings.length} warning(s):` : "✅ No warnings",
+        ...warnings.map((w) => `  - ${w}`),
+        `Registry: ${d?.registry?.authed_models ?? "?"}/${d?.registry?.models ?? "?"} authed models, updated ${d?.registry?.updated_at ?? "never"}`,
+        `Classifier: ${d?.classifier?.local_available ? "local ONNX ready" : `local unavailable (${d?.classifier?.local_error ?? "?"})`}`,
+        `Decisions: ${d?.database?.decisions ?? "?"} total, ${d?.database?.decisions_7d ?? "?"} in 7d, outcome fill ${d?.database?.outcome_fill_7d ?? "n/a"}`,
+        `Quota sync: last ${d?.quota_sync_last_check_at ?? "never"}`,
+        ...(d?.experiment ? [`Experiment: ${d.experiment.id} split=${d.experiment.split} (${(d.experiment.variants ?? []).join(" vs ")})`] : []),
+        `Providers:`,
+        ...providers,
+        `Model cooldowns: ${cooling.length ? "" : "none"}`,
+        ...cooling,
+        ...(cli ? [`CLI proxy: ${cli.active_pins ?? 0} pins${cli.turns_24h !== undefined ? `, ${cli.turns_24h} turns/24h` : ""}${cli.ordering ? `, ordering=${cli.ordering}` : ""}`] : []),
+    ].join("\n");
+}
+async function buildRouteInfoReply(routerUrl, decisionId, timeoutMs) {
+    const id = String(decisionId ?? "").trim();
+    if (!id) {
+        return { text: "No decision id. Use /route info <decision_id>, or route a message first." };
+    }
+    const result = await fetchRouterJson(`${routerUrl}/route-info?id=${encodeURIComponent(id)}`, timeoutMs);
+    if (!result.data || result.error) {
+        return { text: `Router could not return decision ${id}: ${result.error ?? "no data"}` };
+    }
+    return { text: formatRouteInfo(result.data) };
+}
+async function buildRouteDoctorReply(routerUrl, timeoutMs) {
+    const result = await fetchRouterJson(`${routerUrl}/diagnostics`, Math.max(timeoutMs, 5000));
+    if (!result.data || result.error) {
+        return { text: `Router diagnostics unavailable at ${routerUrl}: ${result.error ?? "no data"}` };
+    }
+    return { text: formatDiagnostics(result.data) };
 }
 async function buildRouteCompareReply(routerUrl, last, modes, timeoutMs) {
     if (!last?.promptText?.trim()) {
@@ -1210,6 +1293,8 @@ function buildRouteHelpText(currentMode) {
         `- /route feedback → request a feedback card for the last routing decision`,
         `- /route feedback on|off → enable/disable feedback cards for this session`,
         `- /route compare [fast balanced reasoning eco] → compare modes on the last prompt`,
+        `- /route info [decision_id] → stored decision: scores, rules, outcome, feedback (default: last)`,
+        `- /route doctor → router health check (registry, classifier, providers, cooldowns)`,
         ``,
         `Examples:`,
         `- /route fast`,
@@ -1348,6 +1433,8 @@ function shouldAutoEscalate(confidence) {
     return confidence < AUTO_ESCALATE_CONFIDENCE;
 }
 export const __testHelpers = {
+    formatRouteInfo,
+    formatDiagnostics,
     normalizeAgentEndEvent,
     toModelRef,
     hasExplicitModelSelection,
@@ -1464,6 +1551,14 @@ export default definePluginEntry({
             if (arg === "explain") {
                 const last = resolveLastDecisionForContext(ctx, conversationKey);
                 return buildRouteExplainReply(last);
+            }
+            if (arg === "info") {
+                const explicitId = rawArgs.split(/\s+/)[1];
+                const last = explicitId ? null : resolveLastDecisionForContext(ctx, conversationKey);
+                return buildRouteInfoReply(routerUrl, explicitId ?? last?.decisionId, timeoutMs);
+            }
+            if (arg === "doctor") {
+                return buildRouteDoctorReply(routerUrl, timeoutMs);
             }
             if (arg.startsWith("compare")) {
                 const last = resolveLastDecisionForContext(ctx, conversationKey);
@@ -1805,7 +1900,7 @@ export default definePluginEntry({
             }
             if (routeMode === "off") {
                 const shadowTimeoutMs = Math.max(timeoutMs, SHADOW_TIMEOUT_MS);
-                const shadowResult = await routeRequest(routerUrl, routingText, firstPassCostProfile, shadowTimeoutMs, routeMode, conversationContext, shouldUseLlmClassifier, source, sourceTag, "shadow", freeFilter);
+                const shadowResult = await routeRequest(routerUrl, routingText, firstPassCostProfile, shadowTimeoutMs, routeMode, conversationContext, shouldUseLlmClassifier, source, sourceTag, "shadow", freeFilter, conversationKey ?? undefined);
                 const shadowDecision = shadowResult.decision;
                 if (!shadowDecision) {
                     const failure = describeRouteRequestFailure(shadowResult, shadowTimeoutMs);
@@ -1951,7 +2046,7 @@ export default definePluginEntry({
             let finalMode = routeMode;
             let finalCostProfile = firstPassCostProfile;
             if (routeMode === "auto") {
-                const autoResult = await routeRequest(routerUrl, routingText, firstPassCostProfile, timeoutMs, routeMode, conversationContext, shouldUseLlmClassifier, source, sourceTag, "route", freeFilter);
+                const autoResult = await routeRequest(routerUrl, routingText, firstPassCostProfile, timeoutMs, routeMode, conversationContext, shouldUseLlmClassifier, source, sourceTag, "route", freeFilter, conversationKey ?? undefined);
                 decision = autoResult.decision;
                 if (!decision) {
                     const failure = describeRouteRequestFailure(autoResult, timeoutMs);
@@ -1962,7 +2057,7 @@ export default definePluginEntry({
                 }
             }
             else {
-                const directResult = await routeRequest(routerUrl, routingText, firstPassCostProfile, timeoutMs, routeMode, conversationContext, shouldUseLlmClassifier, source, sourceTag, "route", freeFilter);
+                const directResult = await routeRequest(routerUrl, routingText, firstPassCostProfile, timeoutMs, routeMode, conversationContext, shouldUseLlmClassifier, source, sourceTag, "route", freeFilter, conversationKey ?? undefined);
                 decision = directResult.decision;
                 if (!decision) {
                     const failure = describeRouteRequestFailure(directResult, timeoutMs);

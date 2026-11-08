@@ -103,3 +103,5 @@ class RoutingDecision:
     confidence_gate_reason: Optional[str] = None
     selected_component_scores: dict[str, float] = field(default_factory=dict)
     selected_component_contributions: dict[str, float] = field(default_factory=dict)
+    explain: dict = field(default_factory=dict)
+    policy_id: Optional[str] = None

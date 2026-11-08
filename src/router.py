@@ -9,9 +9,12 @@ Usage:
     print(decision.selected_model)
 """
 
+import hashlib
 import json
 import os
 import random
+import uuid
+from collections import Counter
 from dataclasses import replace
 from pathlib import Path
 from typing import Optional
@@ -25,6 +28,7 @@ except ImportError:
 from .types import ClassifierOutput, PreSignals, RoutingDecision
 from .health import load_provider_health
 from .scorer import score_models
+from .cooldowns import cooling_models
 from .db import ensure_schema, load_model_stats, load_model_metadata, write_decision
 from .paths import ARTIFACTS_ROOT, REGISTRY_FILE, POLICIES_ROOT
 
@@ -87,6 +91,8 @@ class Router:
         message_text: Optional[str] = None,
         classifier_source: Optional[str] = None,
         free_only: bool = False,
+        allowed_providers: Optional[list[str]] = None,
+        experiment_key: Optional[str] = None,
     ) -> RoutingDecision:
         """
         Route a request to the best available model.
@@ -96,18 +102,20 @@ class Router:
             pre_signals:   Pre-linguistic signals (optional, for logging)
             nexus_context: Optional dict with nexus_workflow_id, nexus_step_id,
                            nexus_issue_id, nexus_project
+            allowed_providers: Optional provider ids the caller can actually run
+            experiment_key: Stable key (e.g. conversation) for A/B assignment
 
         Returns:
             RoutingDecision with selected_model, fallbacks, score, reason
         """
         pre_signals  = pre_signals or PreSignals()
         nexus_context = nexus_context or {}
+        # A/B experiment: this call scores with the variant's scoring overrides.
+        policy_id, routing = _experiment_routing(self._routing, experiment_key)
 
-        
-        
         # 1. Determine effective route mode
         normalized_route_mode = str(route_mode or "auto").strip().lower()
-        confidence_gate_threshold = _confidence_gate_threshold(self._routing)
+        confidence_gate_threshold = _confidence_gate_threshold(routing)
         confidence_gate_triggered = False
         confidence_gate_reason: str | None = None
 
@@ -143,13 +151,13 @@ class Router:
         learned_stats   = load_model_stats()
 
         # Score all models
-        routing_policy = self._routing if self._use_routing_policy else None
+        routing_policy = routing if self._use_routing_policy else None
         policy_weights = (
-            self._routing.get("scoring", {}).get("weights")
+            routing.get("scoring", {}).get("weights")
             if self._use_routing_policy
             else None
         )
-        fitted_weights_bundle, fitted_weights_min_samples = self._load_fitted_weights_bundle()
+        fitted_weights_bundle, fitted_weights_min_samples = self._load_fitted_weights_bundle(routing)
         live_registry = self._registry
         if free_only or normalized_route_mode == "free":
             metadata = load_model_metadata()
@@ -163,6 +171,9 @@ class Router:
                         features["is_free"] = override.get("is_free")
                     model_copy["features"] = features
                     live_registry.append(model_copy)
+        allowed = {str(p) for p in allowed_providers or []}
+        if allowed:
+            live_registry = [m for m in live_registry if m.get("provider") in allowed]
 
         scored = score_models(
             classifier=effective_classifier,
@@ -175,6 +186,7 @@ class Router:
             routing_policy=routing_policy,
             route_mode=normalized_route_mode,
             free_only=(free_only or normalized_route_mode == "free"),
+            cooling_models=cooling_models(effective_classifier.task_type),
         )
 
         eligible = [s for s in scored if not s.excluded]
@@ -191,7 +203,7 @@ class Router:
             learned_stats=learned_stats,
             route_mode=normalized_route_mode,
             provenance_mode=mode,
-            routing_config=self._routing,
+            routing_config=routing,
         )
         ranked_for_fallbacks = [primary] + [s for s in eligible if s.model_id != primary.model_id]
         fallbacks = _build_fallback_chain(ranked_for_fallbacks, primary_provider=primary.provider, limit=5)
@@ -214,6 +226,10 @@ class Router:
             reason.append(f"mechanisms: {', '.join(dict.fromkeys(mechanisms))}")
         if normalized_route_mode in {"auto", "balanced", "fast", "reasoning", "eco", "free", "off"}:
             reason.append(f"route mode: {normalized_route_mode}")
+        if allowed:
+            reason.append(f"restricted to providers: {', '.join(sorted(allowed))}")
+        if policy_id:
+            reason.append(f"policy: {policy_id}")
 
         decision = RoutingDecision(
             task_type=effective_classifier.task_type,
@@ -235,6 +251,11 @@ class Router:
             confidence_gate_reason=confidence_gate_reason,
             selected_component_scores=dict(primary.component_scores or {}),
             selected_component_contributions=dict(primary.component_contributions or {}),
+            policy_id=policy_id,
+        )
+        decision.explain = _build_explain(
+            decision, ranked_for_fallbacks, excluded, classifier, classifier_source,
+            normalized_route_mode, sorted(allowed),
         )
 
         # Persist if enabled. Skip ephemeral compiled prompt probes: they pollute
@@ -274,8 +295,9 @@ class Router:
 
         return decision
 
-    def _load_fitted_weights_bundle(self) -> tuple[dict | None, int]:
-        cfg = ((self._routing or {}).get("scoring", {}) or {}).get("fitted_weights", {}) or {}
+    def _load_fitted_weights_bundle(self, routing: Optional[dict] = None) -> tuple[dict | None, int]:
+        routing = self._routing if routing is None else routing
+        cfg = ((routing or {}).get("scoring", {}) or {}).get("fitted_weights", {}) or {}
         enabled = bool(cfg.get("enabled", True))
         min_samples = max(1, int(cfg.get("min_samples_per_task", 40) or 40))
         if not enabled:
@@ -340,6 +362,76 @@ class Router:
             return {}
         with open(self.routing_path) as f:
             return yaml.safe_load(f) or {}
+
+
+# ── Experiments + explainability ──────────────────────────────────────────────
+
+def _deep_merge(base: dict, override: dict) -> dict:
+    merged = dict(base or {})
+    for key, value in (override or {}).items():
+        merged[key] = _deep_merge(merged.get(key) or {}, value) if isinstance(value, dict) else value
+    return merged
+
+
+def _experiment_routing(routing: Optional[dict], key: Optional[str]) -> tuple[Optional[str], dict]:
+    """Pick the A/B variant for this call; returns (policy_id, routing for this call).
+
+    routing.yaml:
+      experiment:
+        id: weights-2026-11
+        split: 0.5            # share of keys sent to the second variant
+        variants:
+          control: {}
+          candidate: {exploration: {enabled: false}}   # overrides of `scoring`
+    Same key -> same variant. No key -> per-decision coin flip.
+    """
+    routing = routing or {}
+    experiment = routing.get("experiment") or {}
+    variants = experiment.get("variants") or {}
+    if not experiment.get("id") or not isinstance(variants, dict) or not variants:
+        return None, routing
+    names = list(variants)[:2]
+    seed = f"{experiment['id']}:{key or uuid.uuid4().hex}".encode()
+    bucket = int.from_bytes(hashlib.blake2s(seed, digest_size=8).digest(), "big") / 2**64
+    name = names[-1] if len(names) > 1 and bucket < float(experiment.get("split", 0.5)) else names[0]
+    scoring = _deep_merge(routing.get("scoring") or {}, variants.get(name) or {})
+    return f"{experiment['id']}:{name}", {**routing, "scoring": scoring}
+
+
+def _build_explain(decision, ranked, excluded, classifier, classifier_source, route_mode, allowed) -> dict:
+    rules = list(decision.mechanisms or [])
+    if route_mode not in {"auto", "balanced"}:
+        rules.append(f"route_mode:{route_mode}")
+    if allowed:
+        rules.append("provider_filter")
+    return {
+        "rules_triggered": list(dict.fromkeys(rules)),
+        "classifier": {
+            "source": classifier_source,
+            "task_type": classifier.task_type,
+            "effective_task_type": decision.task_type,
+            "complexity": classifier.complexity,
+            "confidence": classifier.confidence,
+            "provider": getattr(classifier, "classifier_provider", None),
+            "model": getattr(classifier, "classifier_model", None),
+        },
+        "model_scores": [
+            {
+                "model": s.model_id,
+                "provider": s.provider,
+                "total": round(s.total_score, 4),
+                "components": s.component_scores or {
+                    "task_fit": s.task_fit, "health": s.health, "preference": s.preference,
+                    "learned": s.learned, "cost": s.cost, "speed": s.speed,
+                },
+                "contributions": s.component_contributions or {},
+            }
+            for s in ranked[:5]
+        ],
+        "exclusions": dict(Counter(str(e.exclusion_reason).split(":")[0] for e in excluded)),
+        "allowed_providers": allowed,
+        "policy_id": decision.policy_id,
+    }
 
 
 # ── Reason builder ────────────────────────────────────────────────────────────
