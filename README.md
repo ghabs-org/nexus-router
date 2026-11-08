@@ -163,8 +163,10 @@ does not establish that TCP binding or a live CLI attachment works.
   provider result seen outside a routed turn (e.g. a usage limit) updates its health.
 - **`GET /decisions`** `?source_type=&nexus_project=&limit=`: recent decisions with
   their `nexus_*` links and outcome, never message text.
-- **Pricing:** `policies/pricing.yaml` (exact ids or globs, USD per million tokens;
-  `subscription_providers` cost 0). Outcomes record `estimated_cost_usd` with
+- **Pricing:** `policies/pricing.yaml` (exact ids or globs, USD per million tokens,
+  optional `long_context: {above_input_tokens, …}` tier that prices the whole request;
+  `subscription_providers` cost 0). It ships the Anthropic and OpenAI API list prices
+  as checked on 2026-11-08; re-check when providers change them. Outcomes record `estimated_cost_usd` with
   `cost_source` `tariff|subscription|proxy`; `GET /pricing` returns the table and
   `/stats` adds `estimated_cost_usd_24h`.
 - **`GET /metrics`:** Prometheus text computed from SQLite (decisions, outcomes, cost,

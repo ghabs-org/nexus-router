@@ -170,3 +170,17 @@ def test_routing_policy_hot_reload(tmp_path, monkeypatch):
     routing.write_text("scoring: [broken")
     os.utime(routing, (time.time() + 10, time.time() + 10))
     assert reloadable.route(low, PreSignals()).confidence_gate_triggered  # last good policy kept
+
+
+
+def test_pricing_long_context_tier_and_shipped_table(monkeypatch):
+    from src.paths import POLICIES_ROOT
+
+    monkeypatch.setattr(pricing, "PRICING_FILE", POLICIES_ROOT / "pricing.yaml")
+    monkeypatch.setitem(pricing._cache, "mtime", None)
+    assert pricing.estimate("anthropic/claude-opus-5-5", "anthropic", 1_000_000, 100_000) == (6.0, "tariff")
+    # Haiku 5.5: prompts over 100K pay the higher rate for the whole request.
+    assert pricing.estimate("anthropic/claude-haiku-5-5", "anthropic", 100_000, 0) == (0.01, "tariff")
+    assert pricing.estimate("anthropic/claude-haiku-5-5", "anthropic", 100_001, 0) == (round(100_001 * 0.5 / 1e6, 8), "tariff")
+    assert pricing.estimate("openai/gpt-6.1-sol", "openai", 300_000, 1_000) == (round((300_000 * 4 + 1_000 * 15) / 1e6, 8), "tariff")
+    assert pricing.estimate("openai-codex/gpt-6.1-sol", "openai-codex", 300_000, 1_000) == (0.0, "subscription")

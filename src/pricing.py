@@ -28,10 +28,7 @@ def pricing_table() -> dict:
         with open(PRICING_FILE) as file:
             raw = yaml.safe_load(file) or {}
         models = {
-            str(pattern): {
-                "input_per_mtok": float(price.get("input_per_mtok", 0)),
-                "output_per_mtok": float(price.get("output_per_mtok", 0)),
-            }
+            str(pattern): _price(price)
             for pattern, price in (raw.get("models") or {}).items()
             if isinstance(price, dict)
         }
@@ -40,6 +37,29 @@ def pricing_table() -> dict:
             table={"models": models, "subscription_providers": list(raw.get("subscription_providers") or [])},
         )
     return {**_cache["table"], "source": str(PRICING_FILE)}
+
+
+def _price(raw: dict) -> dict:
+    price = {
+        "input_per_mtok": float(raw.get("input_per_mtok", 0)),
+        "output_per_mtok": float(raw.get("output_per_mtok", 0)),
+    }
+    tier = raw.get("long_context")
+    if isinstance(tier, dict) and int(tier.get("above_input_tokens") or 0) > 0:
+        price["long_context"] = {
+            "above_input_tokens": int(tier["above_input_tokens"]),
+            "input_per_mtok": float(tier.get("input_per_mtok", price["input_per_mtok"])),
+            "output_per_mtok": float(tier.get("output_per_mtok", price["output_per_mtok"])),
+        }
+    return price
+
+
+def rates(price: dict, input_tokens: Optional[int]) -> tuple[float, float]:
+    """(input, output) USD per MTok; a long-context tier prices the whole request."""
+    tier = price.get("long_context")
+    if tier and int(input_tokens or 0) > tier["above_input_tokens"]:
+        return tier["input_per_mtok"], tier["output_per_mtok"]
+    return price["input_per_mtok"], price["output_per_mtok"]
 
 
 def tariff(model_id: str) -> Optional[dict]:
@@ -60,5 +80,6 @@ def estimate(
     price = tariff(model_id or "")
     if price is None or (input_tokens is None and output_tokens is None):
         return None, None
-    usd = (int(input_tokens or 0) * price["input_per_mtok"] + int(output_tokens or 0) * price["output_per_mtok"]) / 1e6
+    input_rate, output_rate = rates(price, input_tokens)
+    usd = (int(input_tokens or 0) * input_rate + int(output_tokens or 0) * output_rate) / 1e6
     return round(usd, 8), "tariff"
