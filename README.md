@@ -145,6 +145,34 @@ does not establish that TCP binding or a live CLI attachment works.
   the chosen variant over `scoring:` for that call and tags the decision `policy_id`.
   Compare with `python scripts/policy_experiment_report.py --experiment <id>`.
 
+## Access, previews, caller catalogs, pricing, metrics
+
+- **Token auth:** start with `NEXUS_ROUTER_TOKEN=<secret>` and every endpoint except
+  `GET /health` needs `Authorization: Bearer <secret>` (401 otherwise). CLIs attach with
+  the token as their API key (`ANTHROPIC_API_KEY` / `OPENAI_API_KEY`); the proxy also
+  accepts it as `x-api-key` on `/v1/*` and never forwards it upstream. The OpenClaw
+  plugin sends `routerToken` from its config. Unset = open, as before (loopback only).
+- **Dry run:** `/route {"dry_run": true}` scores and explains without writing a decision
+  and without exploration (`decision_id: null`). Used for previews.
+- **Caller catalog:** `/route {"available_models": ["anthropic/claude-opus-5-5", {"id": …,
+  "context_window": 400000, "vision": true}]}` restricts scoring to exactly the models
+  the caller can run. Ids missing from the registry are scored like
+  `generate_registry.py` would (family priors, overrides, stored benchmarks), so a
+  stale catalog no longer limits callers with newer models.
+- **`POST /observe`** `{provider, http_status, error_type, latency_ms, quota_hint}`: a
+  provider result seen outside a routed turn (e.g. a usage limit) updates its health.
+- **`GET /decisions`** `?source_type=&nexus_project=&limit=`: recent decisions with
+  their `nexus_*` links and outcome, never message text.
+- **Pricing:** `policies/pricing.yaml` (exact ids or globs, USD per million tokens;
+  `subscription_providers` cost 0). Outcomes record `estimated_cost_usd` with
+  `cost_source` `tariff|subscription|proxy`; `GET /pricing` returns the table and
+  `/stats` adds `estimated_cost_usd_24h`.
+- **`GET /metrics`:** Prometheus text computed from SQLite (decisions, outcomes, cost,
+  CLI turns/tokens, provider health, active model cooldowns).
+- **Hot reload:** edits to `routing.yaml` (advisory policy and `cli_proxy`) and the
+  registry apply without a restart; an invalid edit is logged and the last good
+  config keeps serving. CLI pins whose target is no longer routed are dropped.
+
 ## Philosophy
 - **Classify first** — a Nexus classifier agent determines task type
 - **Score everything** — capability priors + runtime health + learned history

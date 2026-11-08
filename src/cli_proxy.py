@@ -101,21 +101,38 @@ class UsageTap:
 
 class CliProxy:
     def __init__(self, config=None):
+        # Built from routing.yaml (not an explicit dict): reloaded when the file changes.
+        self._config_file = POLICIES_ROOT / "routing.yaml" if config is None else None
+        self._config_mtime = None
         if config is None:
-            with open(POLICIES_ROOT / "routing.yaml") as file:
-                config = (yaml.safe_load(file) or {}).get("cli_proxy", {})
-        self.config = config
-        self.providers = config.get("providers", {})
-        self.routes = {}
+            config, self._config_mtime = self._read_config()
+        self._apply(config)
+        self.classifier = CliPayloadClassifier()
+        self.pins = OrderedDict()
+        self.lock = threading.RLock()
+        # Bounded striped locks serialize concurrent turns of a session, including
+        # phase transitions. Unrelated sessions still forward concurrently.
+        self.session_locks = [threading.Lock() for _ in range(256)]
+        self._load_pins()
+
+    def _read_config(self):
+        mtime = self._config_file.stat().st_mtime
+        with open(self._config_file) as file:
+            return (yaml.safe_load(file) or {}).get("cli_proxy", {}), mtime
+
+    def _apply(self, config):
+        """Validate a cli_proxy section completely before any of it takes effect."""
+        providers = config.get("providers", {})
+        routes = {}
         for category in CallCategory:
             targets = []
             for entry in config.get("routes", {}).get(category.value, []):
                 provider, separator, model = entry.partition(":")
-                if not separator or not model or provider not in self.providers:
+                if not separator or not model or provider not in providers:
                     raise ValueError(f"Invalid CLI target: {entry}")
                 targets.append(Target(provider, model))
-            self.routes[category] = targets
-        for name, provider in self.providers.items():
+            routes[category] = targets
+        for name, provider in providers.items():
             url = urlparse(provider["base_url"])
             if url.scheme not in {"http", "https"} or not url.netloc or url.query or url.fragment or url.username:
                 raise ValueError(f"Invalid upstream base_url for {name}")
@@ -123,15 +140,27 @@ class CliProxy:
                 raise ValueError(f"Invalid protocols for {name}")
         if config.get("ordering", "static") not in {"static", "learned"}:
             raise ValueError("cli_proxy.ordering must be static or learned")
-        self.classifier = CliPayloadClassifier()
-        self.pins = OrderedDict()
-        self.lock = threading.RLock()
-        # Bounded striped locks serialize concurrent turns of a session, including
-        # phase transitions. Unrelated sessions still forward concurrently.
-        self.session_locks = [threading.Lock() for _ in range(256)]
+        self.config, self.providers, self.routes = config, providers, routes
         self.max_pins = max(1, int(config.get("max_pins", 4096)))
         self.pin_ttl = max(1, float(config.get("pin_ttl_seconds", 86400)))
-        self._load_pins()
+
+    def _reload_if_changed(self):
+        """Hot reload routing.yaml's cli_proxy section; a bad edit keeps the running config."""
+        if self._config_file is None:
+            return
+        try:
+            if self._config_file.stat().st_mtime == self._config_mtime:
+                return
+            config, mtime = self._read_config()
+            with self.lock:
+                self._apply(config)
+                self._config_mtime = mtime
+                for session in [k for k, pin in self.pins.items()
+                                if pin.target not in self.routes.get(pin.category, [])]:
+                    del self.pins[session]  # its target is no longer routed for that category
+            print("[cli-proxy] reloaded cli_proxy routes from routing.yaml", flush=True)
+        except (OSError, ValueError, KeyError, TypeError, yaml.YAMLError) as exc:
+            print(f"[cli-proxy] reload failed, keeping previous config: {exc}", flush=True)
 
     # ── Persistence (SQLite; tables in schema.sql) ──────────────────────────
 
@@ -288,6 +317,7 @@ class CliProxy:
                         "GROUP BY target ORDER BY turns DESC", (time.time() - 86400,), fetch=True)
 
     def status(self, port):
+        self._reload_if_changed()
         now = time.time()
         with self.lock:
             self._expire()
@@ -312,8 +342,18 @@ class CliProxy:
                 "provider_controls": {key: {field: value.get(field) for field in
                     ("enabled", "status", "allow_primary", "allow_fallback", "health_status", "cooldown_until")}
                     for key, value in load_providers().items()},
-                "exports": [f"export ANTHROPIC_BASE_URL=http://127.0.0.1:{port}",
-                            f"export OPENAI_BASE_URL=http://127.0.0.1:{port}/v1"]}
+                "exports": self._exports(port)}
+
+    @staticmethod
+    def _exports(port):
+        from . import server  # token lives on the server module (env or embedded launch)
+
+        lines = [f"export ANTHROPIC_BASE_URL=http://127.0.0.1:{port}",
+                 f"export OPENAI_BASE_URL=http://127.0.0.1:{port}/v1"]
+        if server.ROUTER_TOKEN:
+            # The router token doubles as the CLI's API key; its value is never printed.
+            lines += ["export ANTHROPIC_API_KEY=$NEXUS_ROUTER_TOKEN", "export OPENAI_API_KEY=$NEXUS_ROUTER_TOKEN"]
+        return lines
 
     def summary(self):
         """Compact state for /diagnostics."""
@@ -386,6 +426,7 @@ class CliProxy:
 
     def handle(self, handler, body, path):
         from .server import _json_response
+        self._reload_if_changed()
         try:
             self._validate(body)
             classification = self.classifier.classify(body, dict(handler.headers))

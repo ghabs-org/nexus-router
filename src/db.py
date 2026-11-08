@@ -11,7 +11,7 @@ Handles:
 import json
 import sqlite3
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Optional
 
@@ -157,6 +157,7 @@ def _ensure_routing_decisions_compat(conn: sqlite3.Connection) -> None:
         "selected_component_contributions": "TEXT",
         "explain_json": "TEXT",       # structured explainability payload
         "policy_id": "TEXT",          # experiment:variant when an A/B experiment is active
+        "cost_source": "TEXT",        # tariff | subscription | proxy (src/pricing.py)
     }
     for column, column_type in expected.items():
         if column not in columns:
@@ -497,10 +498,19 @@ def update_outcome(
         if total_tokens_value is None and (input_tokens is not None or output_tokens is not None):
             total_tokens_value = int(input_tokens or 0) + int(output_tokens or 0)
 
-        estimated_cost_usd = _estimate_cost_usd(
-            total_tokens=total_tokens_value,
-            selected_cost_score=(row["selected_cost_score"] if row else None),
-        )
+        from .pricing import estimate
+
+        # A fallback answered the turn: price the model that actually ran.
+        priced_model = fallback_model if fallback_used and fallback_model else (row["selected_model"] if row else None)
+        priced_provider = priced_model.split("/", 1)[0] if priced_model and "/" in priced_model else (
+            row["selected_provider"] if row else None)
+        estimated_cost_usd, cost_source = estimate(priced_model, priced_provider, input_tokens, output_tokens)
+        if cost_source is None:
+            estimated_cost_usd = _estimate_cost_usd(
+                total_tokens=total_tokens_value,
+                selected_cost_score=(row["selected_cost_score"] if row else None),
+            )
+            cost_source = "proxy" if estimated_cost_usd is not None else None
 
         conn.execute(
             """
@@ -509,7 +519,7 @@ def update_outcome(
                 fallback_used=?, fallback_model=?,
                 user_override=?, user_override_model=?,
                 input_tokens=?, output_tokens=?, total_tokens=?,
-                estimated_cost_usd=?
+                estimated_cost_usd=?, cost_source=?
             WHERE id=?
             """,
             (
@@ -517,7 +527,7 @@ def update_outcome(
                 int(fallback_used), fallback_model,
                 int(user_override), user_override_model,
                 input_tokens, output_tokens, total_tokens_value,
-                estimated_cost_usd,
+                estimated_cost_usd, cost_source,
                 decision_id,
             ),
         )
@@ -1106,11 +1116,12 @@ def record_feedback(
 
 _DECISION_INFO_COLUMNS = (
     "id", "created_at", "task_type", "original_task_type", "subtype", "complexity",
+    "nexus_workflow_id", "nexus_step_id", "nexus_issue_id", "nexus_project",
     "classifier_confidence", "classifier_source", "selected_model", "selected_provider",
     "fallbacks", "routing_score", "reason", "excluded_models", "mechanisms",
     "confidence_gate_triggered", "route_mode", "mode", "source_type", "source_tag",
     "explain_json", "policy_id", "outcome_success", "fallback_used", "fallback_model",
-    "latency_ms", "input_tokens", "output_tokens", "total_tokens", "estimated_cost_usd",
+    "latency_ms", "input_tokens", "output_tokens", "total_tokens", "estimated_cost_usd", "cost_source",
     "user_override", "user_override_model",
 )
 _DECISION_JSON_COLUMNS = {"fallbacks", "reason", "excluded_models", "mechanisms", "explain_json"}
@@ -1142,5 +1153,51 @@ def load_decision_info(decision_id: str) -> Optional[dict[str, Any]]:
             )
         ]
         return info
+    finally:
+        conn.close()
+
+
+def load_recent_decisions(
+    source_type: Optional[str] = None, nexus_project: Optional[str] = None, limit: int = 50
+) -> list[dict[str, Any]]:
+    """Newest decisions with their links and outcome, for dashboards. Never message_text."""
+    sql = (
+        "SELECT id, created_at, task_type, selected_model, selected_provider, routing_score, "
+        "outcome_success, latency_ms, total_tokens, policy_id, source_type, source_tag, "
+        "nexus_workflow_id, nexus_step_id, nexus_issue_id, nexus_project FROM routing_decisions"
+    )
+    where, args = [], []
+    if source_type:
+        where.append("source_type = ?")
+        args.append(source_type)
+    if nexus_project:
+        where.append("nexus_project = ?")
+        args.append(nexus_project)
+    if where:
+        sql += " WHERE " + " AND ".join(where)
+    sql += " ORDER BY created_at DESC LIMIT ?"
+    args.append(int(limit))
+    conn = _connect()
+    try:
+        return [dict(row) for row in conn.execute(sql, args)]
+    except sqlite3.OperationalError:
+        return []
+    finally:
+        conn.close()
+
+
+def load_cost_24h() -> dict[str, float]:
+    """Estimated spend per selected model over the last 24 hours."""
+    since = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
+    conn = _connect()
+    try:
+        rows = conn.execute(
+            "SELECT selected_model, SUM(estimated_cost_usd) AS usd FROM routing_decisions "
+            "WHERE created_at >= ? AND estimated_cost_usd IS NOT NULL GROUP BY selected_model",
+            (since,),
+        ).fetchall()
+        return {row["selected_model"]: round(row["usd"] or 0.0, 6) for row in rows}
+    except sqlite3.OperationalError:
+        return {}
     finally:
         conn.close()

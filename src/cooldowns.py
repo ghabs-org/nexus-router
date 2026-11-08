@@ -18,12 +18,22 @@ from .paths import POLICIES_ROOT
 DEFAULTS = {"failures": 3, "window_seconds": 60, "cooldown_seconds": 300}
 
 
-@lru_cache(maxsize=1)
 def config() -> dict:
+    """Thresholds from routing.yaml's `cooldowns`, re-read when the file changes."""
+    path = POLICIES_ROOT / "routing.yaml"
+    try:
+        mtime = path.stat().st_mtime
+    except OSError:
+        mtime = None
+    return _config(mtime)
+
+
+@lru_cache(maxsize=4)
+def _config(mtime) -> dict:
     try:
         with open(POLICIES_ROOT / "routing.yaml") as file:
             raw = (yaml.safe_load(file) or {}).get("cooldowns") or {}
-    except OSError:
+    except (OSError, yaml.YAMLError):
         raw = {}
     return {key: float(raw.get(key, value)) for key, value in DEFAULTS.items()}
 

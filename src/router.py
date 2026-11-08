@@ -93,6 +93,8 @@ class Router:
         free_only: bool = False,
         allowed_providers: Optional[list[str]] = None,
         experiment_key: Optional[str] = None,
+        dry_run: bool = False,
+        available_models: Optional[list] = None,
     ) -> RoutingDecision:
         """
         Route a request to the best available model.
@@ -104,6 +106,10 @@ class Router:
                            nexus_issue_id, nexus_project
             allowed_providers: Optional provider ids the caller can actually run
             experiment_key: Stable key (e.g. conversation) for A/B assignment
+            dry_run:       Score and explain only: nothing is written, no exploration
+            available_models: Caller catalog — the exact models the caller can run
+                           (ids or {id, context_window, vision}); unknown ids are
+                           scored from family priors and benchmarks
 
         Returns:
             RoutingDecision with selected_model, fallbacks, score, reason
@@ -111,7 +117,13 @@ class Router:
         pre_signals  = pre_signals or PreSignals()
         nexus_context = nexus_context or {}
         # A/B experiment: this call scores with the variant's scoring overrides.
+        self._reload_if_changed()
         policy_id, routing = _experiment_routing(self._routing, experiment_key)
+        if dry_run:
+            # A preview must be deterministic: never explore a random challenger.
+            scoring = dict(routing.get("scoring") or {})
+            scoring["exploration"] = {**(scoring.get("exploration") or {}), "enabled": False}
+            routing = {**routing, "scoring": scoring}
 
         # 1. Determine effective route mode
         normalized_route_mode = str(route_mode or "auto").strip().lower()
@@ -160,6 +172,8 @@ class Router:
         fitted_weights_bundle, fitted_weights_min_samples = self._load_fitted_weights_bundle(routing)
         # DB metadata (e.g. is_free) overlays the static catalog on every route.
         live_registry = _overlay_model_metadata(self._registry, load_model_metadata())
+        if available_models:
+            live_registry = _caller_catalog(live_registry, available_models)
         allowed = {str(p) for p in allowed_providers or []}
         if allowed:
             live_registry = [m for m in live_registry if m.get("provider") in allowed]
@@ -246,6 +260,10 @@ class Router:
             decision, ranked_for_fallbacks, excluded, classifier, classifier_source,
             normalized_route_mode, sorted(allowed),
         )
+        if available_models:
+            decision.explain["rules_triggered"].append("caller_catalog")
+        if dry_run:
+            decision.explain["rules_triggered"].append("dry_run")
 
         # Persist if enabled. Skip ephemeral compiled prompt probes: they pollute
         # training data and are not actual user messages.
@@ -255,7 +273,7 @@ class Router:
         shadow_observation = (str(mode or "").strip().lower() == "shadow") or (
             normalized_route_mode in ("off", "shadow")
         )
-        should_persist = self.persist and (
+        should_persist = self.persist and not dry_run and (
             (source_type or 'standalone') != 'compiled-prompt' or shadow_observation
         )
         if should_persist:
@@ -283,6 +301,21 @@ class Router:
             decision.decision_id = decision_id
 
         return decision
+
+    def _reload_if_changed(self) -> None:
+        """Hot reload: re-read routing.yaml / the registry when their files change."""
+        stamp = (_mtime(self.routing_path), _mtime(self.registry_path))
+        previous = getattr(self, "_loaded_stamp", None)
+        self._loaded_stamp = stamp
+        if previous is None or previous == stamp:
+            return
+        try:
+            routing, registry = self._load_routing(), self._load_registry()
+        except Exception as exc:  # keep serving the last good policy
+            print(f"[router] policy reload failed, keeping previous: {exc}", flush=True)
+            return
+        self._routing, self._registry = routing, registry
+        print("[router] reloaded routing policy / registry", flush=True)
 
     def _load_fitted_weights_bundle(self, routing: Optional[dict] = None) -> tuple[dict | None, int]:
         routing = self._routing if routing is None else routing
@@ -354,6 +387,69 @@ class Router:
 
 
 # ── Experiments + explainability ──────────────────────────────────────────────
+
+def _mtime(path) -> Optional[float]:
+    try:
+        return Path(path).stat().st_mtime
+    except (OSError, TypeError):
+        return None
+
+
+_CALLER_ENTRY_CACHE: dict = {}
+DEFAULT_CALLER_CONTEXT = 200_000
+
+
+def _caller_catalog(registry: list[dict], items: list) -> list[dict]:
+    """Exactly the caller's runnable models, marked available.
+
+    Known ids reuse their registry entry; unknown ids (models newer than the
+    catalog) are scored like the registry generator would, from family priors,
+    overrides and stored benchmarks.
+    """
+    index = {model["id"]: model for model in registry}
+    wanted = []
+    for item in items:
+        spec = {"id": item} if isinstance(item, str) else dict(item)
+        if isinstance(spec.get("id"), str) and "/" in spec["id"]:
+            wanted.append(spec)
+    unknown = [spec for spec in wanted if spec["id"] not in index]
+    if unknown:
+        from . import generate_registry as gen  # lazily: only callers with new models pay for it
+
+        stamp = (_mtime(gen.FAMILIES_FILE), _mtime(gen.OVERRIDES_FILE))
+        missing = [spec for spec in unknown if (spec["id"], stamp) not in _CALLER_ENTRY_CACHE]
+        if missing:
+            raw = {"models": [{
+                "key": spec["id"],
+                "available": True,
+                "contextWindow": int(spec.get("context_window") or DEFAULT_CALLER_CONTEXT),
+                "input": "text+image" if spec.get("vision") else "text",
+            } for spec in missing]}
+            entries = gen.normalize(
+                raw, gen.load_yaml(gen.FAMILIES_FILE), gen.load_yaml(gen.OVERRIDES_FILE),
+                {"models": gen.load_benchmark_scores()}, outcome_counts=gen.load_outcome_counts(),
+            )
+            for entry in entries:
+                _CALLER_ENTRY_CACHE[(entry["id"], stamp)] = entry
+        for spec in unknown:
+            if (spec["id"], stamp) in _CALLER_ENTRY_CACHE:
+                index[spec["id"]] = _CALLER_ENTRY_CACHE[(spec["id"], stamp)]
+    catalog = []
+    for spec in wanted:
+        base = index.get(spec["id"])
+        if base is None:
+            continue
+        entry = dict(base)
+        entry["availability"] = {**(base.get("availability") or {}), "authed": True, "available": True}
+        features = dict(base.get("features") or {})
+        if "vision" in spec:
+            features["supportsVision"] = bool(spec["vision"])
+        if spec.get("context_window"):
+            features["contextWindow"] = int(spec["context_window"])
+        entry["features"] = features
+        catalog.append(entry)
+    return catalog
+
 
 def _deep_merge(base: dict, override: dict) -> dict:
     merged = dict(base or {})

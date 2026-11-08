@@ -60,6 +60,7 @@ message → pre-signal extraction → heuristic classification
 | Key | Default | Description |
 |---|---|---|
 | `routerUrl` | `http://127.0.0.1:7771` | Nexus Router server URL |
+| `routerToken` | — | Bearer token when the router runs with `NEXUS_ROUTER_TOKEN` (sent on every router call) |
 | `bridgeUrl` | `http://127.0.0.1:8091` | Nexus bridge URL for feedback cards |
 | `bridgeBearerToken` | — | Optional bearer token for the bridge feedback-card endpoint |
 | `enabled` | `true` | Enable automatic model routing |

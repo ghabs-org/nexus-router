@@ -41,6 +41,14 @@ function splitSelectedModelRef(selectedModel) {
     };
 }
 // ── HTTP helper ───────────────────────────────────────────────────────────────
+// Shared secret for a router started with NEXUS_ROUTER_TOKEN; set once at register.
+let routerToken;
+function setRouterToken(token) {
+    routerToken = token && token.trim() ? token.trim() : undefined;
+}
+function routerHeaders(extra = {}) {
+    return routerToken ? { ...extra, Authorization: `Bearer ${routerToken}` } : { ...extra };
+}
 async function debugLog(line) {
     try {
         await appendFile("/tmp/nexus-router-hook.log", `${new Date().toISOString()} ${line}\n`);
@@ -55,11 +63,11 @@ async function routeRequest(url, prompt, costProfile, timeoutMs, routeMode, conv
     try {
         const res = await fetch(`${url}/route`, {
             method: "POST",
-            headers: {
+            headers: routerHeaders({
                 "Content-Type": "application/json",
                 "Editor-Version": PLUGIN_VERSION,
                 "Connection": "close",
-            },
+            }),
             body: JSON.stringify({
                 message: prompt,
                 cost_profile: costProfile,
@@ -215,10 +223,10 @@ async function persistRouteModePreference(routerUrl, key, mode, scope = "convers
     try {
         const res = await fetch(`${routerUrl}/route-mode`, {
             method: "POST",
-            headers: {
+            headers: routerHeaders({
                 "Content-Type": "application/json",
                 "Editor-Version": PLUGIN_VERSION,
-            },
+            }),
             body: JSON.stringify({ key: trimmedKey, mode, scope, free_filter: freeFilter }),
         });
         if (!res.ok)
@@ -250,9 +258,9 @@ async function loadPersistedRouteModePreference(routerUrl, key, scope = "convers
         return null;
     try {
         const res = await fetch(`${routerUrl}/route-mode?key=${encodeURIComponent(trimmedKey)}&scope=${encodeURIComponent(scope)}`, {
-            headers: {
+            headers: routerHeaders({
                 "Editor-Version": PLUGIN_VERSION,
-            },
+            }),
         });
         if (!res.ok)
             return null;
@@ -1108,7 +1116,7 @@ async function fetchRouterJson(url, timeoutMs) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
-        const res = await fetch(url, { headers: { "Connection": "close" }, signal: controller.signal });
+        const res = await fetch(url, { headers: routerHeaders({ "Connection": "close" }), signal: controller.signal });
         const data = await res.json().catch(() => null);
         return res.ok ? { data } : { data, status: res.status, error: data?.error ?? `HTTP ${res.status}` };
     }
@@ -1433,6 +1441,8 @@ function shouldAutoEscalate(confidence) {
     return confidence < AUTO_ESCALATE_CONFIDENCE;
 }
 export const __testHelpers = {
+    routerHeaders,
+    setRouterToken,
     formatRouteInfo,
     formatDiagnostics,
     normalizeAgentEndEvent,
@@ -1466,6 +1476,7 @@ export default definePluginEntry({
     register(api) {
         const cfg = (api.config ?? {});
         const routerUrl = cfg.routerUrl ?? DEFAULT_URL;
+        setRouterToken(cfg.routerToken);
         const enabled = cfg.enabled ?? true;
         const costProfile = cfg.costProfile ?? DEFAULT_COST;
         const debugMode = cfg.debugMode ?? false;
@@ -1631,7 +1642,7 @@ export default definePluginEntry({
                             try {
                                 const res = await fetch(`${routerUrlResolved}/feedback`, {
                                     method: "POST",
-                                    headers: { "Content-Type": "application/json" },
+                                    headers: routerHeaders({ "Content-Type": "application/json" }),
                                     body: JSON.stringify(body),
                                 });
                                 return res.ok;
@@ -2216,7 +2227,7 @@ export default definePluginEntry({
                 }
                 await fetch(`${routerUrl}/outcome`, {
                     method: "POST",
-                    headers: { "Content-Type": "application/json" },
+                    headers: routerHeaders({ "Content-Type": "application/json" }),
                     body: JSON.stringify({
                         decision_id: pending.decisionId,
                         success: event.success,

@@ -26,6 +26,8 @@ const {
   isConfiguredOwner,
   formatRouteInfo,
   formatDiagnostics,
+  routerHeaders,
+  setRouterToken,
 } = __testHelpers;
 
 test("explicit auto mode stays sticky beyond the recent-message TTL", async () => {
@@ -360,4 +362,14 @@ test("/route doctor lists warnings, providers and cooldowns", () => {
   assert.match(text, /nvidia\/x \[coding\]/);
   assert.match(text, /CLI proxy: 2 pins, 9 turns\/24h, ordering=learned/);
   assert.match(formatDiagnostics({ warnings: [] }), /No warnings/);
+});
+
+
+test("router calls carry the configured token and nothing when unset", () => {
+  setRouterToken(undefined);
+  assert.deepEqual(routerHeaders({ "Content-Type": "application/json" }), { "Content-Type": "application/json" });
+  setRouterToken("  secret-token  ");
+  assert.deepEqual(routerHeaders(), { Authorization: "Bearer secret-token" });
+  setRouterToken("   ");
+  assert.deepEqual(routerHeaders(), {});
 });

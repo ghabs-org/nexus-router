@@ -23,6 +23,7 @@ Usage:
 """
 
 import argparse
+import hmac
 import json
 import os
 import threading
@@ -174,6 +175,25 @@ def _get_router() -> Router:
     return _router
 
 
+def _valid_catalog(items) -> bool:
+    if not isinstance(items, list) or len(items) > 200:
+        return False
+    for item in items:
+        if isinstance(item, dict):
+            if set(item) - {"id", "context_window", "vision"}:
+                return False
+            if item.get("context_window") is not None and (
+                type(item["context_window"]) is not int or not 0 < item["context_window"] <= 10_000_000
+            ):
+                return False
+            if "vision" in item and not isinstance(item["vision"], bool):
+                return False
+            item = item.get("id")
+        if not isinstance(item, str) or "/" not in item or len(item) > 200:
+            return False
+    return True
+
+
 def _observe_model_outcome(decision_id: str, success: bool) -> None:
     """Feed the per-model circuit breaker from an advisory outcome."""
     info = load_decision_info(decision_id)
@@ -188,6 +208,25 @@ def _observe_model_outcome(decision_id: str, success: bool) -> None:
     else:
         model = info["selected_model"]
     (cooldowns.record_success if success else cooldowns.record_failure)(model, scope)
+
+
+# Optional shared secret. Unset = open (loopback-only deployments, tests). The desktop
+# app's built-in router sets this attribute per launch instead of the environment.
+ROUTER_TOKEN: str | None = os.getenv("NEXUS_ROUTER_TOKEN", "").strip() or None
+OPEN_PATHS = {"/health"}
+
+
+def _authorized(handler: BaseHTTPRequestHandler, path: str) -> bool:
+    """Bearer token on every endpoint but /health; CLI wire paths also take it as x-api-key."""
+    token = ROUTER_TOKEN
+    if not token or path in OPEN_PATHS:
+        return True
+    header = handler.headers.get("Authorization", "")
+    supplied = header[7:].strip() if header[:7].lower() == "bearer " else ""
+    if not supplied and path.startswith("/v1/"):
+        # Claude Code sends ANTHROPIC_API_KEY as x-api-key; Codex sends OPENAI_API_KEY as Bearer.
+        supplied = handler.headers.get("x-api-key", "").strip()
+    return bool(supplied) and hmac.compare_digest(supplied.encode(), token.encode())
 
 
 def _json_response(handler: BaseHTTPRequestHandler, status: int, data: Any):
@@ -217,6 +256,9 @@ class RouterHandler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         path = urlparse(self.path).path
+        if not _authorized(self, path):
+            _json_response(self, 401, {"error": "unauthorized"})
+            return
 
         try:
             if path == "/v1/nexus/cli-status":
@@ -242,7 +284,10 @@ class RouterHandler(BaseHTTPRequestHandler):
                 })
 
             elif path == "/stats":
+                from .db import load_cost_24h
+
                 stats = load_model_stats()
+                cost = load_cost_24h()
                 _json_response(self, 200, {
                     "total_models": len(stats),
                     "models": [
@@ -252,6 +297,7 @@ class RouterHandler(BaseHTTPRequestHandler):
                             "success_rate": s.get("success_rate"),
                             "avg_latency_ms": s.get("avg_latency_ms"),
                             "total_override": s.get("total_override", 0),
+                            "estimated_cost_usd_24h": cost.get(m),
                         }
                         for m, s in sorted(stats.items(), key=lambda x: -(x[1].get("total_selected") or 0))
                     ],
@@ -264,6 +310,32 @@ class RouterHandler(BaseHTTPRequestHandler):
                 except FileNotFoundError:  # missing registry is itself a diagnostic
                     router = None
                 _json_response(self, 200, collect(router, _get_cli_proxy()))
+
+            elif path == "/decisions":
+                from urllib.parse import parse_qs
+                from .db import load_recent_decisions
+
+                query = parse_qs(urlparse(self.path).query or "")
+                first = lambda key: (query.get(key) or [None])[0]
+                try:
+                    limit = max(1, min(200, int(first("limit") or 50)))
+                except ValueError:
+                    limit = 50
+                _json_response(self, 200, {"items": load_recent_decisions(
+                    source_type=first("source_type"), nexus_project=first("nexus_project"), limit=limit)})
+
+            elif path == "/pricing":
+                from .pricing import pricing_table
+                _json_response(self, 200, pricing_table())
+
+            elif path == "/metrics":
+                from .metrics import prometheus_text
+                text = prometheus_text().encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
+                self.send_header("Content-Length", str(len(text)))
+                self.end_headers()
+                self.wfile.write(text)
 
             elif path == "/route-info":
                 from urllib.parse import parse_qs
@@ -296,6 +368,9 @@ class RouterHandler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = urlparse(self.path).path
+        if not _authorized(self, path):
+            _json_response(self, 401, {"error": "unauthorized"})
+            return
 
         try:
             body = _read_body(self)
@@ -317,6 +392,8 @@ class RouterHandler(BaseHTTPRequestHandler):
             self._handle_feedback(body)
         elif path == "/route-mode":
             self._handle_route_mode(body)
+        elif path == "/observe":
+            self._handle_observe(body)
         else:
             _json_response(self, 404, {"error": "not_found"})
 
@@ -351,6 +428,14 @@ class RouterHandler(BaseHTTPRequestHandler):
             experiment_key = body.get("experiment_key")
             if experiment_key is not None and not isinstance(experiment_key, str):
                 _json_response(self, 400, {"error": "experiment_key must be a string"})
+                return
+            dry_run = body.get("dry_run", False)
+            available_models = body.get("available_models")
+            if not isinstance(dry_run, bool) or (
+                available_models is not None and not _valid_catalog(available_models)
+            ):
+                _json_response(self, 400, {"error": "dry_run must be boolean; available_models a list "
+                                           "of provider/model ids or {id, context_window, vision}"})
                 return
             provenance_mode = body.get("provenance_mode")
             if mode is None:
@@ -514,6 +599,8 @@ class RouterHandler(BaseHTTPRequestHandler):
                 free_only=free_only,
                 allowed_providers=allowed_providers,
                 experiment_key=experiment_key,
+                dry_run=dry_run,
+                available_models=available_models,
             )
 
             local_bits = ""
@@ -622,6 +709,30 @@ class RouterHandler(BaseHTTPRequestHandler):
 
         except Exception as e:
             _json_response(self, 500, {"error": str(e)})
+
+    def _handle_observe(self, body: dict):
+        """A caller saw a provider succeed or fail outside a routed turn (e.g. a usage limit)."""
+        provider = body.get("provider")
+        status = body.get("http_status")
+        error_type = body.get("error_type")
+        if not isinstance(provider, str) or not provider or len(provider) > 64:
+            _json_response(self, 400, {"error": "provider required"})
+            return
+        if status is not None and (type(status) is not int or not 100 <= status <= 599):
+            _json_response(self, 400, {"error": "http_status must be an HTTP status code"})
+            return
+        if error_type not in {None, "rate_limit", "auth", "server", "timeout", "rate_limit_exhausted"}:
+            _json_response(self, 400, {"error": "unknown error_type"})
+            return
+        latency = body.get("latency_ms")
+        observe_turn_outcome(
+            provider=provider,
+            http_status=status,
+            latency_ms=latency if type(latency) is int and latency >= 0 else None,
+            error_type=error_type,
+            quota_hint=body.get("quota_hint") if isinstance(body.get("quota_hint"), str) else None,
+        )
+        _json_response(self, 200, {"ok": True})
 
     def _handle_probe(self, body: dict):
         try:

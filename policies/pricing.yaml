@@ -1,0 +1,16 @@
+# pricing.yaml — USD per million tokens, for outcome cost estimates (src/pricing.py).
+# Keys are exact provider/model ids or fnmatch globs; the most specific match wins.
+# Check prices against each provider's current price page before relying on them;
+# models without an entry keep the old score-based proxy (cost_source "proxy").
+models:
+  # "anthropic/claude-opus-5-5": {input_per_mtok: 0.0, output_per_mtok: 0.0}
+  # "openai/gpt-6.1-sol": {input_per_mtok: 0.0, output_per_mtok: 0.0}
+  "nvidia/*": {input_per_mtok: 0.0, output_per_mtok: 0.0}   # free NIM endpoints
+  "openrouter/*:free": {input_per_mtok: 0.0, output_per_mtok: 0.0}
+
+# Flat-rate logins: no per-call price, so their marginal cost is 0.
+subscription_providers:
+  - openai-codex
+  - github-copilot
+  - google-antigravity
+  - google-gemini-cli

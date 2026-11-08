@@ -214,3 +214,32 @@ def test_invalid_ordering_is_rejected(harness):
     _, proxy, _ = harness
     with pytest.raises(ValueError, match="ordering"):
         CliProxy({**proxy.config, "ordering": "random"})
+
+
+def test_routing_yaml_reload_keeps_valid_pins_and_survives_bad_edits(harness, tmp_path, monkeypatch):
+    import os
+
+    import yaml
+
+    from src import cli_proxy as module
+
+    client, proxy, _ = harness
+    policies = tmp_path / "policies"
+    policies.mkdir()
+    config_file = policies / "routing.yaml"
+    config_file.write_text(yaml.safe_dump({"cli_proxy": proxy.config}))
+    monkeypatch.setattr(module, "POLICIES_ROOT", policies)
+    live = CliProxy()
+    monkeypatch.setattr(server, "_cli_proxy", live)
+    assert client.post("/v1/messages", json=payload(), headers={"x-session-id": "keep"}).status_code == 200
+    changed = dict(proxy.config, routes={**proxy.config["routes"], "MAIN_EXECUTION": ["primary:main"],
+                                         "MAIN_PLANNING": ["fallback:planner"]})
+    config_file.write_text(yaml.safe_dump({"cli_proxy": changed}))
+    os.utime(config_file, (time.time() + 5, time.time() + 5))
+    status = client.get("/v1/nexus/cli-status").json()
+    assert [t["target"] for t in status["applied_order"]["MAIN_PLANNING"]] == ["fallback:planner"]
+    assert [p["target"] for p in status["active_session_pins"]] == ["primary:main"]  # still routed: kept
+    config_file.write_text("cli_proxy: {routes: {MAIN_EXECUTION: [nope]}}")
+    os.utime(config_file, (time.time() + 10, time.time() + 10))
+    assert client.post("/v1/messages", json=payload(), headers={"x-session-id": "keep"}).status_code == 200
+    assert live.routes[MAIN] == [Target("primary", "main")]  # bad edit ignored

@@ -11,6 +11,10 @@
         "description": "Nexus Router HTTP API URL",
         "default": "http://127.0.0.1:7771"
       },
+      "routerToken": {
+        "type": "string",
+        "description": "Bearer token when the router runs with NEXUS_ROUTER_TOKEN"
+      },
       "bridgeUrl": {
         "type": "string",
         "description": "Nexus bridge HTTP API URL for feedback cards",
