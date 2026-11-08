@@ -158,19 +158,8 @@ class Router:
             else None
         )
         fitted_weights_bundle, fitted_weights_min_samples = self._load_fitted_weights_bundle(routing)
-        live_registry = self._registry
-        if free_only or normalized_route_mode == "free":
-            metadata = load_model_metadata()
-            if metadata:
-                live_registry = []
-                for model in self._registry:
-                    model_copy = dict(model)
-                    features = dict(model_copy.get("features") or {})
-                    override = metadata.get(model_copy.get("id", ""), {})
-                    if "is_free" in override:
-                        features["is_free"] = override.get("is_free")
-                    model_copy["features"] = features
-                    live_registry.append(model_copy)
+        # DB metadata (e.g. is_free) overlays the static catalog on every route.
+        live_registry = _overlay_model_metadata(self._registry, load_model_metadata())
         allowed = {str(p) for p in allowed_providers or []}
         if allowed:
             live_registry = [m for m in live_registry if m.get("provider") in allowed]
@@ -641,6 +630,26 @@ def _exploration_config(routing_config: Optional[dict]) -> dict[str, object]:
         "shadow_log_challenger": bool(raw.get("shadow_log_challenger", True)),
         "seed": seed,
     }
+
+
+def _overlay_model_metadata(models: list[dict], metadata: dict[str, dict]) -> list[dict]:
+    """Apply mutable DB-backed model metadata over static catalog defaults."""
+    if not metadata:
+        return models
+
+    live_models = []
+    for model in models:
+        override = metadata.get(model.get("id", ""), {})
+        if "is_free" not in override:
+            live_models.append(model)
+            continue
+        model_copy = dict(model)
+        features = dict(model_copy.get("features") or {})
+        features["is_free"] = override.get("is_free")
+        model_copy["features"] = features
+        live_models.append(model_copy)
+    return live_models
+
 
 def _build_fallback_chain(eligible_scores: list, *, primary_provider: str, limit: int = 5) -> list[str]:
     """Build fallback chain preferring provider diversity.
