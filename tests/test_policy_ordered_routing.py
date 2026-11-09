@@ -1,5 +1,5 @@
 from src.scorer import score_models
-from src.types import ClassifierOutput
+from src.types import ClassifierOutput, ProviderHealth
 
 
 def _model(model_id, provider, cost, **features):
@@ -63,3 +63,18 @@ def test_shared_free_tier_only_served_when_asked_for():
 def test_policy_with_no_authed_candidate_falls_back_to_scoring():
     policy = {"routing": {"reasoning": {"candidates": [{"model": "anthropic/not-authed", "priority": 1}]}}}
     assert "openai/strong" in _eligible("auto", policy=policy)
+
+
+def test_policy_with_only_unhealthy_candidates_keeps_healthy_alternatives():
+    policy = {"routing": {"reasoning": {"candidates": [
+        {"model": "openai/strong", "priority": 1},
+    ]}}}
+    health = {"openai": ProviderHealth(provider="openai", health_score=0.0)}
+    assert set(_eligible("auto", policy=policy, health=health)) == {
+        "nvidia/free-model", "openrouter/stealth",
+    }
+
+
+def test_policy_still_limits_candidates_when_a_preferred_provider_is_healthy():
+    health = {"openai": ProviderHealth(provider="openai", health_score=0.0)}
+    assert _eligible("auto", health=health) == ["nvidia/free-model"]

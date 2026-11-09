@@ -131,11 +131,16 @@ def score_models(
     preference_order = _build_preference_order(classifier.task_type, routing_policy)
     # Default modes follow the policy order. Explicit modes (fast/eco/free/
     # reasoning) keep scoring across the catalog because the user opted in.
+    # An unavailable preferred provider must not suppress healthy alternatives.
     policy_ordered = (
         not free_only
         and (route_mode or "").strip().lower() in POLICY_ORDERED_MODES
         and any(
             m["id"] in preference_order and m.get("availability", {}).get("authed", False)
+            and (
+                provider_health[m["provider"]].health_score
+                if m["provider"] in provider_health else 0.85
+            ) >= HEALTH_HARD_CUTOFF
             for m in models
         )
     )
