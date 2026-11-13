@@ -84,3 +84,33 @@ an environment-specific attachment check before fleet rollout.
 References:
 - https://antigravity.google/docs/mcp
 - https://developers.openai.com/codex/config-advanced
+
+## Host verification on 2026-11-13
+
+| Check | Observed result |
+| --- | --- |
+| Full suite with TCP listeners | 310 passed, 1 skipped before adding the subprocess task-call check below |
+| Installed Codex CLI | 0.167.2; process starts, then fails initializing its in-process app-server with `Operation not permitted`, before any upstream request |
+| Installed Antigravity CLI | `agy mcp list` exits successfully but does not discover a temporary workspace `.agents/mcp_config.json` entry; this does not establish how its agent loop loads workspace configurations |
+| OpenAI upstream credential | `OPENAI_API_KEY` absent from the validation process |
+| Vertex configuration | ADC file exists, but neither explicit project nor region is configured in the validation process; no inference request made |
+| Docker | Daemon socket access denied; image build/runtime remains unverified |
+
+`scripts/smoke_codex_client.py` provides a repeatable real-client check for a host
+that permits Codex's local app-server. It launches the installed CLI with ignored
+user configuration/rules, ephemeral sessions, a read-only sandbox, and per-run
+provider overrides. Both the gateway and its SSE upstream fixture bind loopback.
+Only dummy credentials are used; no external inference call is made. The script
+restores its environment and temporary database. A pass proves actual CLI wire
+compatibility against that fixture, not acceptance by the real model provider.
+
+The subprocess task-call test in `tests/test_gateway_clients.py` additionally
+runs MCP initialization and `nexus_run_task` over stdin/stdout, through a real TCP
+gateway to a Vertex-shaped upstream fixture. It checks both the returned answer
+and gateway cache-read accounting. This test is skipped in socket-pair mode
+because those transport registries cannot be shared across processes.
+
+Remaining live checks require a host permitting the installed clients to start,
+an explicitly selected enterprise Vertex project/region (or an OpenAI API key),
+and client configuration deployment through the app's supported manager. An ADC
+file alone is not evidence of access to a particular enterprise model or region.

@@ -5,11 +5,13 @@ import hashlib
 import json
 import math
 import re
-from dataclasses import dataclass
+import uuid
+from dataclasses import dataclass, field
 
 from .cli_classifier import CallCategory, CliClassification, CliPayloadClassifier, text_blocks
 from .cli_proxy import Target
 from .vertex import validate_provider
+from .gateway_classifier import TaskClassifier
 
 
 class PolicyError(ValueError):
@@ -24,6 +26,8 @@ class GatewayClassification(CliClassification):
     profile: str
     requested_model: str
     choices: tuple
+    explanation: dict = field(default_factory=dict)
+    request_id: str = field(default_factory=lambda: uuid.uuid4().hex)
 
 
 class GatewayPolicy:
@@ -42,7 +46,10 @@ class GatewayPolicy:
                 raise ValueError(f"{key} must be a positive integer")
         for client in list(config.get("clients", {}).values()) + ([config["oidc"]] if config.get("oidc") else []):
             for key, limit in client.get("limits", {}).items():
-                if key not in {"max_tokens_24h", "max_task_tokens", "max_concurrent"} or type(limit) is not int or limit < 1:
+                if key in {"max_cost_usd_24h", "max_task_cost_usd"}:
+                    if type(limit) not in {int,float} or not math.isfinite(limit) or not 0 < limit <= 1_000_000_000:
+                        raise ValueError(f"Invalid cost limit: {key}")
+                elif key not in {"max_tokens_24h", "max_task_tokens", "max_concurrent"} or type(limit) is not int or limit < 1:
                     raise ValueError(f"Invalid client limit: {key}")
         public_ids = set()
         for label, model in self.models.items():
@@ -77,11 +84,27 @@ class GatewayPolicy:
                 if choice["target"] not in self.targets:
                     raise ValueError(f"Unknown profile target: {choice['target']}")
                 self.validate_options(choice["target"], choice)
+        economic = config.get("economics", {})
+        if type(economic.get("enabled", False)) is not bool:
+            raise ValueError("economics.enabled must be boolean")
+        margin = economic.get("minimum_saving_fraction", .1)
+        if type(margin) not in {int,float} or not math.isfinite(margin) or not 0<=margin<1:
+            raise ValueError("Invalid economic saving margin")
+        for key in ("quality_floor", "max_quality_drop"):
+            value=economic.get(key, .9 if key=="quality_floor" else 0)
+            if type(value) not in {int,float} or not math.isfinite(value) or not 0<=value<=1:
+                raise ValueError(f"Invalid economics {key}")
+        for key in ("expected_output_tokens", "hint_ttl_seconds"):
+            if key in economic and (type(economic[key]) is not int or economic[key]<1):
+                raise ValueError(f"Invalid economics {key}")
+        if economic.get("hint_ttl_seconds",60)>300:
+            raise ValueError("Cache hints cannot live longer than 300 seconds")
         self.rules = []
         for rule in config.get("rules", []):
             if rule["profile"] not in self.profiles:
                 raise ValueError("Rule profile does not exist")
             self.rules.append((re.compile(rule["pattern"], re.I), rule["profile"]))
+        self.task_classifier = TaskClassifier(config.get("classifier", {}), self.profiles, self.default)
         behaves_as = config.get("behaves_as")
         if behaves_as is not None and behaves_as not in public_ids:
             raise ValueError("behaves_as must identify an allowed Claude model")
@@ -132,6 +155,7 @@ class GatewayPolicy:
         background = wire_class.category in {CallCategory.STATELESS_HOUSEKEEPING, CallCategory.SUBAGENT_WORKER}
         category = wire_class.category if background else CallCategory.MAIN_EXECUTION
         effort_override = {k.lower(): v for k, v in headers.items()}.get("x-nexus-effort")
+        explanation = {"source": "background" if background else "explicit", "confidence": None, "margin": None}
         if pin and not background:
             if requested != pin["requested_model"]:
                 raise PolicyError("Model changes require a new task/session ID", 409)
@@ -147,14 +171,13 @@ class GatewayPolicy:
                 if any(incoming.get(k) != choices[0].get(k) for k in ("thinking", "effort")):
                     raise PolicyError("Thinking changes require a new task/session ID", 409)
             profile, reason = pin["profile"], "existing_task_profile"
+            explanation = {**pin.get("explanation", {}), "pin_reused": True}
         elif requested == self.alias:
             profile = self.background if background else self.default
             reason = "background" if background else "default_profile"
             if not background:
-                for pattern, candidate in self.rules:
-                    if pattern.search(instruction):
-                        profile, reason = candidate, "task_rule"
-                        break
+                profile, explanation = self.task_classifier.choose(instruction, self.rules)
+                reason = "task_" + explanation["source"]
             choices = copy.deepcopy(self.profiles[profile])
         else:
             label = next((label for label, target in self.targets.items() if target.model == requested), None)
@@ -177,7 +200,7 @@ class GatewayPolicy:
             if not pin:
                 raise PolicyError("Thinking continuation needs an existing task pin", 409)
             choices = [c for c in choices if c["target"] == pin["target"]]
-        return GatewayClassification(category, session, reason, principal, profile, requested, tuple(choices))
+        return GatewayClassification(category, session, reason, principal, profile, requested, tuple(choices), {**explanation, "profile": profile, "reason": reason})
 
     @staticmethod
     def _explicit_options(body, model):

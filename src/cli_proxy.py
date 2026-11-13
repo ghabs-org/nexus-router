@@ -510,6 +510,9 @@ class CliProxy:
     def _retry_status(self, status):
         return status in {401, 403, 429} or status >= 500
 
+    def _before_attempt(self, classification, target):
+        pass
+
     def _usage_tap(self, streaming):
         return UsageTap(streaming)
 
@@ -560,6 +563,7 @@ class CliProxy:
                 start = time.monotonic()
                 committed = False
                 try:
+                    self._before_attempt(classification, target)
                     async with client.stream("POST", url, json=payload, headers=headers) as response:
                         status = response.status_code
                         if self._retry_status(status):

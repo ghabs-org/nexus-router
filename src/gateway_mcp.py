@@ -9,6 +9,8 @@ import httpx
 TOOLS = [
     {"name": "nexus_run_task", "description": "Delegate a bounded text analysis, review, extraction or writing task to the administrator-routed model. No filesystem or shell access.",
      "inputSchema": {"type": "object", "properties": {"task": {"type": "string", "maxLength": 100000}, "session_id": {"type": "string", "maxLength": 256}}, "required": ["task"], "additionalProperties": False}},
+    {"name":"nexus_escalate_task", "description":"Explicitly request one stronger route for a fresh bounded task after a poor result. Never replays prior tool actions.",
+     "inputSchema":{"type":"object","properties":{"task":{"type":"string","maxLength":100000},"source_session":{"type":"string","maxLength":64}},"required":["task","source_session"],"additionalProperties":False}},
     {"name": "nexus_status", "description": "Show your gateway usage and recent routes.", "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False}},
 ]
 
@@ -28,6 +30,15 @@ def dispatch(request, client):
         raise ValueError("arguments must be an object")
     if name == "nexus_status" and not args:
         response = client.get("/v1/nexus/status")
+    elif name == "nexus_escalate_task":
+        if set(args)!={"task","source_session"} or not isinstance(args['task'],str) or not 0<len(args['task'])<=100000 or not isinstance(args['source_session'],str) or len(args['source_session'])>64:
+            raise ValueError('Invalid escalation arguments')
+        issued=client.post('/v1/nexus/escalations',json={'source_session':args['source_session'],'wire':'messages'})
+        if issued.is_error:
+            return {"isError":True,"content":[{"type":"text","text":f"Escalation returned HTTP {issued.status_code}"}]}
+        ticket=issued.json()
+        response=client.post('/v1/messages',headers={'x-session-id':ticket['new_session_id'],'x-nexus-escalation-ticket':ticket['ticket']},
+                             json={'model':'nexus-auto','max_tokens':4096,'tools':[],'messages':[{'role':'user','content':args['task']}]})
     elif name == "nexus_run_task":
         task = args.get("task")
         session = args.get("session_id", uuid.uuid4().hex)

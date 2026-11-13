@@ -34,7 +34,7 @@ def main():
                 os.environ["NEXUS_TEST_SOCKETPAIR"] = "1"
                 patcher.setattr(http.server, "ThreadingHTTPServer", install(patcher))
             targets = [str(root / "tests")] if args.all else [str(root / "tests" / name) for name in (
-                "test_gateway.py", "test_gateway_auth.py", "test_gateway_clients.py", "test_cli_proxy.py", "test_cli_proxy_v2.py",
+                "test_gateway.py", "test_gateway_controls.py", "test_gateway_budget.py", "test_gateway_classification.py", "test_gateway_auth.py", "test_gateway_clients.py", "test_cli_proxy.py", "test_cli_proxy_v2.py",
                 "test_cli_adapters.py", "test_cli_classifier.py")]
             return pytest.main(["-q", *targets, *extra])
         finally:

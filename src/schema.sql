@@ -398,3 +398,41 @@ FROM provider_health_log
 WHERE observed_at >= datetime('now', '-48 hours')
 GROUP BY provider
 ORDER BY provider;
+
+CREATE TABLE IF NOT EXISTS gateway_task_explanations (
+ session TEXT PRIMARY KEY, explanation_json TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS gateway_turn_explanations (
+ turn_id INTEGER PRIMARY KEY, explanation_json TEXT NOT NULL,
+ FOREIGN KEY(turn_id) REFERENCES gateway_turns(id)
+);
+
+CREATE TABLE IF NOT EXISTS gateway_budget_reservations (
+ request_id TEXT PRIMARY KEY, principal TEXT NOT NULL, session TEXT NOT NULL,
+ created_at REAL NOT NULL, reserved_microusd INTEGER NOT NULL, held_microusd INTEGER NOT NULL,
+ state TEXT NOT NULL, attempts INTEGER NOT NULL, owner_pid INTEGER NOT NULL,
+ finished_at REAL, metadata TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_gateway_budget_principal ON gateway_budget_reservations(principal,created_at);
+CREATE TABLE IF NOT EXISTS gateway_budget_turns (
+ turn_id INTEGER PRIMARY KEY, request_id TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS gateway_budget_audit (
+ id INTEGER PRIMARY KEY AUTOINCREMENT, request_id TEXT NOT NULL, created_at REAL NOT NULL,
+ previous_microusd INTEGER NOT NULL, actual_microusd INTEGER NOT NULL, note TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS gateway_cache_hints (
+ cache_key TEXT PRIMARY KEY, cached_tokens INTEGER NOT NULL, observed_at REAL NOT NULL
+);
+CREATE TABLE IF NOT EXISTS gateway_escalation_tickets (
+ ticket TEXT PRIMARY KEY, principal TEXT NOT NULL, root TEXT NOT NULL, level INTEGER NOT NULL,
+ source_session TEXT NOT NULL, new_session_id TEXT NOT NULL, child_session TEXT,
+ profile TEXT NOT NULL, wire TEXT NOT NULL, state TEXT NOT NULL, created_at REAL NOT NULL,
+ UNIQUE(principal,root,level)
+);
+CREATE TABLE IF NOT EXISTS gateway_feedback (
+ id INTEGER PRIMARY KEY AUTOINCREMENT, principal TEXT NOT NULL, session TEXT NOT NULL,
+ rating TEXT NOT NULL, created_at REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_gateway_feedback_principal ON gateway_feedback(principal,created_at);

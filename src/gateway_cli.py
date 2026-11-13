@@ -22,13 +22,17 @@ def main(argv=None):
     commands = parser.add_subparsers(dest="command", required=True)
     default_config = Path.home() / ".config/nexus-router/gateway.yaml"
     default_state = Path.home() / ".local/state/nexus-router"
-    for name in ("init", "check", "serve", "enable-provider", "cowork-config", "codex-config", "antigravity-config", "mcp"):
+    for name in ("init", "check", "serve", "enable-provider", "cowork-config", "codex-config", "antigravity-config", "mcp", "reconcile-budget"):
         command = commands.add_parser(name)
         command.add_argument("--config", type=Path, default=default_config)
         command.add_argument("--state-dir", type=Path, default=default_state)
         command.add_argument("--env-file", type=Path)
         if name == "init":
             command.add_argument("--template", choices=["cowork", "codex"], default="cowork")
+        if name == "reconcile-budget":
+            command.add_argument("--request-id", required=True)
+            command.add_argument("--actual-cost-usd", required=True, type=float)
+            command.add_argument("--note", required=True)
         if name == "serve":
             command.add_argument("--host", default="127.0.0.1")
             command.add_argument("--port", type=int, default=7772)
@@ -45,6 +49,14 @@ def main(argv=None):
     # Set before importing the DB/paths modules, including in installed wheels.
     os.environ["NEXUS_ROUTER_DB_PATH"] = str(args.state_dir.resolve() / "data/router.sqlite")
     try:
+        if args.command == "reconcile-budget":
+            from . import db
+            db.DB_PATH = args.state_dir.resolve() / "data/router.sqlite"
+            from .gateway_budget import BudgetLedger
+            db.ensure_schema()
+            BudgetLedger().reconcile(args.request_id, args.actual_cost_usd, args.note)
+            print("Budget reservation reconciled with an audit entry")
+            return 0
         if args.command == "mcp":
             from .gateway_mcp import serve
             serve(args.url, args.token_env)

@@ -19,11 +19,14 @@ class GatewayState:
         with closing(db._connect()) as conn, conn:
             cutoff = time.time() - self.config.get("pin_ttl_seconds", 86400)
             conn.execute("DELETE FROM gateway_task_pins WHERE touched_at < ?", (cutoff,))
+            conn.execute("DELETE FROM gateway_task_explanations WHERE session NOT IN (SELECT session FROM gateway_task_pins)")
             row = conn.execute("SELECT * FROM gateway_task_pins WHERE session=?", (session,)).fetchone()
             if not row:
                 return None
             result = dict(row)
             result["choices"] = json.loads(result.pop("choices_json"))
+            explanation = conn.execute("SELECT explanation_json FROM gateway_task_explanations WHERE session=?", (session,)).fetchone()
+            result["explanation"] = json.loads(explanation[0]) if explanation else {}
             return result
 
     def save_pin(self, classification, target):
@@ -32,6 +35,8 @@ class GatewayState:
                          "target=excluded.target, profile=excluded.profile, choices_json=excluded.choices_json, touched_at=excluded.touched_at",
                          (classification.session, classification.principal, target.label, classification.profile,
                           classification.requested_model, json.dumps(classification.choices), time.time()))
+            conn.execute("INSERT INTO gateway_task_explanations VALUES (?,?) ON CONFLICT(session) DO UPDATE SET explanation_json=excluded.explanation_json",
+                         (classification.session, json.dumps(classification.explanation)))
             maximum = self.config.get("max_pins", 4096)
             conn.execute("DELETE FROM gateway_task_pins WHERE session IN (SELECT session FROM gateway_task_pins "
                          "ORDER BY touched_at DESC LIMIT -1 OFFSET ?)", (maximum,))
@@ -84,10 +89,14 @@ class GatewayState:
                   usage.get("cache_read_input_tokens", 0), usage.get("cache_creation_input_tokens", 0),
                   usage.get("ephemeral_5m_input_tokens", 0), usage.get("ephemeral_1h_input_tokens", 0), int(complete), cost)
         with closing(db._connect()) as conn, conn:
-            conn.execute("INSERT INTO gateway_turns (created_at,principal,session,profile,target,effort,http_status,latency_ms,"
+            cursor = conn.execute("INSERT INTO gateway_turns (created_at,principal,session,profile,target,effort,http_status,latency_ms,"
                          "input_tokens,output_tokens,uncached_input_tokens,cache_read_input_tokens,cache_creation_input_tokens,"
                          "cache_write_5m_tokens,cache_write_1h_tokens,usage_complete,estimated_cost_usd) VALUES "
                          "(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", values)
+            conn.execute("INSERT INTO gateway_turn_explanations VALUES (?,?)", (cursor.lastrowid, json.dumps(classification.explanation)))
+
+        from .gateway_budget import BudgetLedger
+        BudgetLedger().finish(classification.request_id, cursor.lastrowid, cost, complete)
 
     def status(self, principal):
         with closing(db._connect()) as conn:
@@ -99,7 +108,12 @@ class GatewayState:
                                        "SUM(CASE WHEN estimated_cost_usd IS NULL THEN 1 ELSE 0 END) AS unpriced_turns "
                                        "FROM gateway_turns WHERE principal=? AND created_at>=?",
                                        (principal, time.time() - 86400)).fetchone())
-            recent = [dict(row) for row in conn.execute("SELECT session,profile,target,effort,http_status,latency_ms,"
+            recent = [dict(row) for row in conn.execute("SELECT id,session,profile,target,effort,http_status,latency_ms,"
                                                        "usage_complete,estimated_cost_usd FROM gateway_turns "
                                                        "WHERE principal=? ORDER BY id DESC LIMIT 50", (principal,))]
-        return {"usage_24h": summary, "recent_turns": recent}
+            for row in recent:
+                explanation = conn.execute("SELECT explanation_json FROM gateway_turn_explanations WHERE turn_id=?", (row.pop("id"),)).fetchone()
+                row["explanation"] = json.loads(explanation[0]) if explanation else {}
+            feedback=[dict(row) for row in conn.execute('SELECT session,rating,created_at FROM gateway_feedback WHERE principal=? ORDER BY id DESC LIMIT 50',(principal,))]
+        from .gateway_budget import BudgetLedger
+        return {"feedback":feedback,"usage_24h": summary, "recent_turns": recent, "budget": BudgetLedger().status(principal)}

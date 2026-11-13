@@ -251,3 +251,6 @@ the local test suite and no benchmark result is fabricated by this implementatio
 * [Claude on Google Cloud](https://platform.claude.com/docs/en/api/claude-on-vertex-ai)
 * [Prompt caching](https://platform.claude.com/docs/en/build-with-claude/prompt-caching)
 * [Thinking and effort](https://platform.claude.com/docs/en/build-with-claude/thinking)
+
+For opt-in transactional cost reservations, see [gateway spending budgets](gateway-budgets.md).
+The token admission gates described above retain their existing semantics.

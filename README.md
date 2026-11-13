@@ -410,3 +410,24 @@ The enterprise gateway now supports native Responses and Chat Completions with
 protocol-specific model/effort profiles. Antigravity can delegate bounded tasks
 through the bundled stdio MCP bridge. See [client setup and limits](docs/client-gateways.md).
 Antigravity main-model interception is not implemented or claimed.
+
+## Gateway task classification
+
+Gateway profiles now support conservative multilingual task indicators, optional
+reuse of the existing local ONNX classifier with confidence/margin gates, and
+persistent per-turn routing explanations. Preview works across Messages,
+Responses and Chat. An offline routing benchmark and paired outcome comparison
+are included. See [configuration, privacy and benchmark limits](docs/gateway-classification.md).
+
+## Gateway spending reservations
+
+Optional cost limits now reserve worst-case native model costs transactionally
+before inference, retain unknown charges across crashes, and support audited
+operator reconciliation. See [budget configuration and guarantee boundaries](docs/gateway-budgets.md).
+
+## Gateway economic selection and operations
+
+Fresh automatic tasks can opt into quality-gated estimated-cost ordering with
+short-lived cache hints. Explicit bounded escalation and feedback APIs are also
+available, including MCP escalation. `/dashboard` provides caller-scoped routing,
+usage and reservation visibility. See [setup, safety boundaries and verification](docs/gateway-controls.md).

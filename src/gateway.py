@@ -2,12 +2,13 @@
 
 import asyncio
 import copy
+from dataclasses import replace
 import json
 import logging
 import os
 import socket
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import urlparse
+from urllib.parse import urlparse, parse_qs
 
 import yaml
 
@@ -75,10 +76,27 @@ class GatewayProxy(CliProxy):
 
     def classification(self, body, headers, principal, wire="messages"):
         self._validate(body)
+        request_body = body
+        raw_headers = {k.lower(): v for k,v in headers.items()}
         policy, body, headers = self.policy_request(body, headers, wire)
         session = policy.identity(body, headers, principal)
         pin = self.state.pin(session)
         result = policy.classify(body, headers, principal, pin)
+        ticket = raw_headers.get("x-nexus-escalation-ticket")
+        if ticket:
+            from .gateway_escalation import Escalations
+            escalation = Escalations().read(ticket, principal, wire, request_body, raw_headers)
+            if pin or result.requested_model != policy.alias:
+                raise PolicyError("Escalation requires a fresh automatic task",409)
+            choices = policy.profiles.get(escalation["profile"])
+            if not choices:
+                raise PolicyError("Escalation profile is not configured")
+            result = replace(result, profile=escalation["profile"], choices=tuple(copy.deepcopy(choices)),
+                             reason="explicit_escalation", explanation={"source":"explicit_escalation","ticket":ticket,"level":escalation["level"],"budget_root":escalation["root"]})
+        else:
+            from .gateway_economics import order
+            result = order(result, body, policy, wire, pin is not None)
+        result = replace(result, explanation={**result.explanation, "wire":wire})
         for choice in result.choices:
             target = policy.targets[choice["target"]]
             if wire not in self.providers[target.provider].get("protocols", []):
@@ -88,6 +106,7 @@ class GatewayProxy(CliProxy):
 
     def handle(self, handler, body, path):
         admitted = False
+        reservation = None
         try:
             self._validate(body)
             wire = {"/v1/messages": "messages", "/v1/responses": "responses", "/v1/chat/completions": "chat"}[path]
@@ -98,8 +117,15 @@ class GatewayProxy(CliProxy):
             # Concurrent first requests cannot commit different task profiles.
             with guard:
                 classification = self.classification(body, dict(handler.headers), handler.principal, wire)
+                from .gateway_budget import BudgetLedger
+                if BudgetLedger().reserve(classification, handler.limits, self.config, normalized):
+                    reservation = classification.request_id
                 self.state.admit(handler.principal, classification.session, handler.limits)
                 admitted = True
+                ticket = classification.explanation.get("ticket")
+                if ticket and not classification.explanation.get("pin_reused"):
+                    from .gateway_escalation import Escalations
+                    Escalations().claim(ticket,handler.principal,classification.session)
                 asyncio.run(self._forward(handler, body, path, classification))
         except (PolicyError, ValueError, TypeError, AttributeError) as exc:
             if not handler.committed:
@@ -109,6 +135,9 @@ class GatewayProxy(CliProxy):
             if not handler.committed:
                 error_response(handler, 503, "Gateway state or transport is unavailable")
         finally:
+            if reservation:
+                from .gateway_budget import BudgetLedger
+                BudgetLedger().finish(reservation)
             if admitted:
                 self.state.release(handler.principal)
 
@@ -126,6 +155,10 @@ class GatewayProxy(CliProxy):
 
     def _retry_status(self, status):
         return status == 404 or super()._retry_status(status)
+
+    def _before_attempt(self, classification, target):
+        from .gateway_budget import BudgetLedger
+        BudgetLedger().attempt(classification.request_id)
 
     def _usage_tap(self, streaming):
         return UsageTap(streaming, detailed=True)
@@ -177,10 +210,14 @@ class GatewayProxy(CliProxy):
 
     def _extra_headers(self, classification, target):
         choice = next(c for c in classification.choices if c["target"] == target.label)
-        return {"X-Nexus-Profile": classification.profile, "X-Nexus-Effort": choice.get("effort", "model-default")}
+        return {"X-Nexus-Request-ID": classification.request_id, "X-Nexus-Profile": classification.profile, "X-Nexus-Effort": choice.get("effort", "model-default"),
+                "X-Nexus-Routing-Source": classification.explanation.get("source", "unknown")}
 
     def _record_turn(self, classification, target, pinned, errors, status=None, latency_ms=None, usage=None, converted=False):
         self.state.record(classification, target, status, latency_ms, usage)
+        if status is not None and status<300:
+            from .gateway_economics import observe
+            observe(classification,target,usage or {})
         super()._record_turn(classification, target, pinned, errors, status, latency_ms, usage, converted)
 
     def count_tokens(self, handler, body):
@@ -222,6 +259,19 @@ class GatewayHandler(BaseHTTPRequestHandler):
         if path == "/health":
             json_response(self, 200, {"status": "ok", "service": "nexus-router-gateway"})
             return
+        if path in {"/dashboard", "/dashboard.js", "/dashboard.css"}:
+            from importlib.resources import files
+            names={"/dashboard":("gateway_dashboard.html","text/html"),"/dashboard.js":("gateway_dashboard.js","text/javascript"),"/dashboard.css":("gateway_dashboard.css","text/css")}
+            name,mime=names[path]
+            content=files(__package__).joinpath(name).read_bytes()
+            self.send_response(200)
+            self.send_header("Content-Type",mime+"; charset=utf-8")
+            self.send_header("Content-Length",str(len(content)))
+            self.send_header("Cache-Control","no-store")
+            self.send_header("Content-Security-Policy","default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
+            self.send_header("X-Content-Type-Options","nosniff")
+            self.end_headers(); self.wfile.write(content)
+            return
         if not self.authenticate():
             return
         if path == "/v1/models":
@@ -251,12 +301,28 @@ class GatewayHandler(BaseHTTPRequestHandler):
             body = json.loads(raw)
             if path in {"/v1/messages", "/v1/responses", "/v1/chat/completions"}:
                 self.server.gateway.handle(self, body, path)
+            elif path == "/v1/nexus/feedback":
+                if not isinstance(body,dict) or set(body)!={"source_session","rating"} or not isinstance(body["source_session"],str):
+                    raise PolicyError("Expected source_session and rating")
+                from .gateway_escalation import Escalations
+                Escalations().feedback(self.principal,body["source_session"],body["rating"])
+                json_response(self,200,{"recorded":True})
+            elif path == "/v1/nexus/escalations":
+                if not isinstance(body,dict) or set(body)-{"source_session","wire"}:
+                    raise PolicyError("Expected source_session and wire")
+                wire=body.get("wire","messages")
+                if wire not in self.server.gateway.policies or not isinstance(body.get("source_session"),str):
+                    raise PolicyError("Invalid escalation protocol or source")
+                from .gateway_escalation import Escalations
+                row=Escalations().issue(self.principal,body["source_session"],wire)
+                json_response(self,200,{key:row[key] for key in ("ticket","new_session_id","profile","wire","level")})
             elif path == "/v1/messages/count_tokens":
                 self.server.gateway.count_tokens(self, body)
             elif path == "/v1/nexus/route-preview":
-                classification = self.server.gateway.classification(body, dict(self.headers), self.principal)
+                wire = parse_qs(urlparse(self.path).query).get("wire", ["messages"])[0]
+                classification = self.server.gateway.classification(body, dict(self.headers), self.principal, wire)
                 json_response(self, 200, {"profile": classification.profile, "reason": classification.reason,
-                                          "choices": classification.choices, "writes_pin": False})
+                                          "choices": classification.choices, "explanation": classification.explanation, "writes_pin": False})
             else:
                 error_response(self, 404, "Unknown gateway endpoint")
         except (ValueError, TypeError, PolicyError) as exc:

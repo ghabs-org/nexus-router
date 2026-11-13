@@ -4,3 +4,7 @@ recursive-include packaging *.py *.mjs *.json *.md *.service
 recursive-include tests *.py
 recursive-include scripts *.py *.sh
 recursive-include policies *.yaml
+
+recursive-include tests/fixtures *.jsonl
+
+recursive-include src gateway_dashboard.*

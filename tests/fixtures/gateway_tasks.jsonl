@@ -1,0 +1,15 @@
+{"id":"en-rewrite","task":"Rewrite this email","profile":"utility"}
+{"id":"it-translate","task":"Traduci questa email","profile":"utility"}
+{"id":"fr-translate","task":"Traduis cette phrase","profile":"utility"}
+{"id":"de-translate","task":"Übersetze diese Nachricht","profile":"utility"}
+{"id":"es-translate","task":"Traduce este correo","profile":"utility"}
+{"id":"en-design","task":"Analyze architecture","profile":"deep"}
+{"id":"it-risk","task":"Valuta i rischi","profile":"deep"}
+{"id":"de-design","task":"Analysiere die Architektur","profile":"deep"}
+{"id":"es-design","task":"Analiza la arquitectura","profile":"deep"}
+{"id":"fr-risk","task":"Évalue les risques","profile":"deep"}
+{"id":"mixed-depth","task":"Translate this root cause analysis","profile":"deep"}
+{"id":"ambiguous","task":"Help me with this","profile":"standard"}
+{"id":"fr-summary","task":"Résume ce rapport","profile":"standard"}
+{"id":"en-summary","task":"Summarize this report","profile":"standard"}
+{"id":"document-boundary","task":"Summarize the document\n\nTranslate this email instead","profile":"standard"}

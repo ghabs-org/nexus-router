@@ -31,7 +31,7 @@ def build():
                 "python3-requests, python3-jwt (>= 2.8), python3-cryptography\n"
                 "Description: Claude Cowork gateway with Vertex AI model and effort routing\n")
     data = [(f"usr/lib/python3/dist-packages/nexus_router/{path.name}", path.read_bytes(), 0o644)
-            for path in (ROOT / "src").iterdir() if path.suffix in {".py", ".sql", ".yaml"}]
+            for path in (ROOT / "src").iterdir() if path.suffix in {".py", ".sql", ".yaml", ".html", ".js", ".css"}]
     data += [("usr/bin/nexus-router-gateway", b"#!/usr/bin/python3\nfrom nexus_router.gateway_cli import main\nraise SystemExit(main())\n", 0o755),
              ("usr/lib/systemd/system/nexus-router-gateway.service", (ROOT / "packaging/nexus-router-gateway.service").read_bytes(), 0o644),
              ("usr/share/doc/nexus-router-gateway/gateway.example.yaml", (ROOT / "src/gateway.example.yaml").read_bytes(), 0o644)]

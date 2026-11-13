@@ -55,3 +55,25 @@ rules:
   pattern: \b(architecture|root cause|trade.off)\b
 - profile: utility
   pattern: ^\s*(rewrite|extract|translate)\b
+
+# Optional local inference uses existing ONNX artifacts; no downloads or paid classifier calls.
+classifier:
+  mode: hybrid
+  use_local: false
+  min_confidence: 0.8
+  min_margin: 0.15
+
+# Optional reservation-based cost limits go under each client's limits mapping:
+# max_cost_usd_24h: 25
+# max_task_cost_usd: 5
+# Requires verified context ceilings and all five tariffs for every candidate.
+# Unknown attempts hold their reservation until an operator reconciles them.
+
+# Optional economic ordering; requires tariffs and evaluated quality_pass_rate per model.
+# economics:
+#   enabled: true
+#   minimum_saving_fraction: 0.10
+#   expected_output_tokens: 512
+#   hint_ttl_seconds: 60
+#   quality_floor: 0.90
+#   max_quality_drop: 0

@@ -98,3 +98,27 @@ def test_client_config_and_stdio(tmp_path,monkeypatch):
     replies=[json.loads(line) for line in process.stdout.splitlines()]
     assert replies[0]['result']['capabilities']['tools']=={}
     assert replies[1]['result']['tools'][0]['name']=='nexus_run_task'
+
+
+def test_stdio_task_call_through_tcp_gateway(harness):
+    if os.environ.get('NEXUS_TEST_SOCKETPAIR') == '1':
+        pytest.skip('Subprocess attachment requires TCP; socket-pair registries are process-local')
+    client, server, upstream, config = harness
+    requests = [
+        {'jsonrpc':'2.0','id':1,'method':'initialize','params':{}},
+        {'jsonrpc':'2.0','id':2,'method':'tools/call','params':{
+            'name':'nexus_run_task','arguments':{'task':'Rewrite this email','session_id':'stdio-smoke'}}},
+    ]
+    env = {**os.environ, 'NEXUS_GATEWAY_TOKEN':'client-secret'}
+    result = subprocess.run([sys.executable,'-m','src.gateway_cli','mcp','--url',str(client.base_url).rstrip('/')],
+                            input=''.join(json.dumps(item)+'\n' for item in requests), text=True,
+                            capture_output=True, env=env, timeout=15)
+    assert result.returncode == 0, result.stderr
+    replies = [json.loads(line) for line in result.stdout.splitlines()]
+    assert 'error' not in replies[1], replies[1]
+    assert not replies[1]['result'].get('isError'), replies[1]
+    answer = json.loads(replies[1]['result']['content'][0]['text'])
+    assert answer['content'][0]['text'] == 'Done'
+    assert len(upstream.requests) == 1 and 'haiku' in upstream.requests[0][0]
+    status = client.get('/v1/nexus/status').json()
+    assert status['usage_24h']['cache_read_input_tokens'] == 30
