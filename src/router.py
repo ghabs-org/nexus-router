@@ -397,6 +397,30 @@ def _mtime(path) -> Optional[float]:
 
 _CALLER_ENTRY_CACHE: dict = {}
 DEFAULT_CALLER_CONTEXT = 200_000
+# Providers that serve another provider's models under a different login. Their
+# models share the twin's benchmark evidence; pricing and quota stay their own.
+MODEL_TWIN_PROVIDERS = {"openai-codex": "openai"}
+# Score keys that measure the model itself (quality), not how it is billed or served.
+TWIN_QUALITY_KEYS = ("coding", "review", "reasoning", "summarize", "context", "vision", "tools", "multilingual")
+
+
+def _with_twin_evidence(entry: dict, index: dict) -> dict:
+    """Copy measured quality scores from the twin provider's entry for the same model.
+
+    Only scores the twin backs with evidence (benchmark or derived) are copied;
+    defaults and priors stay as they were, and cost/speed/eco never transfer.
+    """
+    provider, _, model = entry["id"].partition("/")
+    twin = index.get(f"{MODEL_TWIN_PROVIDERS.get(provider)}/{model}")
+    if not twin:
+        return entry
+    scores, sources = dict(entry.get("scores") or {}), dict(entry.get("scoreSource") or {})
+    for key in TWIN_QUALITY_KEYS:
+        source = str((twin.get("scoreSource") or {}).get(key) or "")
+        if key in (twin.get("scores") or {}) and source.startswith(("benchmark:", "derived:")):
+            scores[key] = twin["scores"][key]
+            sources[key] = f"twin:{twin['id']}:{source}"
+    return {**entry, "scores": scores, "scoreSource": sources}
 
 
 def _caller_catalog(registry: list[dict], items: list) -> list[dict]:
@@ -404,7 +428,8 @@ def _caller_catalog(registry: list[dict], items: list) -> list[dict]:
 
     Known ids reuse their registry entry; unknown ids (models newer than the
     catalog) are scored like the registry generator would, from family priors,
-    overrides and stored benchmarks.
+    overrides and stored benchmarks, then take measured quality scores from a
+    twin provider's entry for the same model (``MODEL_TWIN_PROVIDERS``).
     """
     index = {model["id"]: model for model in registry}
     wanted = []
@@ -433,7 +458,7 @@ def _caller_catalog(registry: list[dict], items: list) -> list[dict]:
                 _CALLER_ENTRY_CACHE[(entry["id"], stamp)] = entry
         for spec in unknown:
             if (spec["id"], stamp) in _CALLER_ENTRY_CACHE:
-                index[spec["id"]] = _CALLER_ENTRY_CACHE[(spec["id"], stamp)]
+                index[spec["id"]] = _with_twin_evidence(_CALLER_ENTRY_CACHE[(spec["id"], stamp)], index)
     catalog = []
     for spec in wanted:
         base = index.get(spec["id"])

@@ -184,3 +184,23 @@ def test_pricing_long_context_tier_and_shipped_table(monkeypatch):
     assert pricing.estimate("anthropic/claude-haiku-5-5", "anthropic", 100_001, 0) == (round(100_001 * 0.5 / 1e6, 8), "tariff")
     assert pricing.estimate("openai/gpt-6.1-sol", "openai", 300_000, 1_000) == (round((300_000 * 4 + 1_000 * 15) / 1e6, 8), "tariff")
     assert pricing.estimate("openai-codex/gpt-6.1-sol", "openai-codex", 300_000, 1_000) == (0.0, "subscription")
+
+
+def test_codex_models_share_the_openai_twins_measured_scores():
+    from src.router import _with_twin_evidence
+
+    twin = {"id": "openai/gpt-9-sol",
+            "scores": {"coding": 0.91, "reasoning": 0.95, "cost": 0.2, "fast": 0.4, "vision": 0.5},
+            "scoreSource": {"coding": "benchmark:aa", "reasoning": "derived:x", "cost": "benchmark:pricing",
+                            "fast": "benchmark:aa", "vision": "global:default"}}
+    prior = {"id": "openai-codex/gpt-9-sol",
+             "scores": {"coding": 0.8, "reasoning": 0.8, "cost": 0.55, "fast": 0.68, "vision": 0.6},
+             "scoreSource": {"coding": "family:gpt", "reasoning": "family:gpt", "cost": "family:gpt",
+                             "fast": "family:gpt", "vision": "family:gpt"}}
+    merged = _with_twin_evidence(prior, {twin["id"]: twin})
+    assert merged["scores"] == {"coding": 0.91, "reasoning": 0.95, "cost": 0.55, "fast": 0.68, "vision": 0.6}
+    assert merged["scoreSource"]["coding"] == "twin:openai/gpt-9-sol:benchmark:aa"
+    assert merged["scoreSource"]["cost"] == "family:gpt"
+    assert _with_twin_evidence(prior, {}) is prior
+    other = {**prior, "id": "anthropic/claude-x"}
+    assert _with_twin_evidence(other, {"openai/claude-x": twin}) is other
