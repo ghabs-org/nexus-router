@@ -1,0 +1,9 @@
+{
+  "name": "@ghabs/nexus-router-gateway",
+  "version": "0.2.0",
+  "description": "Installer and launcher for the Nexus Router Cowork gateway",
+  "type": "module",
+  "bin": {"nexus-router-gateway": "cli.mjs"},
+  "files": ["cli.mjs", "README.md"],
+  "engines": {"node": ">=20"}
+}

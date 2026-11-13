@@ -1,0 +1,21 @@
+[Unit]
+Description=Nexus Router Cowork gateway
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+DynamicUser=yes
+StateDirectory=nexus-router-gateway
+WorkingDirectory=/var/lib/nexus-router-gateway
+EnvironmentFile=/etc/nexus-router/gateway.env
+LoadCredential=gateway.yaml:/etc/nexus-router/gateway.yaml
+ExecStart=/usr/bin/nexus-router-gateway serve --config %d/gateway.yaml --env-file /dev/null --state-dir /var/lib/nexus-router-gateway
+Restart=on-failure
+UMask=0077
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

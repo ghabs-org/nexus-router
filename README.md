@@ -4,6 +4,26 @@ Multilingual LLM router for OpenClaw. Routes each request to the best model
 from your configured providers, based on task type, model capabilities,
 provider health, and usage history.
 
+## Claude Cowork / Vertex gateway
+
+The separately installable `nexus-router-gateway` provides an Automatic model
+entry for enterprise Cowork. It routes native Messages to Vertex AI, selects
+model and reasoning together, preserves cache fields, persists task profiles,
+and records caller-scoped usage. It shares the router's SQLite health controls
+without requiring the classifier training stack. See the
+[installation, policy, authentication, distribution, and verification guide](docs/cowork-gateway.md).
+
+```bash
+uv tool install .
+nexus-router-gateway init
+```
+
+Set the GCP project/region and credentials, review the policy, explicitly enable
+the Vertex provider, then generate Cowork configuration as documented. Python,
+npm, Debian, and Homebrew packaging are included; registries/taps are not published
+by building this checkout. Live Cowork/Vertex verification is separate from the
+local HTTP tests.
+
 ## CLI wire proxy
 
 The same server accepts `POST /v1/messages`, `POST /v1/chat/completions`, and
@@ -383,3 +403,10 @@ The router response and logs now surface classifier provenance via:
 - `classifier_debug` (local confidence / margin / artifact availability)
 
 See `docs/local-classifier-modernbert.md` for build/export details.
+
+## Codex and Antigravity clients
+
+The enterprise gateway now supports native Responses and Chat Completions with
+protocol-specific model/effort profiles. Antigravity can delegate bounded tasks
+through the bundled stdio MCP bridge. See [client setup and limits](docs/client-gateways.md).
+Antigravity main-model interception is not implemented or claimed.

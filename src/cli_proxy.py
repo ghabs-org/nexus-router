@@ -61,15 +61,17 @@ class UsageTap:
 
     MAX_BODY = 4 << 20
 
-    def __init__(self, streaming):
+    def __init__(self, streaming, detailed=False):
         self.streaming, self.tail, self.body, self.usage = streaming, b"", bytearray(), {}
+        self.stream_complete = False
+        self.detailed = detailed
 
     def feed(self, chunk):
         if self.streaming:
             lines = (self.tail + chunk).split(b"\n")
             self.tail = lines.pop()[-65536:]
             for line in lines:
-                if line.startswith(b"data:") and b"usage" in line:
+                if line.startswith(b"data:") and any(marker in line for marker in (b"usage", b"message_stop", b"response.completed", b"[DONE]")):
                     self._take(line[5:])
         elif self.body is not None:
             self.body = self.body + chunk if len(self.body) + len(chunk) <= self.MAX_BODY else None
@@ -79,15 +81,22 @@ class UsageTap:
             self._take(self.tail[5:])
         elif not self.streaming and self.body:
             self._take(bytes(self.body))
+        if self.streaming and self.detailed:
+            self.usage["stream_complete"] = self.stream_complete
         return self.usage
 
     def _take(self, raw):
+        if raw.strip() == b"[DONE]":
+            self.stream_complete = True
+            return
         try:
             data = json.loads(raw)
         except ValueError:
             return
         if not isinstance(data, dict):
             return
+        if data.get("type") in {"message_stop", "response.completed"}:
+            self.stream_complete = True
         usage = data.get("usage") or (data.get("message") or {}).get("usage") or (data.get("response") or {}).get("usage")
         if not isinstance(usage, dict):
             return
@@ -97,6 +106,23 @@ class UsageTap:
         output = usage.get("output_tokens", usage.get("completion_tokens"))
         if type(output) is int:
             self.usage["output_tokens"] = output
+        if not self.detailed:
+            return
+        # Keep billing categories separate as well as the legacy aggregate above.
+        if type(usage.get("prompt_tokens")) is int:
+            self.usage["uncached_input_tokens"] = usage["prompt_tokens"]
+        for key in ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens"):
+            if type(usage.get(key)) is int:
+                self.usage["uncached_input_tokens" if key == "input_tokens" else key] = usage[key]
+        details = usage.get("input_tokens_details", usage.get("prompt_tokens_details", {})) or {}
+        if type(details.get("cached_tokens")) is int:
+            total = usage.get("input_tokens", usage.get("prompt_tokens", 0))
+            self.usage["cache_read_input_tokens"] = details["cached_tokens"]
+            self.usage["uncached_input_tokens"] = max(0, total - details["cached_tokens"])
+        creation = usage.get("cache_creation") or {}
+        for key in ("ephemeral_5m_input_tokens", "ephemeral_1h_input_tokens"):
+            if type(creation.get(key)) is int:
+                self.usage[key] = creation[key]
 
 
 class CliProxy:
@@ -380,7 +406,7 @@ class CliProxy:
 
     def count_tokens(self, handler, body):
         """Forward to the first healthy messages-native target of the request's category; else 404."""
-        from .server import _json_response
+        from .http_helpers import json_response as _json_response
         try:
             self._validate(body)
             classification = self.classifier.classify(body, dict(handler.headers))
@@ -425,7 +451,7 @@ class CliProxy:
                                                 "message": "No healthy messages-native upstream for count_tokens"}})
 
     def handle(self, handler, body, path):
-        from .server import _json_response
+        from .http_helpers import json_response as _json_response
         self._reload_if_changed()
         try:
             self._validate(body)
@@ -465,8 +491,30 @@ class CliProxy:
                 cooldowns.record_success(target.label, category.value)
         return latency
 
+    def _ordered_for(self, classification):
+        return self._ordered(classification.category)
+
+    def _prepare_upstream(self, handler, body, target, source, wire, classification):
+        payload = convert_request(body, source, wire)
+        payload["model"] = target.model
+        headers = self._headers(dict(handler.headers), target, source, wire)
+        base = self.providers[target.provider]["base_url"].rstrip("/")
+        endpoint = WIRE_PATH[wire]
+        if base.endswith("/v1"):
+            endpoint = endpoint[3:]
+        return base + endpoint, payload, headers
+
+    def _extra_headers(self, classification, target):
+        return {}
+
+    def _retry_status(self, status):
+        return status in {401, 403, 429} or status >= 500
+
+    def _usage_tap(self, streaming):
+        return UsageTap(streaming)
+
     async def _forward(self, handler, body, path, classification):
-        from .server import _json_response
+        from .http_helpers import json_response as _json_response
         source = PATHS[path]
         with self.lock:
             self._expire()
@@ -474,7 +522,7 @@ class CliProxy:
         main = classification.category not in BACKGROUND
         category = classification.category
         # Learned order only reorders new assignments; an existing pin still goes first.
-        candidates, _ = self._ordered(category)
+        candidates, _ = self._ordered_for(classification)
         if main:
             # Preserve native schema/cache breakpoints ahead of conversions.
             candidates.sort(key=lambda t: source not in self.providers[t.provider].get("protocols", []))
@@ -501,28 +549,25 @@ class CliProxy:
                     continue
                 try:
                     wire = self._wire(target, source)
-                    payload = convert_request(body, source, wire)
-                    payload["model"] = target.model
-                    headers = self._headers(dict(handler.headers), target, source, wire)
+                    url, payload, headers = self._prepare_upstream(handler, body, target, source, wire, classification)
                 except (UnsupportedConversion, ValueError, KeyError, TypeError) as exc:
                     errors.append(f"{target.label}: {exc}")
                     continue
-                base = self.providers[target.provider]["base_url"].rstrip("/")
-                parsed_base = urlparse(base)
+                parsed_base = urlparse(url)
                 if parsed_base.hostname in {"127.0.0.1", "localhost", "::1"} and parsed_base.port == handler.server.server_port:
                     errors.append(f"{target.label}: upstream URL points back to this proxy")
                     continue
-                endpoint = WIRE_PATH[wire]
-                if base.endswith("/v1"):
-                    endpoint = endpoint[3:]
                 start = time.monotonic()
                 committed = False
                 try:
-                    async with client.stream("POST", base + endpoint, json=payload, headers=headers) as response:
+                    async with client.stream("POST", url, json=payload, headers=headers) as response:
                         status = response.status_code
-                        if status in {401, 403, 429} or status >= 500:
+                        if self._retry_status(status):
                             error = "auth" if status in {401, 403} else "rate_limit" if status == 429 else "server"
-                            self._observe(target, status, start, error, category)
+                            if status == 404:
+                                cooldowns.record_failure(target.label, category.value)
+                            else:
+                                self._observe(target, status, start, error, category)
                             errors.append(f"{target.label}: HTTP {status}")
                             continue
                         converted = wire != source
@@ -537,9 +582,10 @@ class CliProxy:
                         if status < 400:
                             self._pin(classification, target)
                         cache_pinned = bool(pinned and target == pin.target)
-                        tap = UsageTap(streaming)
+                        tap = self._usage_tap(streaming)
                         handler.send_response(status)
                         blocked = HOP_HEADERS | {"content-length", "content-encoding", "x-nexus-routed-model", "x-nexus-call-category", "x-nexus-cache-pinned"}
+                        blocked.update(key.lower() for key in self._extra_headers(classification, target))
                         blocked.update(x.strip().lower() for x in response.headers.get("connection", "").split(","))
                         for key, value in response.headers.multi_items():
                             if key.lower() not in blocked and not (converted and key.lower() == "content-type"):
@@ -549,6 +595,8 @@ class CliProxy:
                         handler.send_header("X-Nexus-Routed-Model", target.label)
                         handler.send_header("X-Nexus-Call-Category", classification.category.value)
                         handler.send_header("X-Nexus-Cache-Pinned", str(cache_pinned).lower())
+                        for key, value in self._extra_headers(classification, target).items():
+                            handler.send_header(key, value)
                         handler.send_header("Connection", "close")
                         if streaming:
                             handler.send_header("X-Accel-Buffering", "no")

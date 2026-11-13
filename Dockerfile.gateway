@@ -1,0 +1,16 @@
+FROM python:3.12-slim AS build
+WORKDIR /build
+COPY pyproject.toml README.md ./
+COPY src ./src
+RUN pip wheel --no-cache-dir --wheel-dir /wheels .
+
+FROM python:3.12-slim
+RUN useradd --uid 10001 --create-home nexus
+COPY --from=build /wheels /wheels
+RUN pip install --no-cache-dir --no-index --find-links=/wheels nexus-router-gateway && rm -rf /wheels
+USER nexus
+ENV NEXUS_ROUTER_STATE_ROOT=/home/nexus/.local/state/nexus-router
+EXPOSE 7772
+HEALTHCHECK CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:7772/health', timeout=3)"
+ENTRYPOINT ["nexus-router-gateway"]
+CMD ["serve", "--host", "0.0.0.0", "--config", "/config/gateway.yaml"]

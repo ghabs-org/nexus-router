@@ -1,0 +1,57 @@
+# Example model IDs: replace with models your upstream account supports.
+auto_model: nexus-auto
+max_output_tokens: 16384
+default_profile: standard
+background_profile: utility
+clients:
+  local:
+    token_env: NEXUS_GATEWAY_TOKEN
+providers:
+  openai:
+    transport: openai
+    base_url: https://api.openai.com
+    protocols:
+    - responses
+    - chat
+    api_key_env: OPENAI_API_KEY
+models:
+  openai:gpt-6.1-sol:
+    tier: openai
+    max_output_tokens: 16384
+    context_window: 200000
+    thinking_modes: []
+    efforts:
+    - low
+    - medium
+    - high
+    defaults:
+      effort: medium
+  openai:gpt-6-luna:
+    tier: openai
+    max_output_tokens: 16384
+    context_window: 200000
+    thinking_modes: []
+    efforts:
+    - low
+    - medium
+    - high
+    defaults:
+      effort: medium
+profiles: &id001
+  utility:
+  - target: openai:gpt-6-luna
+    effort: low
+  standard:
+  - target: openai:gpt-6.1-sol
+    effort: medium
+  deep:
+  - target: openai:gpt-6.1-sol
+    effort: high
+protocol_profiles:
+  responses: *id001
+  chat: *id001
+rules:
+- profile: deep
+  pattern: \b(architecture|root cause|trade.off)\b
+- profile: utility
+  pattern: ^\s*(rewrite|extract|translate)\b

@@ -1,0 +1,75 @@
+# Dedicated Cowork gateway policy. Restart the service after editing this file.
+# Pin snapshots retain model/effort settings across service restarts.
+auto_model: nexus-auto
+behaves_as: claude-sonnet-4-6
+default_profile: standard
+background_profile: utility
+pin_ttl_seconds: 86400
+max_pins: 4096
+max_output_tokens: 16384
+max_body_bytes: 33554432
+connect_timeout_seconds: 5
+read_timeout_seconds: 300
+clients:
+  local:
+    token_env: NEXUS_GATEWAY_TOKEN
+    limits:
+      max_concurrent: 4
+      # Admission gates use reported input+output usage. In-flight calls can overshoot.
+      # max_tokens_24h: 2000000
+      # max_task_tokens: 500000
+# For per-user SSO, replace clients with clients: {} and configure OIDC below.
+# oidc:
+#   issuer: https://login.microsoftonline.com/TENANT/v2.0
+#   audience: DESKTOP_PUBLIC_CLIENT_ID
+#   jwks_url: https://login.microsoftonline.com/TENANT/discovery/v2.0/keys
+#   limits: {max_concurrent: 4}
+providers:
+  vertex:
+    transport: vertex
+    project_env: GOOGLE_CLOUD_PROJECT
+    region_env: GOOGLE_CLOUD_LOCATION
+    # ADC refresh is automatic. Production should use an attached service identity.
+    # access_token_env: VERTEX_ACCESS_TOKEN  # optional externally refreshed token
+    # beta_transport: body                 # only for legacy Vertex deployments
+models:
+  vertex:claude-haiku-4-5@20251001:
+    tier: haiku
+    context_window: 200000
+    max_output_tokens: 8192
+    thinking_modes: [disabled, enabled]
+    efforts: []
+    defaults: {thinking: {type: disabled}}
+  vertex:claude-sonnet-4-6:
+    tier: sonnet
+    context_window: 200000
+    max_output_tokens: 16384
+    thinking_modes: [disabled, adaptive, enabled]
+    efforts: [low, medium, high]
+    defaults: {thinking: {type: adaptive}, effort: medium}
+    # Set the actual Vertex/contract rates in USD per million tokens to enable cost estimates.
+    # pricing: {input: 3, output: 15, cache_read: 0.3, cache_write_5m: 3.75, cache_write_1h: 6}
+  vertex:claude-opus-4-6:
+    tier: opus
+    context_window: 200000
+    max_output_tokens: 16384
+    thinking_modes: [adaptive, enabled]
+    efforts: [low, medium, high, max]
+    defaults: {thinking: {type: adaptive}, effort: high}
+profiles:
+  utility:
+    - {target: "vertex:claude-haiku-4-5@20251001", thinking: {type: disabled}}
+    - {target: "vertex:claude-sonnet-4-6", thinking: {type: disabled}, effort: low}
+  standard:
+    - {target: "vertex:claude-sonnet-4-6", thinking: {type: adaptive}, effort: medium}
+    - {target: "vertex:claude-opus-4-6", thinking: {type: adaptive}, effort: medium}
+  deep:
+    - {target: "vertex:claude-opus-4-6", thinking: {type: adaptive}, effort: high}
+    - {target: "vertex:claude-sonnet-4-6", thinking: {type: adaptive}, effort: high}
+# Conservative ordered rules. An unmatched task gets standard, never the cheapest model.
+# Only the first paragraph of the user's opening message is inspected.
+rules:
+  - profile: deep
+    pattern: '\b(architecture|architettura|root cause|causa radice|conflicting evidence|contradictory|trade.off|scenario analysis|analisi di scenario|due diligence)\b'
+  - profile: utility
+    pattern: '^\s*(rewrite|rephrase|translate|traduci|riscrivi|extract|estrai|format|formatta)\b'

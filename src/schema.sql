@@ -282,6 +282,39 @@ CREATE TABLE IF NOT EXISTS cli_proxy_turns (
 CREATE INDEX IF NOT EXISTS idx_cli_turns_created_at ON cli_proxy_turns(created_at);
 CREATE INDEX IF NOT EXISTS idx_cli_turns_target ON cli_proxy_turns(target, created_at);
 
+-- Enterprise gateway state. Identities are hashes; prompts and credentials are never stored.
+CREATE TABLE IF NOT EXISTS gateway_task_pins (
+  session TEXT PRIMARY KEY,
+  principal TEXT NOT NULL,
+  target TEXT NOT NULL,
+  profile TEXT NOT NULL,
+  requested_model TEXT NOT NULL,
+  choices_json TEXT NOT NULL,
+  touched_at REAL NOT NULL
+);
+CREATE TABLE IF NOT EXISTS gateway_turns (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  created_at REAL NOT NULL,
+  principal TEXT NOT NULL,
+  session TEXT NOT NULL,
+  profile TEXT NOT NULL,
+  target TEXT,
+  effort TEXT,
+  http_status INTEGER,
+  latency_ms INTEGER,
+  input_tokens INTEGER NOT NULL DEFAULT 0,
+  output_tokens INTEGER NOT NULL DEFAULT 0,
+  uncached_input_tokens INTEGER NOT NULL DEFAULT 0,
+  cache_read_input_tokens INTEGER NOT NULL DEFAULT 0,
+  cache_creation_input_tokens INTEGER NOT NULL DEFAULT 0,
+  cache_write_5m_tokens INTEGER NOT NULL DEFAULT 0,
+  cache_write_1h_tokens INTEGER NOT NULL DEFAULT 0,
+  usage_complete INTEGER NOT NULL DEFAULT 0,
+  estimated_cost_usd REAL
+);
+CREATE INDEX IF NOT EXISTS idx_gateway_turns_principal ON gateway_turns(principal, created_at);
+CREATE INDEX IF NOT EXISTS idx_gateway_turns_session ON gateway_turns(session, created_at);
+
 CREATE INDEX IF NOT EXISTS idx_route_feedback_decision_id ON route_feedback(decision_id);
 CREATE INDEX IF NOT EXISTS idx_route_feedback_created_at ON route_feedback(created_at);
 CREATE INDEX IF NOT EXISTS idx_route_feedback_preferred_model ON route_feedback(preferred_model);
