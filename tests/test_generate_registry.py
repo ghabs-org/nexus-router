@@ -68,6 +68,28 @@ def test_normalize_skips_configured_models_outside_the_allowlist():
     assert sorted(m["id"] for m in configured) == ["anthropic/claude-opus-5-5", "nvidia/m0"]
 
 
+def test_selectable_untagged_models_require_exact_opt_in_availability_and_allowlist():
+    raw = {
+        "models": [
+            _entry("openai/old"),
+            {"key": "openai/new", "available": True},
+            {"key": "openai/not-opted-in", "available": True},
+            {"key": "openai/unavailable", "available": False},
+            {"key": "other/not-permitted", "available": True},
+        ],
+        "modelPolicyAllow": ["openai/*"],
+    }
+    policy = {"include_unmarked_models": [
+        "openai/new", "openai/unavailable", "other/not-permitted", "openai/absent",
+    ]}
+
+    assert [m["id"] for m in normalize(raw, {}, policy, {}, configured_only=True)] == [
+        "openai/old", "openai/new",
+    ]
+    raw.pop("modelPolicyAllow")
+    assert [m["id"] for m in normalize(raw, {}, policy, {}, configured_only=True)] == ["openai/old"]
+
+
 def test_free_models_score_full_cost_unless_overridden():
     raw = {"models": [_entry("nvidia/m0"), _entry("nvidia/m1"), _entry("anthropic/claude-opus-5-5")]}
     overrides = {"overrides": {"nvidia/m1": {"cost": 0.9}}}

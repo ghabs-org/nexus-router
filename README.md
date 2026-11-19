@@ -376,10 +376,12 @@ docker restart nexus-router-1
 partial: no models, the total halving, or a provider losing most of its models
 while its discovery reports a sign-in error. A provider that vanishes without a
 discovery outcome is treated as disabled in OpenClaw. It also stores OpenClaw's
-`agents.defaults.modelPolicy.allow` in the catalog. The registry includes only
-models OpenClaw is configured to use: tagged `configured` and matching that
-allowlist (some built-in models are tagged without being allowed). Pass
-`--include-unconfigured` to `generate_registry.py` to keep the rest.
+`agents.defaults.modelPolicy.allow` in the catalog. The registry keeps rows
+with the `configured` tag that match the allowlist when present. For a
+selectable wildcard match without the tag, add its exact ID to
+`include_unmarked_models` in `policies/overrides.yaml`; it is included only
+if the current catalog marks it available and the policy permits it. Do not
+use `--include-unconfigured` for a targeted production refresh.
 
 ## Local ModernBERT classifier
 

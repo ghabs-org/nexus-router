@@ -8,11 +8,11 @@ Generate normalized model registry from:
 
 Output: generated/models.json
 
-Only models OpenClaw is configured to use are included; OpenClaw refuses to
-run the rest. That means the catalog tag "configured" and, when the catalog
-carries it (scripts/refresh_catalog.py adds it), a match in OpenClaw's
-agents.defaults.modelPolicy.allow ("modelPolicyAllow"): some built-in models
-are tagged "configured" without being allowed.
+Default to catalog rows tagged "configured" and respect OpenClaw's
+agents.defaults.modelPolicy.allow ("modelPolicyAllow") when present. OpenClaw
+can publish selectable wildcard matches without the tag. The router may add
+exact IDs from policy's include_unmarked_models list if the live catalog
+marks them available and explicitly allows them.
 
 Flags:
   --only-configured       Include only models whose provider has auth=true
@@ -372,6 +372,7 @@ def normalize(
 ) -> list[dict]:
     models = []
     allow = raw.get("modelPolicyAllow") if configured_only else None
+    include_unmarked = set(overrides.get("include_unmarked_models") or [])
     raw_models = _expand_cli_backed_entries(raw.get("models", []))
     for entry in raw_models:
         key = entry.get("key", "")
@@ -384,9 +385,15 @@ def normalize(
         if only_providers and provider not in only_providers:
             continue
 
-        # Allowlist filter: OpenClaw tags the models it is configured to use
-        if configured_only and not (_is_configured(entry) and _is_allowed(key, allow)):
-            continue
+        if configured_only:
+            # The catalog's tag is narrower than the picker under provider
+            # wildcards. Admit only explicitly requested, available additions;
+            # don't widen the routing pool or assume a missing policy allows them.
+            selected_untagged = (
+                bool(allow) and key in include_unmarked and entry.get("available") is True
+            )
+            if not _is_allowed(key, allow) or not (_is_configured(entry) or selected_untagged):
+                continue
 
         input_modalities = _input_modalities(entry.get("input"))
         features = {
@@ -504,7 +511,7 @@ def main():
     configured_only = not args.include_unconfigured
     if configured_only:
         if any(_is_configured(m) for m in raw.get("models", [])):
-            print("Allowlist filter: skipping models without OpenClaw's 'configured' tag")
+            print("Allowlist filter: configured models plus explicitly included, available untagged models")
             if raw.get("modelPolicyAllow"):
                 print(f"  and models outside its {len(raw['modelPolicyAllow'])}-entry modelPolicy.allow")
         else:

@@ -3,6 +3,12 @@
 # These override family defaults from families.yaml for specific edge cases
 # or known deviations from the family pattern.
 
+# Exact selectable model IDs lacking OpenClaw's configured tag. These still
+# require an available catalog row and a match in OpenClaw's model allowlist.
+include_unmarked_models:
+  - openai/gpt-6.2-sol
+  - openai/gpt-6.2-astra
+
 overrides:
   openai-codex/gpt-5.5:
     coding: 0.97
