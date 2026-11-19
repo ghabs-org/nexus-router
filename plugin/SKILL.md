@@ -82,6 +82,10 @@ plugin for ambiguous follow-ups; it is not a config option.
 | `/route compare [modes]` | Compare modes on the last prompt |
 | `/route <mode> [free]` · `/route feedback [on\|off]` | Set mode; feedback cards |
 
+For a model pinned with `/model` in a Telegram DM, the reply keeps that model.
+If feedback is enabled, a shadow card after the reply compares the router’s
+suggestion with the actual model. It does not count as a routing fallback.
+
 ## CLI test
 
 ```bash

@@ -339,7 +339,7 @@ function resolveSenderIdFromContext(ctx, event) {
 function resolveFeedbackSender(ctx, event, sessionKey, conversationKey) {
     return (resolveSenderForSession(sessionKey)
         ?? resolveSenderForSession(ctx?.sessionKey)
-        ?? resolveSenderForConversation(conversationKey)
+        ?? resolveSenderForConversation(conversationKey ?? undefined)
         ?? (resolveSenderIdFromContext(ctx, event)
             ? { senderId: String(resolveSenderIdFromContext(ctx, event)), channelId: ctx?.channelId ? String(ctx.channelId) : undefined }
             : null));
@@ -1482,6 +1482,7 @@ export default definePluginEntry({
         const debugMode = cfg.debugMode ?? false;
         const minConfidence = cfg.minConfidence ?? DEFAULT_CONFIDENCE;
         const timeoutMs = cfg.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+        const pinnedFeedback = new Map();
         if (!enabled) {
             if (debugMode)
                 console.log("[nexus-router] disabled via config");
@@ -1493,6 +1494,10 @@ export default definePluginEntry({
         api.on("before_reset", async (event, ctx) => {
             const sessionKey = ctx.sessionKey;
             clearRecentRoutingState(sessionKey);
+            for (const [id, turn] of pinnedFeedback) {
+                if (turn.sessionKey === sessionKey)
+                    pinnedFeedback.delete(id);
+            }
             markRecentStartup(sessionKey, `reset:${event.reason ?? "unknown"}`);
             await debugLog(`[route-reset] session=${sessionKey ?? "unknown"} cleared-ephemeral-state reason=${event.reason ?? "unknown"}`);
         });
@@ -1909,63 +1914,93 @@ export default definePluginEntry({
                 await debugLog(`[hook-result] source=${source} source_tag=${sourceTag} route=${routeMode} bypassed reason=${ctx?.trigger}`);
                 return;
             }
-            if (routeMode === "off") {
-                const shadowTimeoutMs = Math.max(timeoutMs, SHADOW_TIMEOUT_MS);
-                const shadowResult = await routeRequest(routerUrl, routingText, firstPassCostProfile, shadowTimeoutMs, routeMode, conversationContext, shouldUseLlmClassifier, source, sourceTag, "shadow", freeFilter, conversationKey ?? undefined);
-                const shadowDecision = shadowResult.decision;
-                if (!shadowDecision) {
-                    const failure = describeRouteRequestFailure(shadowResult, shadowTimeoutMs);
-                    await debugLog(`[hook-result] source=${source} source_tag=${sourceTag} route=${routeMode} shadow_failed ${failure}`);
-                    return;
-                }
-                if (sessionRef) {
-                    recentRouteCacheBySession.set(sessionRef, {
-                        text: dedupeText,
-                        mode: routeMode,
+            const explicitModel = routeMode !== "off" && hasExplicitModelSelection(api.config, ctx);
+            // Only extend shadow feedback to fresh Telegram DMs with a verified target.
+            // On retries/background turns, a non-default model is not evidence of a pin.
+            const telegramDmId = explicitModel && source === "raw-user" && ctx.sessionId
+                ? /^agent:[^:]+:telegram:direct:(\d+)$/.exec(ctx.sessionKey ?? "")?.[1]
+                : undefined;
+            const inboundSender = telegramDmId ? resolveSenderForSession(ctx.sessionKey) : null;
+            const pinnedSender = inboundSender?.channelId === "telegram"
+                && inboundSender.senderId.replace(/^telegram:/, "") === telegramDmId
+                && !isFeedbackSuppressed(ctx.sessionKey)
+                && !shouldSuppressFeedbackCardForText(routingText)
+                ? telegramDmId : undefined;
+            if (routeMode === "off" || pinnedSender) {
+                const observe = async (actualProvider, actualModel) => {
+                    const shadowTimeoutMs = pinnedSender ? timeoutMs : Math.max(timeoutMs, SHADOW_TIMEOUT_MS);
+                    const shadowResult = await routeRequest(routerUrl, routingText, firstPassCostProfile, shadowTimeoutMs, routeMode, conversationContext, shouldUseLlmClassifier, source, sourceTag, "shadow", freeFilter, conversationKey ?? undefined);
+                    const shadowDecision = shadowResult.decision;
+                    if (!shadowDecision) {
+                        const failure = describeRouteRequestFailure(shadowResult, shadowTimeoutMs);
+                        await debugLog(`[hook-result] source=${source} source_tag=${sourceTag} route=${routeMode} shadow_failed ${failure}`);
+                        return;
+                    }
+                    if (sessionRef && !pinnedSender) {
+                        recentRouteCacheBySession.set(sessionRef, {
+                            text: dedupeText,
+                            mode: routeMode,
+                            at: Date.now(),
+                            selectedModel: shadowDecision.selected_model,
+                        });
+                    }
+                    const lastDecision = {
                         at: Date.now(),
+                        decisionId: shadowDecision.decision_id,
+                        requestedRouteMode: routeMode,
+                        routeMode,
+                        source,
+                        sourceTag,
+                        promptLen: routingText.length,
+                        promptText: routingText,
+                        replyContextUsed: shadowDecision.reply_context_used ?? Boolean(conversationContext.trim()),
+                        classifierSource: (shadowDecision.classifier_source ?? (shouldUseLlmClassifier ? "llm" : "heuristic")),
+                        costProfile: firstPassCostProfile,
+                        taskType: shadowDecision.task_type,
+                        effectiveTaskType: extractEffectiveTaskType(shadowDecision.reason),
+                        confidence: shadowDecision.confidence,
+                        firstPassModel: shadowDecision.selected_model,
+                        firstPassProvider: shadowDecision.selected_provider,
                         selectedModel: shadowDecision.selected_model,
-                    });
-                }
-                const lastDecision = {
-                    at: Date.now(),
-                    decisionId: shadowDecision.decision_id,
-                    requestedRouteMode: routeMode,
-                    routeMode,
-                    source,
-                    sourceTag,
-                    promptLen: routingText.length,
-                    promptText: routingText,
-                    replyContextUsed: shadowDecision.reply_context_used ?? Boolean(conversationContext.trim()),
-                    classifierSource: (shadowDecision.classifier_source ?? (shouldUseLlmClassifier ? "llm" : "heuristic")),
-                    costProfile: firstPassCostProfile,
-                    taskType: shadowDecision.task_type,
-                    effectiveTaskType: extractEffectiveTaskType(shadowDecision.reason),
-                    confidence: shadowDecision.confidence,
-                    firstPassModel: shadowDecision.selected_model,
-                    firstPassProvider: shadowDecision.selected_provider,
-                    selectedModel: shadowDecision.selected_model,
-                    selectedProvider: shadowDecision.selected_provider,
-                    fallbacks: shadowDecision.fallbacks,
-                    excludedModels: shadowDecision.excluded_models ?? [],
-                    score: shadowDecision.score,
-                    reason: [...shadowDecision.reason, "route_off"],
-                    autoEscalated: false,
-                };
-                rememberLastDecision(ctx.sessionKey, lastDecision);
-                if (ctx.sessionId && shadowDecision.decision_id) {
-                    enqueuePendingOutcome(ctx.sessionId, {
+                        selectedProvider: shadowDecision.selected_provider,
+                        fallbacks: shadowDecision.fallbacks,
+                        excludedModels: shadowDecision.excluded_models ?? [],
+                        score: shadowDecision.score,
+                        reason: [...shadowDecision.reason, pinnedSender ? "explicit-model" : "route_off"],
+                        ...(pinnedSender ? { applied: false, skippedReason: "session model pin", actualProvider, actualModel } : {}),
+                        autoEscalated: false,
+                    };
+                    rememberLastDecision(ctx.sessionKey, lastDecision);
+                    await debugLog(`[hook-result] source=${source} source_tag=${sourceTag} route=${routeMode} shadow decision=${shadowDecision.selected_model} task=${shadowDecision.task_type} confidence=${shadowDecision.confidence.toFixed(2)} score=${shadowDecision.score.toFixed(3)}${pinnedSender ? " reason=explicit-model" : ""}`);
+                    if (!ctx.sessionId || !shadowDecision.decision_id)
+                        return;
+                    return {
                         decisionId: shadowDecision.decision_id,
                         selectedModel: shadowDecision.selected_model,
                         selectedProvider: shadowDecision.selected_provider,
                         sessionKey: ctx.sessionKey,
                         shadowMode: true,
-                        targetSenderId: resolveFeedbackSender(ctx, event, ctx.sessionKey ?? sessionRef, conversationKey)?.senderId,
+                        ...(pinnedSender ? { feedbackOnly: true } : {}),
+                        targetSenderId: pinnedSender ?? resolveFeedbackSender(ctx, event, ctx.sessionKey ?? sessionRef, conversationKey)?.senderId,
+                    };
+                };
+                if (pinnedSender) {
+                    // Don't put classification on the critical path of the pinned reply.
+                    pinnedFeedback.set(ctx.sessionId, {
+                        sessionKey: ctx.sessionKey,
+                        actualProvider: ctx.modelProviderId,
+                        actualModel: ctx.modelId,
+                        observe,
                     });
                 }
-                await debugLog(`[hook-result] source=${source} source_tag=${sourceTag} route=${routeMode} shadow decision=${shadowDecision.selected_model} task=${shadowDecision.task_type} confidence=${shadowDecision.confidence.toFixed(2)} score=${shadowDecision.score.toFixed(3)}`);
+                else {
+                    const pending = await observe();
+                    if (pending)
+                        enqueuePendingOutcome(ctx.sessionId, pending);
+                }
                 return;
             }
-            if (hasExplicitModelSelection(api.config, ctx)) {
+            if (explicitModel) {
                 if (sessionRef) {
                     recentRouteCacheBySession.set(sessionRef, { text: dedupeText, mode: routeMode, at: Date.now() });
                 }
@@ -2178,6 +2213,12 @@ export default definePluginEntry({
             return splitSelectedModelRef(decision.selected_model);
         });
         api.on("llm_output", async (event, ctx) => {
+            const pinned = pinnedFeedback.get(event.sessionId ?? ctx.sessionId);
+            if (pinned) {
+                pinned.actualProvider = event.provider ?? pinned.actualProvider;
+                pinned.actualModel = event.model ?? pinned.actualModel;
+                return;
+            }
             const pending = peekPendingOutcome(event.sessionId);
             const byDecisionId = pending?.decisionId
                 ? recentLastDecisionByDecisionId.get(pending.decisionId)
@@ -2198,7 +2239,12 @@ export default definePluginEntry({
         });
         api.on("agent_end", async (rawEvent, ctx) => {
             const event = normalizeAgentEndEvent(rawEvent);
-            const pending = ctx.sessionId ? shiftPendingOutcome(ctx.sessionId) : undefined;
+            const pinned = pinnedFeedback.get(ctx.sessionId);
+            pinnedFeedback.delete(ctx.sessionId);
+            let pending = ctx.sessionId ? shiftPendingOutcome(ctx.sessionId) : undefined;
+            if (!pending && pinned && event.success && !isFeedbackSuppressed(pinned.sessionKey)) {
+                pending = await pinned.observe(pinned.actualProvider, pinned.actualModel);
+            }
             await debugLog(`[hook-agent-end] sessionId=${String(ctx?.sessionId ?? "none")} pending=${pending ? pending.decisionId : "none"}`);
             if (!pending)
                 return;
@@ -2222,28 +2268,32 @@ export default definePluginEntry({
                 const outcomeModel = actualModel ?? pending.selectedModel;
                 const failedConversationKey = resolveConversationKeyForSession(pending.sessionKey)
                     ?? (pending.sessionKey ? buildConversationKeyFromContext({ sessionKey: pending.sessionKey }) : null);
-                if (failure.shouldCooldownOverride && !event.success) {
-                    rememberFailedOverride(pending.sessionKey ?? ctx.sessionKey, failedConversationKey, outcomeModel, outcomeProvider, failure.errorType ?? "unknown");
+                // A pinned model did not fail over from the recommendation. Reporting
+                // that as an outcome would penalize a model that never ran.
+                if (!pending.feedbackOnly) {
+                    if (failure.shouldCooldownOverride && !event.success) {
+                        rememberFailedOverride(pending.sessionKey ?? ctx.sessionKey, failedConversationKey, outcomeModel, outcomeProvider, failure.errorType ?? "unknown");
+                    }
+                    await fetch(`${routerUrl}/outcome`, {
+                        method: "POST",
+                        headers: routerHeaders({ "Content-Type": "application/json" }),
+                        body: JSON.stringify({
+                            decision_id: pending.decisionId,
+                            success: event.success,
+                            latency_ms: event.durationMs,
+                            fallback_used: fallbackUsed,
+                            fallback_model: fallbackUsed ? actualModel : undefined,
+                            provider: outcomeProvider,
+                            http_status: failure.httpStatus,
+                            error_type: failure.errorType,
+                            quota_hint: failure.quotaHint,
+                            quota_remaining_ratio: failure.quotaRemainingRatio,
+                            input_tokens: last?.usage?.input,
+                            output_tokens: last?.usage?.output,
+                            total_tokens: last?.usage?.total,
+                        }),
+                    });
                 }
-                await fetch(`${routerUrl}/outcome`, {
-                    method: "POST",
-                    headers: routerHeaders({ "Content-Type": "application/json" }),
-                    body: JSON.stringify({
-                        decision_id: pending.decisionId,
-                        success: event.success,
-                        latency_ms: event.durationMs,
-                        fallback_used: fallbackUsed,
-                        fallback_model: fallbackUsed ? actualModel : undefined,
-                        provider: outcomeProvider,
-                        http_status: failure.httpStatus,
-                        error_type: failure.errorType,
-                        quota_hint: failure.quotaHint,
-                        quota_remaining_ratio: failure.quotaRemainingRatio,
-                        input_tokens: last?.usage?.input,
-                        output_tokens: last?.usage?.output,
-                        total_tokens: last?.usage?.total,
-                    }),
-                });
                 if (pending.shadowMode) {
                     const decision = last;
                     const sender = pending.targetSenderId
@@ -2261,7 +2311,7 @@ export default definePluginEntry({
                             reason: decision.reason,
                             classifier_source: decision.classifierSource,
                             reply_context_used: decision.replyContextUsed,
-                        }, decision.sourceTag, { shadowMode: true, actualModel: outcomeModel, messagePreview: decision.promptText, sessionKey: pending.sessionKey ?? ctx.sessionKey });
+                        }, decision.sourceTag, { shadowMode: true, actualModel: pending.feedbackOnly ? actualRef : outcomeModel, messagePreview: decision.promptText, sessionKey: pending.sessionKey ?? ctx.sessionKey });
                         if (!sent) {
                             await debugLog(`[feedback-card] shadow failed decision=${pending.decisionId} sender=${sender?.senderId ?? "bridge_only"}`);
                         }
