@@ -219,3 +219,22 @@ def test_benchmark_metadata_round_trips_through_isolated_database(monkeypatch, t
     loaded = db.load_benchmark_scores()["p/future"]
     assert loaded["_metadata"] == measured["_metadata"]
     assert loaded["reasoning"] == .95
+
+
+def test_catalog_alias_index_maps_vendor_prefixed_nvidia_models(tmp_path, monkeypatch):
+    catalog = tmp_path / "openclaw-models.json"
+    catalog.write_text(
+        json.dumps(
+            {
+                "models": [
+                    {"key": "nvidia/moonshotai/kimi-k3.1-pro", "name": "Kimi K3.1 Pro"},
+                    {"key": "nvidia/z-ai/glm-5.3-flash", "name": "GLM 5.3 Flash"},
+                ]
+            }
+        )
+    )
+    monkeypatch.setattr(fb, "MODEL_CATALOG_FILE", catalog)
+    monkeypatch.setattr(fb, "CATALOG_ALIAS_INDEX", fb._build_catalog_alias_index())
+
+    assert fb._map_public_model_name("kimi-k3-1-pro") == "nvidia/moonshotai/kimi-k3.1-pro"
+    assert fb._map_public_model_name("glm-5-3-flash") == "nvidia/z-ai/glm-5.3-flash"

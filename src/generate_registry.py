@@ -155,8 +155,17 @@ def _benchmark_model_signature(model_key: str) -> str:
         "qwen",
         "x-ai",
         "meta-llama",
+        "meta",
         "mistralai",
         "deepseek",
+        "moonshotai",
+        "minimaxai",
+        "minimax",
+        "stepfun-ai",
+        "stepfun",
+        "z-ai",
+        "nvidia",
+        "poolside",
     )
     for vendor in vendor_prefixes:
         for prefix in (f"{vendor}/", f"~{vendor}/"):

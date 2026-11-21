@@ -10,7 +10,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src import router as router_module
-from src.generate_registry import normalize
+from src.generate_registry import _benchmark_model_signature, normalize
 from src.scorer import score_models
 from src.types import ClassifierOutput, ProviderHealth
 
@@ -187,6 +187,27 @@ def test_unknown_publisher_cannot_be_laundered_through_derived_scores():
     ranked = score([model(OLD, .8, dimension="summarize"), new], task="summarization")
     assert ranked[0].model_id == OLD
     assert next(s for s in ranked if s.model_id == NEW).excluded
+
+
+def test_nvidia_vendor_prefixed_models_inherit_sibling_benchmarks():
+    assert _benchmark_model_signature("nvidia/minimaxai/minimax-m3.1-flash") == _benchmark_model_signature("minimax-portal/MiniMax-M3.1-Flash")
+    assert _benchmark_model_signature("nvidia/stepfun-ai/step-5-preview") == _benchmark_model_signature("openrouter/stepfun/step-5-preview")
+    raw = {
+        "modelPolicyAllow": ["nvidia/*"],
+        "models": [
+            {"key": "nvidia/minimaxai/minimax-m3.1-flash", "available": True, "tags": ["configured"]},
+            {"key": "nvidia/stepfun-ai/step-5-preview", "available": True, "tags": ["configured"]},
+        ],
+    }
+    benchmarks = {
+        "models": {
+            "minimax-portal/MiniMax-M3.1-Flash": {"reasoning": 0.73, "_source": "artificialanalysis"},
+            "openrouter/stepfun/step-5-preview": {"reasoning": 0.72, "_source": "artificialanalysis"},
+        }
+    }
+    admitted = {m["id"]: m for m in normalize(raw, {}, {}, benchmarks, configured_only=True)}
+    assert admitted["nvidia/minimaxai/minimax-m3.1-flash"]["scoreSource"]["reasoning"] == "benchmark-inherited:minimax-portal/MiniMax-M3.1-Flash:artificialanalysis"
+    assert admitted["nvidia/stepfun-ai/step-5-preview"]["scoreSource"]["reasoning"] == "benchmark-inherited:openrouter/stepfun/step-5-preview:artificialanalysis"
 
 
 def test_refresh_adopts_a_future_benchmark_leader_without_policy_or_local_history(tmp_path, monkeypatch):

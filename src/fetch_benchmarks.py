@@ -612,6 +612,8 @@ def _build_catalog_alias_index() -> dict[str, list[str]]:
             _normalize_model_alias(model_key),
             _normalize_model_alias(display_name),
         }
+        if "/" in model_key:
+            candidates.add(_normalize_model_alias(model_key.split("/", 1)[1]))
         if provider in {"github-copilot", "google-gemini-cli", "openai-codex"}:
             candidates.add(_normalize_model_alias(model_key.replace(".", "-")))
         for candidate in {c for c in candidates if c}:
