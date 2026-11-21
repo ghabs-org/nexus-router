@@ -17,10 +17,11 @@ import sys
 import inspect
 from collections import Counter
 from pathlib import Path
-from typing import TYPE_CHECKING
 
-if TYPE_CHECKING:
-    from datasets import Dataset
+try:
+    from torch.utils.data import Dataset as _BaseDataset
+except ImportError:
+    _BaseDataset = object  # type: ignore[assignment,misc]
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -60,18 +61,38 @@ def load_jsonl(path: Path) -> list[dict]:
     return rows
 
 
-def tokenize_dataset(dataset: Dataset, tokenizer):
-    tokenized = dataset.map(
-        lambda batch: tokenizer(
-            batch["text"],
-            truncation=True,
-            max_length=MAX_SEQUENCE_LENGTH,
-        ),
-        batched=True,
-    )
-    if "text" in tokenized.column_names:
-        tokenized = tokenized.remove_columns(["text"])
-    return tokenized
+class _TokenizedTextDataset(_BaseDataset):
+    """Map-style dataset backed directly by tokenizer outputs (avoids dill/datasets)."""
+
+    def __init__(self, encodings: dict, labels: list[int]):
+        self._encodings = encodings
+        self._labels = labels
+
+    def __len__(self) -> int:
+        return len(self._labels)
+
+    def __getitem__(self, idx: int) -> dict:
+        item = {
+            "input_ids": self._encodings["input_ids"][idx],
+            "attention_mask": self._encodings["attention_mask"][idx],
+            "labels": self._labels[idx],
+        }
+        if "token_type_ids" in self._encodings:
+            item["token_type_ids"] = self._encodings["token_type_ids"][idx]
+        return item
+
+
+def build_tokenized_dataset(
+    rows: list[dict],
+    tokenizer,
+    *,
+    max_length: int = MAX_SEQUENCE_LENGTH,
+) -> _TokenizedTextDataset:
+    """Tokenize JSONL rows into a pure PyTorch map-style dataset."""
+    texts = [str(row["text"]) for row in rows]
+    labels = [int(row["label"]) for row in rows]
+    encodings = tokenizer(texts, truncation=True, max_length=max_length)
+    return _TokenizedTextDataset(encodings, labels)
 
 
 def compute_class_weights(rows: list[dict], *, smoothing: float = 1.0) -> list[float]:
@@ -89,15 +110,49 @@ def compute_class_weights(rows: list[dict], *, smoothing: float = 1.0) -> list[f
     return [w / mean for w in weights]
 
 
+def freeze_bottom_layers(model, num_layers: int) -> dict[str, int]:
+    """Freeze embeddings and bottom `num_layers` encoder blocks for CPU fine-tuning."""
+    all_params = list(model.parameters())
+    total_params = sum(int(p.numel()) for p in all_params)
+    frozen_layers = 0
+    n = max(0, int(num_layers))
+    if n > 0:
+        base = getattr(model, "model", None) or getattr(model, "base_model", None) or model
+        embeddings = getattr(base, "embeddings", None)
+        if embeddings is not None:
+            for p in embeddings.parameters():
+                p.requires_grad = False
+        layers = getattr(base, "layers", None)
+        if layers is None:
+            layers = getattr(getattr(base, "encoder", None), "layer", None)
+        if layers is not None:
+            layer_seq = list(layers)
+            for layer in layer_seq[:n]:
+                for p in layer.parameters():
+                    p.requires_grad = False
+            frozen_layers = min(n, len(layer_seq))
+    trainable_params = sum(int(p.numel()) for p in all_params if p.requires_grad)
+    return {
+        "frozen_layers": frozen_layers,
+        "trainable_params": trainable_params,
+        "total_params": total_params,
+    }
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--train-file", default=f"{DEFAULT_DATA_DIR}/train.jsonl")
     parser.add_argument("--eval-file", default=f"{DEFAULT_DATA_DIR}/eval.jsonl")
     parser.add_argument("--model-name", default=DEFAULT_MODEL_NAME)
+    parser.add_argument("--init-from", default=None, help="Optional local checkpoint path to initialize weights from")
     parser.add_argument("--output-dir", default=DEFAULT_OUTPUT_DIR)
     parser.add_argument("--cache-dir", default=DEFAULT_HF_CACHE_DIR)
     parser.add_argument("--epochs", type=float, default=2.0)
     parser.add_argument("--batch-size", type=int, default=8)
+    parser.add_argument("--grad-accum", type=int, default=1)
+    parser.add_argument("--max-length", type=int, default=MAX_SEQUENCE_LENGTH)
+    parser.add_argument("--freeze-layers", type=int, default=0)
+    parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--learning-rate", type=float, default=2e-5)
     parser.add_argument("--weight-decay", type=float, default=0.01)
     parser.add_argument("--dry-run", action="store_true")
@@ -112,9 +167,10 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
+    os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
     # Keep pure dataset/weight helpers usable in the lightweight serving/test
     # environment. The training stack is needed only when training is invoked.
-    from datasets import Dataset
+    import torch
     from transformers import (
         AutoModelForSequenceClassification,
         AutoTokenizer,
@@ -123,23 +179,26 @@ def main() -> int:
         TrainingArguments,
     )
 
+    torch.set_num_threads(min(4, os.cpu_count() or 2))
     os.environ.setdefault("HF_HOME", args.cache_dir)
     os.environ.setdefault("HUGGINGFACE_HUB_CACHE", str(Path(args.cache_dir) / "hub"))
 
     train_rows = load_jsonl(Path(args.train_file))
     eval_rows = load_jsonl(Path(args.eval_file))
 
-    tokenizer = AutoTokenizer.from_pretrained(args.model_name, cache_dir=args.cache_dir)
+    model_source = args.init_from or args.model_name
+    tokenizer = AutoTokenizer.from_pretrained(model_source, cache_dir=args.cache_dir)
     model = AutoModelForSequenceClassification.from_pretrained(
-        args.model_name,
+        model_source,
         cache_dir=args.cache_dir,
         num_labels=len(ROUTER_TASK_LABELS),
         label2id=LABEL_TO_ID,
         id2label=ID_TO_LABEL,
     )
+    freeze_stats = freeze_bottom_layers(model, int(args.freeze_layers))
 
-    train_ds = tokenize_dataset(Dataset.from_list(train_rows), tokenizer)
-    eval_ds = tokenize_dataset(Dataset.from_list(eval_rows), tokenizer)
+    train_ds = build_tokenized_dataset(train_rows, tokenizer, max_length=int(args.max_length))
+    eval_ds = build_tokenized_dataset(eval_rows, tokenizer, max_length=int(args.max_length))
     collator = DataCollatorWithPadding(tokenizer=tokenizer)
 
     class_weights = None
@@ -153,9 +212,16 @@ def main() -> int:
                     "status": "ok",
                     "train_rows": len(train_rows),
                     "eval_rows": len(eval_rows),
-                    "model_name": args.model_name,
+                    "model_name": model_source,
                     "num_labels": len(ROUTER_TASK_LABELS),
                     "output_dir": args.output_dir,
+                    "batch_size": args.batch_size,
+                    "grad_accum": args.grad_accum,
+                    "max_length": args.max_length,
+                    "freeze_layers": freeze_stats["frozen_layers"],
+                    "trainable_params": freeze_stats["trainable_params"],
+                    "total_params": freeze_stats["total_params"],
+                    "seed": args.seed,
                     "class_weighting": args.class_weighting,
                     "class_weights": class_weights,
                 },
@@ -168,9 +234,13 @@ def main() -> int:
         output_dir=args.output_dir,
         per_device_train_batch_size=args.batch_size,
         per_device_eval_batch_size=args.batch_size,
+        gradient_accumulation_steps=max(1, int(args.grad_accum)),
         learning_rate=args.learning_rate,
         weight_decay=args.weight_decay,
         num_train_epochs=args.epochs,
+        seed=int(args.seed),
+        dataloader_num_workers=0,
+        dataloader_pin_memory=False,
         save_strategy="epoch",
         logging_strategy="steps",
         logging_steps=10,
@@ -186,10 +256,12 @@ def main() -> int:
         training_kwargs["eval_strategy"] = "epoch"
 
     training_args = TrainingArguments(**training_kwargs)
+    trainer_params = inspect.signature(Trainer.__init__).parameters
+    trainer_extra: dict[str, object] = {}
+    if "processing_class" in trainer_params:
+        trainer_extra["processing_class"] = tokenizer
 
     if class_weights is not None:
-        import torch
-
         class WeightedTrainer(Trainer):
             def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
                 labels = inputs.pop("labels")
@@ -206,6 +278,7 @@ def main() -> int:
             train_dataset=train_ds,
             eval_dataset=eval_ds,
             data_collator=collator,
+            **trainer_extra,
         )
     else:
         trainer = Trainer(
@@ -214,13 +287,14 @@ def main() -> int:
             train_dataset=train_ds,
             eval_dataset=eval_ds,
             data_collator=collator,
+            **trainer_extra,
         )
-    # attach tokenizer for compatibility with some Trainer utilities
-    trainer.tokenizer = tokenizer
+    if "processing_class" not in trainer_params:
+        trainer.tokenizer = tokenizer
     trainer.train()
     trainer.save_model(args.output_dir)
     tokenizer.save_pretrained(args.output_dir)
-    print(json.dumps({"status": "trained", "output_dir": args.output_dir}, indent=2))
+    print(json.dumps({"status": "trained", "output_dir": args.output_dir, **freeze_stats}, indent=2))
     return 0
 
 

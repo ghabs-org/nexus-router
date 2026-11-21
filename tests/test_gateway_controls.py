@@ -202,3 +202,57 @@ def test_escalated_task_followups_keep_pin_without_reclaiming_ticket(harness):
     response=client.post('/v1/messages',json=payload('Continue the task'),headers={'x-session-id':issued['new_session_id']})
     assert response.status_code==200,response.text
     assert response.headers['x-nexus-profile']=='standard'
+
+
+def test_effort_feedback_ratings_summary_and_cli(harness,tmp_path,capsys):
+    from src.gateway_cli import main as cli_main
+    client,server,upstream,config=harness
+    assert client.post('/v1/messages',json=payload('Summarize this note')).status_code==200
+    session=client.get('/v1/nexus/status').json()['recent_turns'][0]['session']
+    assert client.post('/v1/nexus/feedback',json={'source_session':session,'rating':'meh'}).status_code==400
+    for rating in ('underthinking','underthinking','underthinking','overthinking'):
+        assert client.post('/v1/nexus/feedback',json={'source_session':session,'rating':rating}).status_code==200
+    status=client.get('/v1/nexus/status').json()
+    summary=status['feedback_summary']
+    assert any(r['profile']=='standard' and r['effort']=='medium' and r['rating']=='underthinking' and r['count']==3 for r in summary)
+    assert client.get('/v1/nexus/status',headers={'Authorization':'Bearer other-secret'}).json()['feedback_summary']==[]
+
+    db_dir=tmp_path/'cli-state'
+    (db_dir/'data').mkdir(parents=True)
+    import sqlite3
+    with sqlite3.connect(db.DB_PATH) as src, sqlite3.connect(db_dir/'data/router.sqlite') as dst:
+        src.backup(dst)
+    capsys.readouterr()
+    assert cli_main(['feedback-summary','--state-dir',str(db_dir)])==0
+    cli_out=json.loads(capsys.readouterr().out)
+    assert cli_out['by_rating']['underthinking']==3
+    assert cli_out['recommendations'][0]['signal']=='underthinking'
+
+
+def test_dashboard_effort_feedback_buttons_and_safe_dom():
+    import shutil,subprocess
+    from pathlib import Path
+    node=shutil.which('node')
+    if not node:pytest.skip('Node required for dashboard behavior check')
+    source=Path(__file__).parents[1]/'src/gateway_dashboard.js'
+    script=source.read_text()
+    assert 'innerHTML' not in script and 'localStorage' not in script and 'sessionStorage' not in script
+    code=r'''
+const fs=require('fs'),vm=require('vm'),assert=require('assert');
+const nodes={},requests=[];
+function element(){return {textContent:'',value:'',children:[],append(x){this.children.push(x)},replaceChildren(){this.children=[]}}}
+const document={getElementById(id){return nodes[id]??=element()},createElement:element};
+const context=vm.createContext({document,fetch:(path,opts)=>{requests.push({path,body:opts?.body?JSON.parse(opts.body):null});return Promise.resolve({ok:true,json:async()=>({usage_24h:{},budget:{held_microusd:0,reservations:[]},recent_turns:[{session:'s1',profile:'standard',target:'vertex:claude-sonnet-4-6',effort:'medium',http_status:200,explanation:{source:'default'}}],feedback_summary:[{profile:'standard',effort:'medium',rating:'underthinking',count:1}]})})}});
+vm.runInContext(fs.readFileSync(process.argv[1],'utf8'),context);
+document.getElementById('token').value='test-only';
+nodes.login.onsubmit({preventDefault(){}});
+setImmediate(async()=>{
+  const row=nodes.routes.children[0];
+  const actions=row.children[3].children.map(b=>b.textContent);
+  assert.deepStrictEqual(actions,['Good','Underthought','Overthought','Too expensive','Poor quality']);
+  await row.children[3].children[1].onclick();
+  assert.deepStrictEqual(requests.at(-1),{path:'/v1/nexus/feedback',body:{source_session:'s1',rating:'underthinking'}});
+});
+'''
+    result=subprocess.run([node,'-e',code,str(source)],text=True,capture_output=True,timeout=10)
+    assert result.returncode==0,result.stderr

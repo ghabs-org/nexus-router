@@ -6,6 +6,9 @@ import uuid
 from . import db
 from .gateway_policy import PolicyError
 
+FEEDBACK_RATINGS = frozenset({'good', 'poor_quality', 'too_expensive', 'underthinking', 'overthinking'})
+
+
 class Escalations:
     def issue(self,principal,source,wire):
         with closing(db._connect()) as conn,conn:
@@ -46,7 +49,7 @@ class Escalations:
         return row
 
     def feedback(self,principal,session,rating):
-        if rating not in {'good','poor_quality','too_expensive'}:raise PolicyError('Invalid feedback rating')
+        if rating not in FEEDBACK_RATINGS:raise PolicyError('Invalid feedback rating')
         with closing(db._connect()) as conn,conn:
             pin=conn.execute('SELECT principal FROM gateway_task_pins WHERE session=?',(session,)).fetchone()
             if not pin or pin['principal']!=principal:raise PolicyError('Task not found',404)

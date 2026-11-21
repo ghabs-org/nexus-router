@@ -16,18 +16,21 @@ async function refresh(){
     const data=await request('/v1/nexus/status');
     if(started!==generation)return;
     el('message').textContent='Loaded your gateway status.';
-    el('summary').textContent=JSON.stringify({usage_24h:data.usage_24h,held_microusd:data.budget.held_microusd},null,2);
+    el('summary').textContent=JSON.stringify({usage_24h:data.usage_24h,held_microusd:data.budget.held_microusd,feedback_summary:data.feedback_summary??[]},null,2);
     el('budget').textContent=JSON.stringify(data.budget.reservations,null,2);
     el('routes').replaceChildren();
+    const feedbackButtons=[['Good','good'],['Underthought','underthinking'],['Overthought','overthinking'],['Too expensive','too_expensive'],['Poor quality','poor_quality']];
     for(const row of data.recent_turns){
       const tr=document.createElement('tr');
       for(const value of [row.profile+' / '+(row.target||'unavailable'),(row.effort||'default')+' / HTTP '+row.http_status,JSON.stringify(row.explanation)]){
         const td=document.createElement('td');td.textContent=value;tr.append(td);
       }
       const td=document.createElement('td');
-      const feedback=document.createElement('button');feedback.textContent='Report poor result';
-      feedback.onclick=async()=>{const current=generation;try{await request('/v1/nexus/feedback',{source_session:row.session,rating:'poor_quality'});if(current!==generation)return;el('message').textContent='Feedback recorded; no work was replayed.';}catch(error){if(current===generation)el('message').textContent=error.message;}};
-      td.append(feedback);
+      for(const [label,rating] of feedbackButtons){
+        const feedback=document.createElement('button');feedback.textContent=label;
+        feedback.onclick=async()=>{const current=generation;try{await request('/v1/nexus/feedback',{source_session:row.session,rating});if(current!==generation)return;el('message').textContent='Feedback recorded ('+rating+'); no work was replayed.';}catch(error){if(current===generation)el('message').textContent=error.message;}};
+        td.append(feedback);
+      }
       if(['utility','standard'].includes(row.profile)&&row.explanation?.wire){
         const button=document.createElement('button');button.textContent='Request stronger route';
         button.onclick=async()=>{const current=generation;try{const ticket=await request('/v1/nexus/escalations',{source_session:row.session,wire:row.explanation.wire});if(current!==generation)return;el('ticket').textContent=JSON.stringify(ticket,null,2);}catch(error){if(current===generation)el('message').textContent=error.message;}};

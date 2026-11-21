@@ -115,5 +115,89 @@ class GatewayState:
                 explanation = conn.execute("SELECT explanation_json FROM gateway_turn_explanations WHERE turn_id=?", (row.pop("id"),)).fetchone()
                 row["explanation"] = json.loads(explanation[0]) if explanation else {}
             feedback=[dict(row) for row in conn.execute('SELECT session,rating,created_at FROM gateway_feedback WHERE principal=? ORDER BY id DESC LIMIT 50',(principal,))]
+            feedback_summary = [dict(row) for row in conn.execute(
+                """
+                WITH latest_turn AS (
+                    SELECT principal, session, profile, effort,
+                           ROW_NUMBER() OVER (PARTITION BY principal, session ORDER BY id DESC) AS rn
+                    FROM gateway_turns
+                )
+                SELECT COALESCE(lt.profile, pin.profile, 'unknown') AS profile,
+                       COALESCE(lt.effort, 'model-default') AS effort,
+                       gf.rating AS rating,
+                       COUNT(*) AS count
+                FROM gateway_feedback gf
+                LEFT JOIN latest_turn lt
+                  ON lt.principal = gf.principal AND lt.session = gf.session AND lt.rn = 1
+                LEFT JOIN gateway_task_pins pin
+                  ON pin.session = gf.session AND pin.principal = gf.principal
+                WHERE gf.principal = ?
+                GROUP BY 1, 2, 3
+                ORDER BY count DESC, profile, effort, rating
+                """,
+                (principal,),
+            )]
         from .gateway_budget import BudgetLedger
-        return {"feedback":feedback,"usage_24h": summary, "recent_turns": recent, "budget": BudgetLedger().status(principal)}
+        return {
+            "feedback": feedback,
+            "feedback_summary": feedback_summary,
+            "usage_24h": summary,
+            "recent_turns": recent,
+            "budget": BudgetLedger().status(principal),
+        }
+
+
+def summarize_gateway_feedback(principal: str | None = None, *, threshold: int = 3) -> dict:
+    """Aggregate gateway effort feedback across profile/effort pairs for offline tuning."""
+    with closing(db._connect()) as conn:
+        params = (principal,) if principal else ()
+        where_clause = "WHERE gf.principal = ?" if principal else ""
+        rows = [dict(row) for row in conn.execute(
+            f"""
+            WITH latest_turn AS (
+                SELECT principal, session, profile, effort,
+                       ROW_NUMBER() OVER (PARTITION BY principal, session ORDER BY id DESC) AS rn
+                FROM gateway_turns
+            )
+            SELECT COALESCE(lt.profile, pin.profile, 'unknown') AS profile,
+                   COALESCE(lt.effort, 'model-default') AS effort,
+                   gf.rating AS rating,
+                   COUNT(*) AS count
+            FROM gateway_feedback gf
+            LEFT JOIN latest_turn lt
+              ON lt.principal = gf.principal AND lt.session = gf.session AND lt.rn = 1
+            LEFT JOIN gateway_task_pins pin
+              ON pin.session = gf.session AND pin.principal = gf.principal
+            {where_clause}
+            GROUP BY 1, 2, 3
+            ORDER BY count DESC, profile, effort, rating
+            """,
+            params,
+        )]
+    by_rating: dict[str, int] = {}
+    recommendations = []
+    total = 0
+    for row in rows:
+        count = int(row["count"])
+        total += count
+        by_rating[row["rating"]] = by_rating.get(row["rating"], 0) + count
+        if row["rating"] in {"underthinking", "overthinking"} and count >= threshold:
+            suggestion = (
+                "Consider raising effort or escalating profile rule for affected prompts"
+                if row["rating"] == "underthinking"
+                else "Consider lowering effort or demoting profile rule for affected prompts"
+            )
+            recommendations.append({
+                "profile": row["profile"],
+                "effort": row["effort"],
+                "signal": row["rating"],
+                "count": count,
+                "suggestion": suggestion,
+            })
+    return {
+        "principal": principal,
+        "total": total,
+        "by_rating": by_rating,
+        "by_profile_effort_rating": rows,
+        "recommendations": recommendations,
+    }
