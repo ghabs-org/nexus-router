@@ -15,7 +15,8 @@ Sources:
 This script:
 1. Fetches structured data from each source
 2. Normalizes scores to 0.0–1.0 per router dimension
-3. Merges per-dimension contributions across sources with a weighted average:
+3. Uses AA as the primary comparable quality leaderboard when available; other
+   source contributions use a per-dimension weighted average:
       final_dim = sum(weight(source) * value(source)) / sum(weight(source))
    Only sources that actually provide a value for a dimension participate in
    that dimension's denominator.
@@ -36,6 +37,7 @@ Usage:
 import argparse
 import hashlib
 import json
+import math
 import re
 import statistics
 import sys
@@ -144,25 +146,41 @@ def score_aa_models(models_raw: list[dict]) -> dict[str, dict]:
     subscriptions (Claude login, ChatGPT), where the quota penalty, not the
     per-token price, is what limits use.
     """
-    raw = {
-        m["slug"]: {
-            "reasoning": m.get("intelligenceIndex"),
-            "coding": _mean(m.get("terminalbenchHard"), m.get("scicode")),
-            "tools": _mean(m.get("terminalbenchHard"), m.get("tau2")),
+    def number(*values):
+        return next((float(v) for v in values if not isinstance(v, bool)
+                     and isinstance(v, (int, float)) and math.isfinite(v)), None)
+
+    raw: dict[str, dict] = {}
+    for row in models_raw:
+        # AA moved identity into release and evals into a nested score map.
+        # Keep flat payloads supported too, without hardcoding model names.
+        release = row.get("release") or {}
+        slug = row.get("slug") or release.get("slug")
+        if not slug or row.get("deprecated"):
+            continue
+        scores = row.get("scores") or {}
+        terminal = number(row.get("terminalbenchHard"), scores.get("terminalbench-4-0"),
+                          scores.get("terminalbench-hard"))
+        code = number(row.get("scicode"), scores.get("frontiercode-2-0"), scores.get("scicode"))
+        dims = {
+            "reasoning": number(row.get("intelligenceIndex")),
+            "coding": _mean(terminal, code),
+            "tools": _mean(terminal, number(row.get("tau2"), scores.get("tau2-bench"))),
         }
-        for m in models_raw
-        if m.get("slug")
-    }
+        # Pick one coherent effort variant, not last-row-wins or an artificial
+        # mixture of each variant's best dimensions.
+        def variant_rank(values):
+            return tuple(values[d] if values[d] is not None else -1.0
+                         for d in ("reasoning", "coding", "tools"))
+        if slug not in raw or variant_rank(dims) > variant_rank(raw[slug]):
+            raw[slug] = dims
     leaders = {
         dim: max((dims[dim] for dims in raw.values() if isinstance(dims[dim], (int, float))), default=0.0)
         for dim in ("reasoning", "coding", "tools")
     }
 
     result: dict[str, dict] = {}
-    for m in models_raw:
-        slug = m.get("slug")
-        if not slug:
-            continue
+    for slug in raw:
         entry = {
             dim: round(0.5 + 0.5 * max(0.0, min(1.0, value / leaders[dim])), 4)
             for dim, value in raw[slug].items()
@@ -182,15 +200,15 @@ def fetch_artificialanalysis() -> dict[str, dict]:
 
     Fields extracted (see score_aa_models):
       intelligenceIndex                → reasoning
-      terminalbenchHard + scicode      → coding
-      terminalbenchHard + tau2         → tools
+      terminalbenchHard / terminalbench-4-0 + scicode / frontiercode-2-0 → coding
+      terminalbenchHard / terminalbench-4-0 + tau2 / tau2-bench         → tools
 
-    The slug field is used for model name mapping.
+    The slug or release.slug field is used for catalog-based identity mapping.
     """
     import re as _re
 
     PAGE_URL = "https://artificialanalysis.ai/leaderboards/models"
-    ARRAY_MARKER = '"critpt"'
+    ARRAY_MARKER = '"intelligenceIndex"'
 
     try:
         raw = _fetch_with_cache(
@@ -207,9 +225,9 @@ def fetch_artificialanalysis() -> dict[str, dict]:
 
     # The data is JSON-escaped inside a Next.js HTML payload
     # Unescape it first so we can parse the JSON normally
-    if '\\"critpt\\"' in raw:
+    if '\\"intelligenceIndex\\"' in raw:
         # Find the outer string boundary and unescape it
-        idx = raw.find('\\"critpt\\"')
+        idx = raw.find('\\"intelligenceIndex\\"')
         # Find the start of the enclosing string — look for [{ pattern escaped
         start = raw.rfind('[{\\"', 0, idx)
         if start != -1:
@@ -220,7 +238,7 @@ def fetch_artificialanalysis() -> dict[str, dict]:
             # Unescape: replace \" with " and \\ with \
             unescaped = slice_raw.replace('\\"', '"').replace('\\\\', '\\')
             raw = unescaped  # continue with unescaped data
-            ARRAY_MARKER = '"critpt"'
+            ARRAY_MARKER = '"intelligenceIndex"'
         else:
             print("    artificialanalysis: could not find array start in escaped data")
             return {}
@@ -304,7 +322,10 @@ def fetch_artificialanalysis() -> dict[str, dict]:
     for slug, scores in score_aa_models(models_raw).items():
         oc_model = SLUG_MAP.get(slug) or _map_public_model_name(slug.replace("-", " ")) or _map_public_model_name(slug)
         if oc_model:
-            result[oc_model] = {"_source": "artificialanalysis", "_updated_at": TODAY, **scores}
+            previous = result.get(oc_model, {})
+            rank = lambda dims: tuple(dims.get(d, -1.0) for d in ("reasoning", "coding", "tools"))
+            if not previous or rank(scores) > rank(previous):
+                result[oc_model] = {"_source": "artificialanalysis", "_updated_at": TODAY, **scores}
 
     # gemini-3.1-pro-preview should be in both providers
     g31 = result.get("google-gemini-cli/gemini-3.1-pro-preview")
@@ -396,9 +417,6 @@ def fetch_livebench() -> dict[str, dict]:
 
     # Map LiveBench model names → OpenClaw provider/model IDs
     MODEL_MAP = {
-        "claude-3-5-sonnet-20241022":          "github-copilot/claude-sonnet-4",
-        "claude-3-7-sonnet-20250219-base":     "github-copilot/claude-sonnet-4.5",
-        "claude-3-opus-20240229":              "github-copilot/claude-opus-4.5",
         "gemini-2.0-flash":                    "google-gemini-cli/gemini-2.0-flash",
         "gemini-2.0-flash-001":                "google-gemini-cli/gemini-2.0-flash",
         "gemini-2.5-pro-exp-03-25":            "google-gemini-cli/gemini-2.5-pro",
@@ -408,7 +426,10 @@ def fetch_livebench() -> dict[str, dict]:
 
     result: dict[str, dict] = {}
     for lb_model, scores in raw_scores.items():
-        oc_model = MODEL_MAP.get(lb_model)
+        # New catalog identities need no source-code entry. Legacy aliases may
+        # normalize the same model, but must never transfer an older generation's
+        # benchmark onto a newer one.
+        oc_model = _map_public_model_name(lb_model) or MODEL_MAP.get(lb_model)
         if not oc_model:
             continue
 
@@ -565,6 +586,9 @@ def _model_alias_candidates(text: str) -> list[str]:
     trimmed = re.sub(r"-(20\d{2}(?:-?\d{2}(?:-?\d{2})?)?)(-|$)", "-", trimmed)
     trimmed = re.sub(r"-(\d{2}(?:-\d{2}){1,2})(-|$)", "-", trimmed)
     trimmed = re.sub(r"-+", "-", trimmed).strip("-")
+    # Effort labels identify an eval setting, not a different generation.
+    # Exact identities are tried first, so a real model named '...-max' wins.
+    trimmed = re.sub(r"-(low|medium|high|xhigh|max)(?:-reasoning)?$", "", trimmed)
     if trimmed and trimmed not in candidates:
         candidates.append(trimmed)
     return candidates
@@ -1070,17 +1094,28 @@ def _compute_dimension_confidence(values: list[float], total_weight: float) -> f
 
 
 def aggregate_source_entries(entries: list[dict]) -> dict:
-    """Combine multiple source payloads for one model using per-dimension weights."""
+    """Anchor quality on AA; weight fallback/other dimensions with provenance."""
     aggregated: dict = {}
     confidence: dict[str, float] = {}
     contributing_sources: set[str] = set()
+    dimension_sources: dict[str, list[str]] = {}
 
     for dim in SCORE_DIMS:
         numerator = 0.0
         denominator = 0.0
         dim_sources: set[str] = set()
         dim_values: list[float] = []
-        for entry in entries:
+        dimension_entries = entries
+        # AA quality scores are leader-relative, while e.g. LiveBench is raw
+        # accuracy. Do not dilute a comparable AA ranking merely because one
+        # model has extra source coverage on a different scale. Prefer the
+        # common primary leaderboard for quality; other sources are fallbacks.
+        if dim in {"coding", "reasoning", "review", "summarize"}:
+            primary = [e for e in entries if e.get(dim) is not None
+                       and _canonical_source_name(e.get("_source", "")) == "artificialanalysis"]
+            if primary:
+                dimension_entries = primary
+        for entry in dimension_entries:
             if dim not in entry or entry[dim] is None:
                 continue
             source_name = _canonical_source_name(entry.get("_source", ""))
@@ -1095,9 +1130,12 @@ def aggregate_source_entries(entries: list[dict]) -> dict:
             aggregated[dim] = round(numerator / denominator, 4)
             confidence[dim] = _compute_dimension_confidence(dim_values, denominator)
             contributing_sources.update(dim_sources)
+            dimension_sources[dim] = sorted(dim_sources)
 
     if confidence:
         aggregated["_confidence"] = confidence
+    if dimension_sources:
+        aggregated["_metadata"] = {"dimension_sources": dimension_sources}
     if contributing_sources:
         aggregated["_sources"] = sorted(contributing_sources)
         aggregated["_source"] = "+".join(sorted(contributing_sources))
@@ -1112,10 +1150,27 @@ def merge_scores(existing: dict, new_scores: dict, force: bool) -> dict:
     Merge aggregated benchmark scores into an existing model entry.
     If force=False, existing non-null scores are preserved.
     """
+    # Exact measurements replace synthetic inherited/catalog rows and their
+    # provenance, or densification would revert the new score to its old donor.
+    if (
+        _has_score_dimensions(new_scores) and _is_real_benchmark_source(new_scores)
+        and not _is_real_benchmark_source(existing)
+    ):
+        existing = {}
     merged = dict(existing)
     for dim in SCORE_DIMS:
         if dim in new_scores and (force or dim not in merged):
             merged[dim] = new_scores[dim]
+
+    metadata = dict(existing.get("_metadata") or {})
+    dimension_sources = dict(metadata.get("dimension_sources") or {})
+    for dim, sources in ((new_scores.get("_metadata") or {}).get("dimension_sources") or {}).items():
+        if force or dim not in existing:
+            dimension_sources[dim] = sources
+    if dimension_sources:
+        metadata["dimension_sources"] = dimension_sources
+    if metadata:
+        merged["_metadata"] = metadata
 
     existing_confidence = existing.get("_confidence") or {}
     new_confidence = new_scores.get("_confidence") or {}

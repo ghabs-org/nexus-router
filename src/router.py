@@ -535,6 +535,11 @@ def _build_explain(decision, ranked, excluded, classifier, classifier_source, ro
                     "learned": s.learned, "cost": s.cost, "speed": s.speed,
                 },
                 "contributions": s.component_contributions or {},
+                "benchmark": {
+                    "score": s.benchmark_score,
+                    "dimension": s.benchmark_dimension,
+                    "source": s.benchmark_source,
+                } if s.benchmark_score is not None else None,
             }
             for s in ranked[:5]
         ],
@@ -641,6 +646,11 @@ def _select_primary_with_bandit(
 ):
     if not eligible_scores:
         raise RuntimeError("bandit selection called with no eligible scores")
+
+    if "benchmark_priority" in (eligible_scores[0].score_mechanisms or []):
+        # Missing local history is not evidence against a published benchmark.
+        # Auto/shadow must not explore a lower-ranked prior over real evidence.
+        return eligible_scores[0], [], None
 
     cfg = _exploration_config(routing_config)
     if not cfg["enabled"] or len(eligible_scores) <= 1:
@@ -842,8 +852,14 @@ def _build_reason(
         reasons.append(f"large context estimated (~{pre_signals.estimated_tokens:,} tokens)")
 
     # Model selection rationale
+    if "benchmark_priority" in (primary.score_mechanisms or []) and primary.benchmark_score is not None:
+        reasons.append(
+            f"'{primary.model_id}' leads eligible task benchmarks "
+            f"({primary.benchmark_dimension}={primary.benchmark_score:.4f}, "
+            f"source={primary.benchmark_source}); local history is not required"
+        )
     reasons.append(
-        f"'{primary.model_id}' scored highest "
+        f"'{primary.model_id}' composite score={primary.total_score:.4f} "
         f"(task_fit={primary.task_fit:.2f}, health={primary.health:.2f}, "
         f"pref={primary.preference:.2f}, learned={primary.learned:.2f})"
     )

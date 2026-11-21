@@ -10,9 +10,9 @@ Output: generated/models.json
 
 Default to catalog rows tagged "configured" and respect OpenClaw's
 agents.defaults.modelPolicy.allow ("modelPolicyAllow") when present. OpenClaw
-can publish selectable wildcard matches without the tag. The router may add
-exact IDs from policy's include_unmarked_models list if the live catalog
-marks them available and explicitly allows them.
+can publish selectable wildcard matches without the tag. Available, explicitly
+allowed models with real benchmark evidence are admitted automatically; exact
+IDs in include_unmarked_models can also opt in models still awaiting benchmarks.
 
 Flags:
   --only-configured       Include only models whose provider has auth=true
@@ -131,7 +131,7 @@ def _benchmark_entry_is_usable(entry: dict) -> bool:
     if not any(k in entry for k in ("coding", "review", "reasoning", "summarize", "fast", "cost", "eco", "context", "vision", "tools", "multilingual")):
         return False
     source = str(entry.get("_source") or "").strip()
-    if not source or source == "catalog-only":
+    if not source or source in {"catalog-only", "unknown"} or source.startswith("inherited:"):
         return False
     return True
 
@@ -289,7 +289,8 @@ def resolve_scores(
     for k, v in bench_entry.items():
         if k in defaults:
             defaults[k] = v
-            source_name = bench_entry.get('_source', 'unknown')
+            dimension_sources = (bench_entry.get("_metadata") or {}).get("dimension_sources") or {}
+            source_name = "+".join(dimension_sources.get(k) or []) or bench_entry.get('_source', 'unknown')
             if bench_key_used == f"{provider}/{model_id}":
                 source[k] = f"benchmark:{source_name}"
             else:
@@ -371,7 +372,9 @@ def normalize(
     configured_only: bool = False,
 ) -> list[dict]:
     models = []
-    allow = raw.get("modelPolicyAllow") if configured_only else None
+    # A tag-less catalog (or --include-unconfigured) never revokes an explicit
+    # OpenClaw allowlist. Discovery and benchmark evidence grant no access.
+    allow = raw.get("modelPolicyAllow")
     include_unmarked = set(overrides.get("include_unmarked_models") or [])
     raw_models = _expand_cli_backed_entries(raw.get("models", []))
     for entry in raw_models:
@@ -384,13 +387,16 @@ def normalize(
         # Provider filter
         if only_providers and provider not in only_providers:
             continue
+        if not _is_allowed(key, allow):
+            continue
 
         if configured_only:
-            # The catalog's tag is narrower than the picker under provider
-            # wildcards. Admit only explicitly requested, available additions;
-            # don't widen the routing pool or assume a missing policy allows them.
+            # A published benchmark needs no hand-maintained per-model opt-in,
+            # but can never grant provider access or widen OpenClaw's allowlist.
+            benchmarked = bool(_canonical_benchmark_keys(provider, model_id, benchmarks.get("models") or {}))
             selected_untagged = (
-                bool(allow) and key in include_unmarked and entry.get("available") is True
+                bool(allow) and entry.get("available") is True
+                and (key in include_unmarked or benchmarked)
             )
             if not _is_allowed(key, allow) or not (_is_configured(entry) or selected_untagged):
                 continue

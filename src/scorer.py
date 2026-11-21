@@ -13,6 +13,8 @@ Returns:
 """
 
 from datetime import datetime, timedelta, timezone
+import math
+import re
 from typing import Optional
 
 from .types import ClassifierOutput, ModelScore, ProviderHealth
@@ -70,7 +72,7 @@ COST_PROFILE_WEIGHT = {
     "eco":      {"eco": 0.45, "cost": 0.20, "task_fit": 0.15, "health": 0.10, "preference": 0.05, "learned": 0.05, "speed": 0.00},
 }
 
-# Route modes where routing.yaml decides the order instead of the composite score.
+# Default modes rank task benchmarks first; policy lists are fallback priors.
 # "off" is shadow-only and must predict what "auto" would do.
 POLICY_ORDERED_MODES = {"", "auto", "balanced", "off"}
 
@@ -129,14 +131,15 @@ def score_models(
     task_dim = TASK_TO_DIMENSION.get(classifier.task_type, "reasoning")
     score_mechanisms_base = [weight_source]
     preference_order = _build_preference_order(classifier.task_type, routing_policy)
-    # Default modes follow the policy order. Explicit modes (fast/eco/free/
-    # reasoning) keep scoring across the catalog because the user opted in.
+    benchmark_mode = not free_only and (route_mode or "").strip().lower() in POLICY_ORDERED_MODES
+    # Explicit modes (fast/eco/free/reasoning) keep their chosen objectives.
     # An unavailable preferred provider must not suppress healthy alternatives.
     policy_ordered = (
         not free_only
         and (route_mode or "").strip().lower() in POLICY_ORDERED_MODES
         and any(
             m["id"] in preference_order and m.get("availability", {}).get("authed", False)
+            and m.get("availability", {}).get("available") is not False
             and (
                 provider_health[m["provider"]].health_score
                 if m["provider"] in provider_health else 0.85
@@ -168,6 +171,7 @@ def score_models(
         scores_raw = model_dict.get("scores", {})
         features  = model_dict.get("features", {})
         avail     = model_dict.get("availability", {})
+        benchmark = _task_benchmark(model_dict, classifier.task_type)
 
         # ── Hard exclusions ──────────────────────────────────────────────────
 
@@ -181,6 +185,15 @@ def score_models(
             ))
             continue
 
+        if avail.get("available") is False:
+            excluded.append(ModelScore(
+                model_id=model_id, provider=provider,
+                total_score=0.0, task_fit=0.0, health=0.0,
+                preference=0.0, learned=0.0, cost=0.0, speed=0.0,
+                excluded=True, exclusion_reason="not_available",
+            ))
+            continue
+
         # Free filter: only allow models explicitly marked free.
         if free_only and features.get("is_free") is not True:
             excluded.append(ModelScore(
@@ -191,7 +204,7 @@ def score_models(
             ))
             continue
 
-        if policy_ordered and model_id not in preference_order:
+        if policy_ordered and model_id not in preference_order and benchmark is None:
             excluded.append(ModelScore(
                 model_id=model_id, provider=provider,
                 total_score=0.0, task_fit=0.0, health=0.0,
@@ -448,17 +461,73 @@ def score_models(
             component_scores=component_scores,
             component_contributions=component_contributions,
             score_mechanisms=list(score_mechanisms_base),
+            benchmark_score=benchmark[0] if benchmark else None,
+            benchmark_dimension=benchmark[1] if benchmark else None,
+            benchmark_source=benchmark[2] if benchmark else None,
         ))
 
     # Sort eligible descending by total score
     eligible.sort(key=lambda x: x.total_score, reverse=True)
-    if policy_ordered:
-        # Policy order wins; a provider with exhausted quota drops to the back.
+    if benchmark_mode and any(s.benchmark_score is not None for s in eligible):
+        # Published task evidence beats static preference and cold-start priors.
+        # All hard exclusions above still apply; exhausted quota drops to the back.
+        eligible.sort(key=lambda s: (
+            (s.component_scores or {}).get("quota_penalty", 0.0) >= 1.0,
+            -(s.benchmark_score if s.benchmark_score is not None else -1.0),
+            -s.total_score,
+            s.model_id,
+        ))
+        for score in eligible:
+            score.score_mechanisms.append("benchmark_priority")
+    elif policy_ordered:
+        # With no usable task benchmark, keep the existing policy fallback.
         eligible.sort(key=lambda x: (
-            (x.component_scores or {}).get("quota_penalty", 0.0) <= -1.0,
+            (x.component_scores or {}).get("quota_penalty", 0.0) >= 1.0,
             preference_order.index(x.model_id),
         ))
     return eligible + excluded
+
+
+def _task_benchmark(model: dict, task_type: str) -> Optional[tuple[float, str, str]]:
+    """Measured task evidence, never a family/manual/catalog-only prior.
+
+    Window size and image support are eligibility facts, not quality evals;
+    use reasoning evidence when those tasks lack a direct benchmark.
+    """
+    dimension = TASK_TO_DIMENSION.get(task_type, "reasoning")
+    dimensions = [dimension]
+    if task_type in {"long_context", "vision"}:
+        dimensions.append("reasoning")
+    for dim in dimensions:
+        value = (model.get("scores") or {}).get(dim)
+        source = str((model.get("scoreSource") or {}).get(dim) or "")
+        # A derived label alone is not evidence: validate its measured inputs.
+        required = ()
+        if "derived:benchmark_coding_reasoning" in source:
+            required = ("coding", "reasoning")
+        elif "derived:benchmark_reasoning" in source:
+            required = ("reasoning",)
+        sources = model.get("scoreSource") or {}
+        derived = bool(required) and all(_has_benchmark_publisher(str(sources.get(d) or "")) for d in required)
+        if not (_has_benchmark_publisher(source) or derived):
+            continue
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            continue
+        if math.isfinite(value) and 0.0 <= value <= 1.0:
+            return float(value), dim, source
+    return None
+
+
+def _has_benchmark_publisher(source: str) -> bool:
+    """Unwrap same-model/twin provenance and reject synthetic/unknown donors."""
+    measured = re.search(r"(?:^|:)benchmark(-inherited)?:", source)
+    if not measured:
+        return False
+    publisher = source[measured.end():]
+    if measured.group(1):
+        publisher = publisher.rsplit(":", 1)[-1]
+    return any(p and p not in {"catalog-only", "unknown"} and ":" not in p
+               for p in publisher.split("+"))
 
 
 def _task_objective_weights(task_type: str) -> dict[str, float]:

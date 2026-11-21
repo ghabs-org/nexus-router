@@ -112,3 +112,110 @@ def test_score_aa_models_reads_camelcase_fields_relative_to_the_leader():
     # Half the leader's index lands halfway between 0.5 and 1.0
     assert scores["mid"] == {"reasoning": 0.75, "coding": 0.75, "tools": 1.0}
     assert "unscored" not in scores
+
+
+def test_new_public_benchmark_identity_matches_current_catalog_without_manual_alias(monkeypatch, tmp_path):
+    path = tmp_path / "catalog.json"
+    path.write_text(json.dumps({"models": [
+        {"key": "openai/gpt-9.3-sol", "name": "GPT-9.3 Sol"},
+        {"key": "openai/gpt-9.2-sol", "name": "GPT-9.2 Sol"},
+    ]}))
+    monkeypatch.setattr(fb, "MODEL_CATALOG_FILE", path)
+    monkeypatch.setattr(fb, "CATALOG_ALIAS_INDEX", fb._build_catalog_alias_index())
+    assert fb._map_public_model_name("GPT-9.3 Sol") == "openai/gpt-9.3-sol"
+    assert fb._map_public_model_name("gpt-9-3-sol") == "openai/gpt-9.3-sol"
+    assert fb._map_public_model_name("GPT-9.3 Sol (Xhigh)") == "openai/gpt-9.3-sol"
+    assert fb._map_public_model_name("GPT-9.4 Sol") is None
+
+
+def test_livebench_admits_new_catalog_models_without_cross_generation_aliases(monkeypatch):
+    monkeypatch.setattr(fb, "CATALOG_ALIAS_INDEX", {
+        "gpt-9-3-sol": ["openai/gpt-9.3-sol"],
+    })
+    rows = [
+        {"row": {"model": "gpt-9.3-sol", "category": "reasoning", "score": 1}},
+        {"row": {"model": "gpt-9.3-sol", "category": "coding", "score": 1}},
+        {"row": {"model": "claude-3-7-sonnet-20250219-base", "category": "reasoning", "score": 1}},
+    ]
+    monkeypatch.setattr(fb, "_fetch_with_cache", lambda *args, **kwargs: {"rows": rows})
+    result = fb.fetch_livebench()
+    assert result == {"openai/gpt-9.3-sol": {
+        "_source": "livebench", "_updated_at": fb.TODAY, "reasoning": 1.0, "coding": 1.0,
+    }}
+
+
+def test_nested_aa_release_schema_and_effort_variants_are_order_independent():
+    rows = [
+        {"release": {"slug": "future"}, "name": "Future (Max)", "intelligenceIndex": 60,
+         "scores": {"terminalbench-4-0": .8, "frontiercode-2-0": .6}},
+        {"release": {"slug": "future"}, "name": "Future (Medium)", "intelligenceIndex": 30,
+         "scores": {"terminalbench-4-0": .9, "frontiercode-2-0": .9}},
+        {"release": {"slug": "older"}, "intelligenceIndex": 40,
+         "scores": {"terminalbench-hard": .5, "scicode": .5, "tau2-bench": .5}},
+    ]
+    scores = fb.score_aa_models(rows)
+    assert scores == fb.score_aa_models(list(reversed(rows)))
+    assert scores["future"] == {"reasoning": 1.0, "coding": 1.0, "tools": 1.0}
+    assert scores["older"]["reasoning"] == .8333
+    # Future's coherent max variant has coding .7, not the medium variant's .9.
+    assert scores["older"]["coding"] == .8571
+
+
+def test_aa_nested_feed_maps_a_novel_catalog_model(monkeypatch):
+    monkeypatch.setattr(fb, "CATALOG_ALIAS_INDEX", {"gpt-9-3-sol": ["openai/gpt-9.3-sol"]})
+    rows = [{"release": {"slug": "gpt-9-3-sol"}, "intelligenceIndex": 60,
+             "scores": {"frontiercode-2-0": .6, "terminalbench-4-0": .8}}]
+    raw = json.dumps(rows)
+    for payload in (raw, json.dumps(raw)):
+        monkeypatch.setattr(fb, "_fetch_with_cache", lambda *args, **kwargs: payload)
+        result = fb.fetch_artificialanalysis()
+        assert result["openai/gpt-9.3-sol"]["reasoning"] == 1.0
+        assert result["openai/gpt-9.3-sol"]["_source"] == "artificialanalysis"
+
+
+def test_exact_benchmark_upgrade_survives_densification(monkeypatch):
+    monkeypatch.setattr(fb, "_load_catalog_models", lambda: ["openai/future", "other/future"])
+    synthetic = {"reasoning": .6, "_source": "inherited:other/future"}
+    actual = {"reasoning": .99, "_source": "artificialanalysis"}
+    for force in (False, True):
+        upgraded = fb.merge_scores(synthetic, actual, force=force)
+        dense = fb.densify_benchmark_scores({
+            "openai/future": upgraded, "other/future": {"reasoning": .6, "_source": "livebench"},
+        })
+        assert dense["openai/future"]["reasoning"] == .99
+        assert dense["openai/future"]["_source"] == "artificialanalysis"
+
+
+def test_extra_source_coverage_cannot_reverse_the_shared_primary_benchmark():
+    first = fb.aggregate_source_entries([{"_source": "artificialanalysis", "reasoning": .9}])
+    second = fb.aggregate_source_entries([
+        {"_source": "artificialanalysis", "reasoning": .95},
+        {"_source": "livebench", "reasoning": .8},
+    ])
+    assert first["reasoning"] == .9
+    assert second["reasoning"] == .95
+    assert second["_metadata"]["dimension_sources"]["reasoning"] == ["artificialanalysis"]
+
+
+def test_dimension_publisher_metadata_survives_refresh_and_registry_generation():
+    from src.generate_registry import resolve_scores
+    measured = fb.aggregate_source_entries([
+        {"_source": "artificialanalysis", "reasoning": .95},
+        {"_source": "livebench", "coding": .8},
+    ])
+    merged = fb.merge_scores({}, measured, force=True)
+    scores, sources = resolve_scores("p", "future", {}, {}, {"models": {"p/future": merged}})
+    assert scores["reasoning"] == .95
+    assert sources["reasoning"] == "benchmark:artificialanalysis"
+    assert sources["coding"] == "benchmark:livebench"
+
+
+def test_benchmark_metadata_round_trips_through_isolated_database(monkeypatch, tmp_path):
+    from src import db
+    monkeypatch.setattr(db, "DB_PATH", tmp_path / "benchmarks.sqlite")
+    db.ensure_schema()
+    measured = fb.aggregate_source_entries([{"_source": "artificialanalysis", "reasoning": .95}])
+    db.replace_benchmark_scores({"p/future": measured})
+    loaded = db.load_benchmark_scores()["p/future"]
+    assert loaded["_metadata"] == measured["_metadata"]
+    assert loaded["reasoning"] == .95

@@ -195,6 +195,30 @@ does not establish that TCP binding or a live CLI attachment works.
   registry apply without a restart; an invalid edit is logged and the last good
   config keeps serving. CLI pins whose target is no longer routed are dropped.
 
+### Benchmark-first Auto selection
+
+For advisory Auto/balanced routing (and its off/shadow prediction), published
+task benchmarks determine the ranking of eligible models. A newly discovered
+benchmark leader needs neither a hand-written `routing.*.candidates` entry nor
+local selection/outcome history. Policy candidates remain a fallback when no
+eligible model has measured task evidence; composite scores break benchmark
+ties. Exploration and cold-start priors cannot promote a lower benchmark over
+a higher one. Explicit fast/eco/free/reasoning modes keep their own objectives.
+
+Only evidence identified in `scoreSource` as benchmark-derived counts. Family
+priors, manual defaults, catalog-only rows and model version numbers do not.
+Review/summarization can use their documented benchmark-derived dimensions;
+vision/long-context use reasoning evidence when there is no direct task eval,
+after checking the required modality/window. `/route info` exposes the selected
+benchmark dimension, normalized score and source in each candidate's `benchmark`.
+
+Auth, the OpenClaw allowlist, availability, provider health, model cooldowns,
+negative-feedback exclusions and free-tier restrictions still apply. Exhausted
+providers fall behind usable alternatives. The regular catalog → benchmark →
+registry refresh makes new measured models eligible automatically; absent an
+actual benchmark, the router does not invent a score or borrow an earlier
+generation's result. This does not alter the separate CLI proxy's category routes.
+
 ## Philosophy
 - **Classify first** — a Nexus classifier agent determines task type
 - **Score everything** — capability priors + runtime health + learned history
@@ -319,11 +343,19 @@ can take the input.
 
 ### Where model scores come from
 
-- Artificial Analysis: Intelligence Index → `reasoning`, Terminal-Bench Hard +
-  SciCode → `coding`. Scores are relative to the leaderboard leader, mapped
+- Artificial Analysis: Intelligence Index → `reasoning`, Terminal-Bench +
+  SciCode/FrontierCode → `coding`. Both the legacy flat payload and current
+  nested `release`/`scores` payload are supported. Where multiple reasoning
+  efforts describe one release, use its strongest coherent published variant,
+  not a last-row-wins or per-dimension mixture. Scores are relative to the leaderboard leader, mapped
   onto 0.5–1.0 (the range of the 0.70 default for models with no benchmark).
+- AA is the primary comparable quality leaderboard when present; other
+  publishers supply fallback dimensions. Extra source coverage must not dilute
+  one model's shared AA score by averaging it with raw-accuracy scales. The
+  publisher for each dimension is kept in benchmark DB metadata and the registry.
 - `review` and `summarize` have no public benchmark; they derive from
-  coding + reasoning and from reasoning.
+  coding + reasoning and from reasoning. Their measured inputs must have real
+  publisher provenance; an `unknown` source or catalog prior is not evidence.
 - Free endpoints (`nvidia/*`, OpenRouter `:free`) score `cost` 1.0; other
   models keep 0.70. List prices are not used: the paid models here run on
   subscriptions, where the quota penalty limits use.
@@ -363,8 +395,8 @@ python src/generate_registry.py
 ## Regenerate catalog
 
 The daily `nexus-router-benchmark-sync` job refreshes the catalog, the
-benchmarks and the registry, then restarts the router (it loads the registry
-once at startup). To do it by hand:
+benchmarks and the registry, then restarts the router. Registry and policy
+changes also hot-reload between calls. To do it by hand:
 
 ```bash
 python scripts/refresh_catalog.py   # add --dry-run to only show the diff
@@ -378,9 +410,11 @@ while its discovery reports a sign-in error. A provider that vanishes without a
 discovery outcome is treated as disabled in OpenClaw. It also stores OpenClaw's
 `agents.defaults.modelPolicy.allow` in the catalog. The registry keeps rows
 with the `configured` tag that match the allowlist when present. For a
-selectable wildcard match without the tag, add its exact ID to
-`include_unmarked_models` in `policies/overrides.yaml`; it is included only
-if the current catalog marks it available and the policy permits it. Do not
+selectable wildcard match without the tag, real same-model benchmark evidence
+admits it automatically when the catalog marks it available and a nonempty
+OpenClaw allowlist explicitly permits it. `include_unmarked_models` in
+`policies/overrides.yaml` remains an exact-ID opt-in for models awaiting
+benchmarks; admission alone is not evidence of task quality. Do not
 use `--include-unconfigured` for a targeted production refresh.
 
 ## Local ModernBERT classifier

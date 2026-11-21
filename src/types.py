@@ -81,6 +81,9 @@ class ModelScore:
     score_mechanisms: list[str] = field(default_factory=list)
     excluded: bool = False
     exclusion_reason: Optional[str] = None
+    benchmark_score: Optional[float] = None
+    benchmark_dimension: Optional[str] = None
+    benchmark_source: Optional[str] = None
 
 
 @dataclass
