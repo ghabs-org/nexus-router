@@ -673,6 +673,8 @@ def load_model_stats() -> dict[str, dict]:
         stats = {row["model"]: dict(row) for row in rows}
         for model, feedback in _load_feedback_preferences(conn).items():
             stats.setdefault(model, {"model": model})["feedback_preference"] = feedback
+        for model, latency in _load_turn_latency(conn).items():
+            stats.setdefault(model, {"model": model})["turn_latency"] = latency
         return stats
     finally:
         conn.close()
@@ -747,6 +749,48 @@ def log_provider_observation(
         conn.commit()
     finally:
         conn.close()
+
+
+TURN_LATENCY_WINDOW = timedelta(days=60)
+# Shorter recorded turns are missing or broken timings, not real replies.
+TURN_LATENCY_MIN_MS = 1000
+
+
+def _median(values: list[float]) -> float:
+    ordered = sorted(values)
+    mid = len(ordered) // 2
+    return ordered[mid] if len(ordered) % 2 else (ordered[mid - 1] + ordered[mid]) / 2.0
+
+
+def _load_turn_latency(conn: sqlite3.Connection) -> dict[str, dict[str, dict[str, Any]]]:
+    """Median recorded turn time per model and task, with that task's median over all models.
+
+    Turn times include tool calls, so they are only compared within one task type.
+    Only successful turns the routed model answered itself count.
+    """
+    since = (datetime.now(timezone.utc) - TURN_LATENCY_WINDOW).isoformat()
+    try:
+        rows = conn.execute(
+            "SELECT selected_model, task_type, latency_ms FROM routing_decisions "
+            "WHERE created_at >= ? AND outcome_success = 1 AND COALESCE(fallback_used, 0) = 0 "
+            "AND latency_ms >= ? AND task_type IS NOT NULL",
+            (since, TURN_LATENCY_MIN_MS),
+        ).fetchall()
+    except sqlite3.OperationalError:
+        return {}
+    by_model: dict[tuple[str, str], list[float]] = {}
+    by_task: dict[str, list[float]] = {}
+    for row in rows:
+        by_model.setdefault((row["selected_model"], row["task_type"]), []).append(float(row["latency_ms"]))
+        by_task.setdefault(row["task_type"], []).append(float(row["latency_ms"]))
+    latency: dict[str, dict[str, dict[str, Any]]] = {}
+    for (model, task), values in by_model.items():
+        latency.setdefault(model, {})[task] = {
+            "median_ms": _median(values),
+            "samples": len(values),
+            "task_median_ms": _median(by_task[task]),
+        }
+    return latency
 
 
 def _load_feedback_preferences(conn: sqlite3.Connection) -> dict[str, dict[str, dict[str, Any]]]:

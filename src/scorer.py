@@ -90,6 +90,9 @@ TASK_OBJECTIVE_WEIGHTS = {
     "default": {"quality": 0.42, "latency": 0.18, "reliability": 0.22, "cost": 0.18},
 }
 
+TURN_LATENCY_MIN_SAMPLES = 3
+TURN_LATENCY_PRIOR_SAMPLES = 3
+
 LATENCY_OBJECTIVE_FRESH_MINUTES = 30
 LATENCY_OBJECTIVE_STALE_HOURS = 24
 
@@ -378,6 +381,12 @@ def score_models(
         )
 
         latency_component = _latency_objective_score(ph)
+        turn_latency = _turn_latency_score(model_id, classifier.task_type, learned_stats)
+        if turn_latency is not None:
+            observed, samples, median_ms = turn_latency
+            # Recorded turn times on this task outweigh the provider probe as they accumulate.
+            weight = samples / (samples + TURN_LATENCY_PRIOR_SAMPLES)
+            latency_component = round(weight * observed + (1.0 - weight) * latency_component, 4)
         objective_weights = _task_objective_weights(classifier.task_type)
         quality_component = _quality_component(classifier.task_type, task_fit, scores_raw)
         reliability_component = min(1.0, max(0.0, (health + learned) / 2.0))
@@ -400,6 +409,8 @@ def score_models(
             "speed": round(float(speed_score), 4),
             "eco": round(float(eco_score), 4),
             "latency_objective": round(float(latency_component), 4),
+            **({"turn_latency_s": round(turn_latency[2] / 1000.0, 1), "turn_latency_samples": turn_latency[1]}
+               if turn_latency is not None else {}),
             "quality_objective": round(float(quality_component), 4),
             "reliability_objective": round(float(reliability_component), 4),
             "quota_penalty": round(float(quota_penalty), 4),
@@ -549,6 +560,22 @@ def _quality_component(task_type: str, task_fit: float, scores_raw: dict) -> flo
         reasoning = float(scores_raw.get("reasoning", task_fit))
         return min(1.0, max(0.0, (task_fit + reasoning) / 2.0))
     return min(1.0, max(0.0, task_fit))
+
+
+def _turn_latency_score(model_id: str, task_type: str, learned_stats: dict) -> Optional[tuple[float, int, float]]:
+    """(score, samples, median ms) from this model's recorded turns on this task, if enough.
+
+    Relative to the task's typical turn: as long as usual scores 0.5, half as long
+    0.67, twice as long 0.33, so long agentic task types are not counted as slow.
+    """
+    entry = ((learned_stats.get(model_id) or {}).get("turn_latency") or {}).get(task_type)
+    if not isinstance(entry, dict) or int(entry.get("samples") or 0) < TURN_LATENCY_MIN_SAMPLES:
+        return None
+    median_ms = float(entry.get("median_ms") or 0.0)
+    task_median_ms = float(entry.get("task_median_ms") or 0.0)
+    if median_ms <= 0 or task_median_ms <= 0:
+        return None
+    return round(1.0 / (1.0 + median_ms / task_median_ms), 4), int(entry["samples"]), median_ms
 
 
 def _latency_objective_score(provider_health: Optional[ProviderHealth]) -> float:
