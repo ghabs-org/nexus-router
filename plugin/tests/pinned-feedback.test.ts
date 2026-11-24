@@ -94,8 +94,11 @@ test("pinned Telegram replies collect shadow feedback after completion without o
   assert.equal(f.calls[0].body.mode, "shadow");
   assert.equal(f.calls[0].body.route_mode, "auto");
   assert.equal(f.calls[1].body.provenance_mode, "shadow");
+  assert.equal(f.calls[1].body.shadow_mode, true);
   assert.equal(f.calls[1].body.telegram_user_id, "123456");
   assert.equal(f.calls[1].body.actual_model, "openai/actual-model");
+  // The card names the pin and how to clear it.
+  assert.equal(f.calls[1].body.pinned_model, "openai/pinned-model");
   assert.match((await f.command("last")).text, /Applied: no\nSkip reason: session model pin/);
 });
 
@@ -190,4 +193,12 @@ test("route calls and feedback cards report their outcome", async (t) => {
   assert.deepEqual(failing.events.filter((e) => e.kind === "card"), [
     { kind: "card", ok: false, channel: "telegram", detail: "bridge_http_502" },
   ]);
+});
+
+test("pin detection compares with the agent's own model in agents.entries", () => {
+  const ctx = { agentId: "main", modelProviderId: "openai", modelId: "gpt-6.2-sol" };
+  const defaults = { model: { primary: "nvidia/nemotron" } };
+  const ownModel = { agents: { defaults, entries: { main: { model: { primary: "openai/gpt-6.2-sol" } } } } };
+  assert.equal(__testHelpers.hasExplicitModelSelection(ownModel, ctx), false);
+  assert.equal(__testHelpers.hasExplicitModelSelection({ agents: { defaults } }, ctx), true);
 });

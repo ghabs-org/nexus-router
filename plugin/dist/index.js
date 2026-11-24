@@ -537,6 +537,9 @@ function shouldSuppressFeedbackCardForText(messagePreview) {
     }
     return false;
 }
+function pinnedModelNote(pinnedModel) {
+    return `Pinned with /model to ${pinnedModel}; send /model default -s to let the router choose.`;
+}
 async function sendTelegramFeedbackCard(api, targetSenderId, decision, sourceTag, opts) {
     const sessionKey = opts?.sessionKey;
     if (sessionKey && isFeedbackSuppressed(sessionKey)) {
@@ -560,11 +563,13 @@ async function sendTelegramFeedbackCard(api, targetSenderId, decision, sourceTag
             : (Number.isFinite(decision.confidence) ? decision.confidence.toFixed(2) : "?");
     const shadowMode = Boolean(opts?.shadowMode);
     const actualModel = String(opts?.actualModel || "").trim();
+    const pinnedModel = shadowMode ? String(opts?.pinnedModel || "").trim() : "";
     const excludedSummary = summarizeExcludedModels(decision.excluded_models, 2);
     const lines = shadowMode
         ? [
             `🧭 shadow ${task} · proposed ${model} · conf ${confidence}`,
             `Actual reply model: ${actualModel || "unknown"}`,
+            ...(pinnedModel ? [pinnedModelNote(pinnedModel)] : []),
             ...(excludedSummary !== "none" ? [`Excluded: ${excludedSummary}`] : []),
             `Source: ${sourceTag}`,
             `Feedback?`,
@@ -604,7 +609,9 @@ async function sendTelegramFeedbackCard(api, targetSenderId, decision, sourceTag
             classifier_source: decision.classifier_source,
             excluded_models: decision.excluded_models,
             provenance_mode: shadowMode ? "shadow" : "route",
+            shadow_mode: shadowMode,
             actual_model: actualModel || undefined,
+            pinned_model: pinnedModel || undefined,
             source_channel: "telegram",
             source_message_preview: opts?.messagePreview,
             session_key: opts?.sessionKey,
@@ -839,7 +846,8 @@ function toModelRef(provider, model) {
 function hasExplicitModelSelection(config, ctx) {
     if (!ctx?.modelProviderId || !ctx?.modelId)
         return false;
-    const agent = (config?.agents?.list ?? []).find((a) => a?.id === ctx.agentId);
+    const agent = (config?.agents?.list ?? []).find((a) => a?.id === ctx.agentId)
+        ?? config?.agents?.entries?.[ctx.agentId];
     const configured = agent?.model ?? config?.agents?.defaults?.model;
     const primary = typeof configured === "string" ? configured : configured?.primary;
     if (typeof primary !== "string" || !primary)
@@ -2048,7 +2056,8 @@ export default definePluginEntry({
                         selectedProvider: shadowDecision.selected_provider,
                         sessionKey: ctx.sessionKey,
                         shadowMode: true,
-                        ...(pinnedSender ? { feedbackOnly: true } : {}),
+                        // The pin is the session model at resolution; actualModel follows the reply.
+                        ...(pinnedSender ? { feedbackOnly: true, pinnedModel: toModelRef(ctx.modelProviderId, ctx.modelId) } : {}),
                         targetSenderId: pinnedSender ?? resolveFeedbackSender(ctx, event, ctx.sessionKey ?? sessionRef, conversationKey)?.senderId,
                     };
                 };
@@ -2379,7 +2388,7 @@ export default definePluginEntry({
                             reason: decision.reason,
                             classifier_source: decision.classifierSource,
                             reply_context_used: decision.replyContextUsed,
-                        }, decision.sourceTag, { shadowMode: true, actualModel: pending.feedbackOnly ? actualRef : outcomeModel, messagePreview: decision.promptText, sessionKey: pending.sessionKey ?? ctx.sessionKey });
+                        }, decision.sourceTag, { shadowMode: true, actualModel: pending.feedbackOnly ? actualRef : outcomeModel, messagePreview: decision.promptText, sessionKey: pending.sessionKey ?? ctx.sessionKey, pinnedModel: pending.pinnedModel });
                         if (!sent) {
                             await debugLog(`[feedback-card] shadow failed decision=${pending.decisionId} sender=${sender?.senderId ?? "bridge_only"}`);
                         }
