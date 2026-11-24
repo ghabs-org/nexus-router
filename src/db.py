@@ -141,7 +141,7 @@ def _ensure_routing_decisions_compat(conn: sqlite3.Connection) -> None:
         "source_type": "TEXT",
         "source_tag": "TEXT",
         "message_text": "TEXT",       # truncated user message for classifier training
-        "classifier_source": "TEXT",  # llm | heuristic | local | explicit | fallback
+        "classifier_source": "TEXT",  # llm | heuristic | local | jev | explicit | fallback | memory
         "selected_cost_score": "REAL",
         "input_tokens": "INTEGER",
         "output_tokens": "INTEGER",
@@ -1201,3 +1201,96 @@ def load_cost_24h() -> dict[str, float]:
         return {}
     finally:
         conn.close()
+
+
+# ── OpenClaw plugin observations ──────────────────────────────────────────────
+
+PLUGIN_EVENT_RETENTION = timedelta(days=14)
+
+
+def record_plugin_event(kind: str, ok: bool, channel: Optional[str] = None, detail: Optional[str] = None) -> None:
+    """Store one OpenClaw plugin observation (never message text) and prune old ones."""
+    now = datetime.now(timezone.utc)
+    conn = _connect()
+    try:
+        conn.execute(
+            "INSERT INTO plugin_events (created_at, kind, ok, channel, detail) VALUES (?,?,?,?,?)",
+            (now.isoformat(), kind, int(bool(ok)), channel, detail),
+        )
+        conn.execute(
+            "DELETE FROM plugin_events WHERE created_at < ?",
+            ((now - PLUGIN_EVENT_RETENTION).isoformat(),),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def load_plugin_events(since: datetime) -> list[dict[str, Any]]:
+    """Plugin observations since ``since``, newest first."""
+    conn = _connect()
+    try:
+        return [
+            dict(row)
+            for row in conn.execute(
+                "SELECT created_at, kind, ok, channel, detail FROM plugin_events "
+                "WHERE created_at >= ? ORDER BY created_at DESC, id DESC",
+                (since.isoformat(),),
+            )
+        ]
+    except sqlite3.OperationalError:
+        return []
+    finally:
+        conn.close()
+
+
+# ── Correction memory examples ────────────────────────────────────────────────
+
+def load_labeled_feedback(limit: int = 2000) -> list[dict[str, Any]]:
+    """Newest feedback that names a task, with the message it was given on.
+
+    The task is the decision's own for ``correct`` and ``corrected_task`` for
+    ``wrong``; ``wrong`` without a corrected task names none and is left out. Only
+    the latest feedback per decision counts, and test/verification surfaces are skipped.
+    """
+    conn = _connect()
+    try:
+        rows = conn.execute(
+            """
+            WITH latest AS (
+                SELECT id, created_at, decision_id, verdict, corrected_task, source_surface,
+                       ROW_NUMBER() OVER (PARTITION BY decision_id ORDER BY created_at DESC, id DESC) AS rn
+                FROM route_feedback
+            )
+            SELECT f.id AS feedback_id, f.created_at, f.verdict, f.corrected_task,
+                   d.task_type, d.message_text
+            FROM latest f JOIN routing_decisions d ON d.id = f.decision_id
+            WHERE f.rn = 1
+              AND d.message_text IS NOT NULL AND TRIM(d.message_text) != ''
+              AND COALESCE(f.source_surface, '') NOT IN ('test', 'verification')
+            ORDER BY f.created_at DESC
+            LIMIT ?
+            """,
+            (int(limit),),
+        ).fetchall()
+    except sqlite3.OperationalError:
+        return []
+    finally:
+        conn.close()
+    examples = []
+    for row in rows:
+        verdict = str(row["verdict"] or "").strip().lower()
+        corrected = str(row["corrected_task"] or "").strip()
+        task = row["task_type"] if verdict == "correct" else corrected
+        if not task:
+            continue
+        examples.append({
+            "feedback_id": row["feedback_id"],
+            "created_at": row["created_at"],
+            "task_type": task,
+            # A "wrong" verdict means the user picked this task from the menu
+            # themselves; "correct" only confirms the router's own pick.
+            "user_picked": verdict == "wrong",
+            "message_text": row["message_text"],
+        })
+    return examples

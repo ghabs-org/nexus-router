@@ -35,10 +35,11 @@ const route = {
   classifier_source: "local",
 };
 
-function fixture(t, routeMode?: string) {
+function fixture(t, routeMode?: string, opts: { bridgeStatus?: number } = {}) {
   __testHelpers.resetInMemoryRoutingState();
   const hooks = new Map();
   const calls: { path: string; body: any }[] = [];
+  const events: any[] = [];
   let command: any;
   t.mock.method(globalThis, "fetch", async (url, init) => {
     const path = new URL(String(url)).pathname;
@@ -47,7 +48,14 @@ function fixture(t, routeMode?: string) {
         ? Response.json({ preference: { mode: routeMode, updated_at: new Date().toISOString() } })
         : Response.json({}, { status: 404 });
     }
+    if (path === "/plugin-events") {
+      events.push(JSON.parse(String(init.body)));
+      return Response.json({ ok: true });
+    }
     calls.push({ path, body: JSON.parse(String(init.body)) });
+    if (path === "/api/v1/router/feedback-card" && opts.bridgeStatus) {
+      return Response.json({ ok: false }, { status: opts.bridgeStatus });
+    }
     return Response.json(path === "/route" ? route : { ok: true });
   });
   plugin.register({
@@ -57,6 +65,7 @@ function fixture(t, routeMode?: string) {
   });
   return {
     calls,
+    events,
     invoke: (name: string, event: any, ctx = pinned) => hooks.get(name)(event, ctx),
     command: (args: string, sessionKey = pinned.sessionKey) => command({ args, sessionKey, channelId: "telegram" }),
     dispatch: async (senderId = "telegram:123456", ctx = pinned) => {
@@ -137,4 +146,48 @@ test("route off still records a shadow decision and does not override the model"
   assert.deepEqual(f.calls.map(({ path }) => path), ["/route", "/outcome", "/api/v1/router/feedback-card"]);
   assert.equal(f.calls[1].body.success, true);
   assert.equal(f.calls[2].body.provenance_mode, "shadow");
+});
+
+test("direct-message turns report whether their text came through, never the text", async (t) => {
+  const f = fixture(t);
+  await f.dispatch();
+  await f.invoke("before_model_resolve", { prompt: "Compare the two approaches." });
+  // A retry repeats the prompt and a continuation carries a long compiled one: not messages.
+  await f.invoke("before_model_resolve", { prompt: "Compare the two approaches." });
+  await f.invoke("before_model_resolve", { prompt: "x".repeat(400) });
+  // Fresh messages that reach model resolution without before_dispatch.
+  await f.invoke("before_model_resolve", { prompt: "Please check the failed backup" });
+  await f.invoke("before_model_resolve", { prompt: "And the logs?" });
+  await f.invoke("before_model_resolve", { prompt: "And the logs?" });
+  // Scheduled and group turns are not direct messages from the user.
+  await f.invoke("before_model_resolve", { prompt: "cron prompt" }, { ...pinned, trigger: "cron" });
+  await f.invoke("before_model_resolve", { prompt: "group chat" }, { ...pinned, sessionKey: "agent:test:telegram:group:42" });
+  // OpenClaw's own follow-up runs (memory, side effects) have their own session keys.
+  await f.invoke("before_model_resolve", { prompt: "effects run" },
+    { ...pinned, sessionKey: "agent:test:internal-session-effects:run-1-abc" });
+  assert.deepEqual(f.events.filter((e) => e.kind === "message"), [
+    { kind: "message", ok: true, channel: "telegram" },
+    { kind: "message", ok: false, channel: "telegram", detail: "uncaptured" },
+    { kind: "message", ok: false, channel: "telegram", detail: "uncaptured" },
+  ]);
+  assert.ok(!JSON.stringify(f.events).match(/Compare|backup|logs/));
+});
+
+test("route calls and feedback cards report their outcome", async (t) => {
+  const ok = fixture(t);
+  await ok.dispatch();
+  await ok.invoke("before_model_resolve", { prompt: "compiled" });
+  await ok.invoke("agent_end", successfulReply);
+  assert.deepEqual(ok.events.filter((e) => e.kind !== "message"), [
+    { kind: "route", ok: true },
+    { kind: "card", ok: true, channel: "telegram" },
+  ]);
+
+  const failing = fixture(t, undefined, { bridgeStatus: 502 });
+  await failing.dispatch();
+  await failing.invoke("before_model_resolve", { prompt: "compiled" });
+  await failing.invoke("agent_end", successfulReply);
+  assert.deepEqual(failing.events.filter((e) => e.kind === "card"), [
+    { kind: "card", ok: false, channel: "telegram", detail: "bridge_http_502" },
+  ]);
 });

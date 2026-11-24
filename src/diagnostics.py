@@ -11,12 +11,17 @@ from pathlib import Path
 
 import yaml
 
-from . import cooldowns, db
+from . import cooldowns, correction_memory, db
 from .health import load_provider_health
 from .paths import LOCAL_CLASSIFIER_DIR, POLICIES_ROOT, RAW_CATALOG_FILE
 
 STALE_REGISTRY = timedelta(hours=48)
 STALE_HEALTH = timedelta(hours=1)
+PLUGIN_WINDOW = timedelta(hours=24)
+# Latest consecutive failures before an alert. Two direct messages in a row without
+# their text means OpenClaw stopped calling the plugin's message hook (a gateway
+# restart fixes it); single card or route-call failures happen, so those need three.
+PLUGIN_STREAKS = {"message": 2, "card": 3, "route": 3}
 
 
 def _mtime(path: Path):
@@ -84,6 +89,66 @@ def _classifier() -> dict:
     return {"local_available": not error, "local_error": error, "artifact_dir": str(LOCAL_CLASSIFIER_DIR)}
 
 
+def _when(value) -> str:
+    parsed = _parse(value)
+    return parsed.strftime("%d %b %H:%M UTC") if parsed else "?"
+
+
+def _plugin_alert(kind: str, streak: int, since, detail) -> str:
+    if kind == "message":
+        return (
+            f"OpenClaw stopped passing your messages to the router plugin: the last {streak} direct "
+            f"messages (since {_when(since)}) arrived without their text, so routing and feedback "
+            "cards can be skipped. Restart the gateway: systemctl --user restart openclaw-gateway"
+        )
+    if kind == "card":
+        return f"Feedback cards are failing: the last {streak} could not be sent ({detail or 'error'}). Check nexus-bridge."
+    return (
+        f"The OpenClaw plugin's last {streak} router calls failed ({detail or 'error'}); "
+        "those messages kept their default model."
+    )
+
+
+def _openclaw_plugin(now: datetime) -> dict:
+    """What the OpenClaw plugin reported over the last 24h, and alerts for failure streaks."""
+    events = db.load_plugin_events(now - PLUGIN_WINDOW)  # newest first
+    summary: dict = {"last_event_at": events[0]["created_at"] if events else None, "alerts": []}
+    for kind, threshold in PLUGIN_STREAKS.items():
+        rows = [e for e in events if e["kind"] == kind]
+        streak = next((i for i, e in enumerate(rows) if e["ok"]), len(rows))
+        failing = rows[:streak]
+        summary[kind] = {
+            "ok_24h": sum(1 for e in rows if e["ok"]),
+            "failed_24h": sum(1 for e in rows if not e["ok"]),
+            "failure_streak": streak,
+            "failing_since": failing[-1]["created_at"] if failing else None,
+            "last_failure": failing[0]["detail"] if failing else None,
+            "last_ok_at": next((e["created_at"] for e in rows if e["ok"]), None),
+        }
+        if streak >= threshold:
+            summary["alerts"].append({
+                "code": kind,
+                "since": failing[-1]["created_at"],
+                "count": streak,
+                "message": _plugin_alert(kind, streak, failing[-1]["created_at"], failing[0]["detail"]),
+            })
+    return summary
+
+
+def _correction_memory(now: datetime) -> dict:
+    summary = correction_memory.summary()
+    try:
+        with closing(db._connect()) as conn:
+            row = conn.execute(
+                "SELECT COUNT(*) AS n FROM routing_decisions WHERE classifier_source='memory' AND created_at >= ?",
+                ((now - timedelta(days=7)).isoformat(),),
+            ).fetchone()
+        summary["applied_7d"] = row["n"]
+    except sqlite3.Error:
+        summary["applied_7d"] = None
+    return summary
+
+
 def collect(router=None, cli_proxy=None) -> dict:
     now = datetime.now(timezone.utc)
     warnings = []
@@ -131,6 +196,8 @@ def collect(router=None, cli_proxy=None) -> dict:
     database = _database()
     if "error" in database:
         warnings.append(f"database: {database['error']}")
+    plugin = _openclaw_plugin(now)
+    warnings += [alert["message"] for alert in plugin["alerts"]]
 
     experiment = ((router._routing if router is not None else {}) or {}).get("experiment") or {}
     return {
@@ -150,4 +217,6 @@ def collect(router=None, cli_proxy=None) -> dict:
             "variants": list(experiment.get("variants") or {})[:2],
         } if experiment.get("id") else None,
         "cli_proxy": cli_proxy.summary() if cli_proxy is not None else None,
+        "openclaw_plugin": plugin,
+        "correction_memory": _correction_memory(now),
     }

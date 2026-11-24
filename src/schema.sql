@@ -244,6 +244,19 @@ CREATE TABLE IF NOT EXISTS benchmark_model_scores (
   metadata_json          TEXT
 );
 
+-- What the OpenClaw plugin saw per direct-message turn, feedback card and route
+-- call (POST /plugin-events). Never message text. /diagnostics warns when the
+-- latest ones keep failing; rows older than 14 days are pruned on insert.
+CREATE TABLE IF NOT EXISTS plugin_events (
+  id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+  created_at            TEXT NOT NULL,
+  kind                  TEXT NOT NULL,     -- message | card | route
+  ok                    INTEGER NOT NULL,  -- message captured / card sent / route answered
+  channel               TEXT,
+  detail                TEXT               -- short failure code, e.g. timeout, bridge_http_502
+);
+CREATE INDEX IF NOT EXISTS idx_plugin_events_kind_created ON plugin_events(kind, created_at);
+
 -- Per-model circuit breaker. scope = task type (advisory) or CLI category.
 CREATE TABLE IF NOT EXISTS model_cooldowns (
   model                 TEXT NOT NULL,

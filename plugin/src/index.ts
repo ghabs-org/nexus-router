@@ -164,6 +164,58 @@ function routerHeaders(extra: Record<string, string> = {}): Record<string, strin
   return routerToken ? { ...extra, Authorization: `Bearer ${routerToken}` } : { ...extra };
 }
 
+// ── Plugin health reports ─────────────────────────────────────────────────────
+// One short record per direct-message turn, feedback card and route call goes to
+// the router (POST /plugin-events), never message text. Its /diagnostics turns
+// failure streaks into warnings shown by /route doctor, Studio and Nexus alerts.
+
+const CAPTURE_CHECK_MAX_CHARS = 300;
+let pluginEventsUrl: string | undefined;
+const lastDirectTurnTextBySession = new Map<string, string>();
+
+function setPluginEventsUrl(routerUrl: string | undefined): void {
+  pluginEventsUrl = routerUrl ? `${routerUrl.replace(/\/+$/, "")}/plugin-events` : undefined;
+}
+
+function reportPluginEvent(kind: "message" | "card" | "route", ok: boolean, detail?: string, channel?: string): void {
+  if (!pluginEventsUrl) return;
+  const body = JSON.stringify({ kind, ok, ...(channel ? { channel } : {}), ...(detail ? { detail } : {}) });
+  // Fire and forget: health reporting must never slow down or break a turn.
+  void fetch(pluginEventsUrl, {
+    method: "POST",
+    headers: routerHeaders({ "Content-Type": "application/json" }),
+    body,
+    signal: AbortSignal.timeout(3000),
+  }).catch(() => undefined);
+}
+
+function directMessageChannel(sessionKey?: string): string | undefined {
+  return /^agent:[^:]+:([a-z0-9_-]+):direct:/i.exec(sessionKey ?? "")?.[1]?.toLowerCase();
+}
+
+/**
+ * Whether a direct-message turn arrived with the user's text, or null when the turn
+ * says nothing about it. OpenClaw normally hands the text over in before_dispatch;
+ * when it stops calling that hook, fresh messages reach model resolution with only
+ * the compiled prompt. Retries repeat the previous prompt and continuations carry
+ * long compiled prompts, so neither counts as a message.
+ */
+function directTurnCapture(ctx: any, source: "compiled-prompt" | "raw-user", prompt: string, sourceTag: string): boolean | null {
+  const sessionKey = String(ctx?.sessionKey ?? "");
+  if (ctx?.trigger !== "user" || !directMessageChannel(sessionKey)) return null;
+  if (sourceTag !== "user" && sourceTag !== "compiled") return null;
+  const text = stripOpenClawMetadataEnvelope(prompt).trim();
+  if (source === "raw-user") {
+    lastDirectTurnTextBySession.set(sessionKey, text);
+    return true;
+  }
+  if (!text || text.length > CAPTURE_CHECK_MAX_CHARS || lastDirectTurnTextBySession.get(sessionKey) === text) {
+    return null;
+  }
+  lastDirectTurnTextBySession.set(sessionKey, text);
+  return false;
+}
+
 async function debugLog(line: string): Promise<void> {
   try {
     await appendFile("/tmp/nexus-router-hook.log", `${new Date().toISOString()} ${line}\n`);
@@ -215,14 +267,19 @@ async function routeRequest(
     });
 
     if (!res.ok) {
+      reportPluginEvent("route", false, `http_${res.status}`);
       return { decision: null, error: "http_error", status: res.status };
     }
 
-    return { decision: (await res.json()) as RouteResponse };
+    const decision = (await res.json()) as RouteResponse;
+    reportPluginEvent("route", true);
+    return { decision };
   } catch (error: any) {
     if (error?.name === "AbortError") {
+      reportPluginEvent("route", false, "timeout");
       return { decision: null, error: "timeout" };
     }
+    reportPluginEvent("route", false, "network_error");
     return { decision: null, error: "network_error" };
   } finally {
     clearTimeout(timer);
@@ -670,9 +727,11 @@ async function sendTelegramFeedbackCard(
   const task = String(decision.task_type || "unknown");
   const model = String(decision.selected_model || "unknown");
   const classifierSource = String(decision.classifier_source || "").toLowerCase();
-  const confidence = (classifierSource === "fallback" || classifierSource === "heuristic")
-    ? "fallback"
-    : (Number.isFinite(decision.confidence) ? decision.confidence.toFixed(2) : "?");
+  const confidence = classifierSource === "memory"
+    ? "your corrections"
+    : (classifierSource === "fallback" || classifierSource === "heuristic")
+      ? "fallback"
+      : (Number.isFinite(decision.confidence) ? decision.confidence.toFixed(2) : "?");
   const shadowMode = Boolean(opts?.shadowMode);
   const actualModel = String(opts?.actualModel || "").trim();
   const excludedSummary = summarizeExcludedModels(decision.excluded_models, 2);
@@ -702,6 +761,7 @@ async function sendTelegramFeedbackCard(
           cfg: api?.config?.loadConfig?.(),
         });
         rememberFeedbackPrompt(decisionId);
+        reportPluginEvent("card", true, undefined, "telegram");
         await debugLog(`[feedback-card] sent decision=${decisionId} to=${targetSenderId} message_id=${result?.messageId ?? "?"} via=telegram_runtime`);
         return true;
       } catch (err) {
@@ -744,20 +804,24 @@ async function sendTelegramFeedbackCard(
     });
 
     if (!bridgeRes.ok) {
+      reportPluginEvent("card", false, `bridge_http_${bridgeRes.status}`, "telegram");
       await debugLog(`[feedback-card] failed decision=${decisionId} to=${targetSenderId} error=bridge_http_${bridgeRes.status}`);
       return false;
     }
 
     const bridgeJson = await bridgeRes.json().catch(() => ({} as any));
     if (!bridgeJson?.ok) {
+      reportPluginEvent("card", false, "bridge_not_ok", "telegram");
       await debugLog(`[feedback-card] failed decision=${decisionId} to=${targetSenderId} error=bridge_not_ok`);
       return false;
     }
 
     rememberFeedbackPrompt(decisionId);
+    reportPluginEvent("card", true, undefined, "telegram");
     await debugLog(`[feedback-card] sent decision=${decisionId} to=${targetSenderId} via=bridge`);
     return true;
   } catch (error: any) {
+    reportPluginEvent("card", false, "bridge_unreachable", "telegram");
     await debugLog(`[feedback-card] failed decision=${decisionId} to=${targetSenderId} error=${error?.message ?? String(error)}`);
     return false;
   }
@@ -869,6 +933,7 @@ function resetInMemoryRoutingState(): void {
   recentSlashCommandBySession.clear();
   recentStartupBySession.clear();
   recentFailedOverrides.clear();
+  lastDirectTurnTextBySession.clear();
   recentLastDecisionGlobal = null;
 }
 
@@ -1712,6 +1777,7 @@ export const __testHelpers = {
   chooseUnblockedFallback,
   shouldAutoEscalate,
   resetInMemoryRoutingState,
+  directTurnCapture,
 };
 
 export default definePluginEntry({
@@ -1724,6 +1790,7 @@ export default definePluginEntry({
 
     const routerUrl      = cfg.routerUrl     ?? DEFAULT_URL;
     setRouterToken(cfg.routerToken);
+    setPluginEventsUrl(routerUrl);
     const enabled        = cfg.enabled       ?? true;
     const costProfile    = cfg.costProfile   ?? DEFAULT_COST;
     const debugMode      = cfg.debugMode     ?? false;
@@ -2160,7 +2227,11 @@ export default definePluginEntry({
       const source = rawUserText ? "raw-user" : "compiled-prompt";
       const startupReason = source === "compiled-prompt" ? takeRecentStartupReason(ctx.sessionKey) : null;
       const sourceTag = buildSourceTag(ctx, source, routingText, startupReason);
-const modeResolution = await resolveRouteModeDetailsFromContext(api, ctx);
+      const captured = directTurnCapture(ctx, source, prompt, sourceTag);
+      if (captured !== null) {
+        reportPluginEvent("message", captured, captured ? undefined : "uncaptured", directMessageChannel(ctx?.sessionKey));
+      }
+      const modeResolution = await resolveRouteModeDetailsFromContext(api, ctx);
       const routeMode = modeResolution.mode;
       const freeFilter = Boolean(modeResolution.freeFilter);
       const shouldEnforceConfidenceGate = modeResolution.source === "default" && routeMode === "auto" && !freeFilter;

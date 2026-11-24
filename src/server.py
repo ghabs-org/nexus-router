@@ -14,6 +14,7 @@ Endpoints:
   GET  /route-mode    → saved route-mode preference
   POST /probe         → probe all provider auth status
   POST /feedback      → record routing feedback
+  POST /plugin-events → OpenClaw plugin observations (no message text) for /diagnostics
   POST /route-mode    → save route-mode preference
   POST /v1/messages | /v1/chat/completions | /v1/responses → CLI wire proxy
   POST /v1/messages/count_tokens, GET /v1/models, GET /v1/nexus/cli-status
@@ -26,6 +27,7 @@ import argparse
 import hmac
 import json
 import os
+import re
 import threading
 import traceback
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -55,8 +57,8 @@ except Exception:  # pragma: no cover - never optional in practice (stdlib only)
         return None
 from .health import load_provider_health
 from .health_updater import probe_all_providers, observe_turn_outcome
-from . import cooldowns
-from .db import ensure_schema, update_outcome, load_model_stats, record_feedback, set_route_mode_preference, get_route_mode_preference, load_decision_info
+from . import cooldowns, correction_memory
+from .db import ensure_schema, update_outcome, load_model_stats, record_feedback, record_plugin_event, set_route_mode_preference, get_route_mode_preference, load_decision_info
 
 
 def _is_tiny_prompt(message: str) -> bool:
@@ -152,6 +154,11 @@ DEFAULT_CLASSIFIER_TIMEOUT_SECONDS = int(os.environ.get("NEXUS_ROUTER_CLASSIFIER
 DEFAULT_LOW_SIGNAL_GUARDRAIL_MIN_CONFIDENCE = float(
     os.environ.get("NEXUS_ROUTER_LOW_SIGNAL_GUARDRAIL_MIN_CONFIDENCE", "0.45")
 )
+
+PLUGIN_EVENT_KINDS = {"message", "card", "route"}
+PLUGIN_EVENT_CODE = re.compile(r"[a-z0-9_.:-]{1,64}")
+# Explicit modes force their own task, and attachments bring needs the text cannot show.
+CORRECTION_MEMORY_ROUTE_MODES = {"auto", "balanced", "off"}
 
 # Lazy-init router
 _router: Router | None = None
@@ -394,6 +401,8 @@ class RouterHandler(BaseHTTPRequestHandler):
             self._handle_route_mode(body)
         elif path == "/observe":
             self._handle_observe(body)
+        elif path == "/plugin-events":
+            self._handle_plugin_event(body)
         else:
             _json_response(self, 404, {"error": "not_found"})
 
@@ -586,6 +595,29 @@ class RouterHandler(BaseHTTPRequestHandler):
                     # the classifier's own cost/profile signal.
                     classifier.cost_profile = cost_profile
 
+            # A task the user already gave similar messages through feedback wins
+            # over the classifier until the next retrain learns it.
+            correction = None
+            if (
+                classifier_source != "explicit"
+                and normalized_route_mode in CORRECTION_MEMORY_ROUTE_MODES
+                and not (pre_signals.has_image or classifier.needs_vision)
+            ):
+                try:
+                    match = correction_memory.lookup(message)
+                except Exception as exc:  # the classifier's answer stands
+                    print(f"[router] correction memory unavailable: {exc}", flush=True)
+                    match = None
+                if match is not None and match.task_type != classifier.task_type:
+                    correction = match.explain(classifier.task_type, classifier_source)
+                    classifier.task_type = match.task_type
+                    classifier.subtype = None
+                    classifier.confidence = max(classifier.confidence, correction_memory.CONFIDENCE)
+                    classifier_debug["correction_memory"] = correction
+                    # Unreviewed decisions only become training data when the local
+                    # model chose them, so a memory pick never trains on itself.
+                    classifier_source = "memory"
+
             decision = _get_router().route(
                 classifier=classifier,
                 pre_signals=pre_signals,
@@ -601,6 +633,7 @@ class RouterHandler(BaseHTTPRequestHandler):
                 experiment_key=experiment_key,
                 dry_run=dry_run,
                 available_models=available_models,
+                correction=correction,
             )
 
             local_bits = ""
@@ -613,6 +646,8 @@ class RouterHandler(BaseHTTPRequestHandler):
                 local_bits += f" local_unavailable={classifier_debug['local_unavailable']}"
             if classifier_debug.get("guardrail_reason"):
                 local_bits += f" guardrail={classifier_debug['guardrail_reason']}"
+            if correction:
+                local_bits += f" correction_memory={correction['from_task']}->{correction['task_type']}"
 
             print(
                 "route"
@@ -734,6 +769,23 @@ class RouterHandler(BaseHTTPRequestHandler):
         )
         _json_response(self, 200, {"ok": True})
 
+    def _handle_plugin_event(self, body: dict):
+        """The OpenClaw plugin reports one observation; /diagnostics warns on failure streaks."""
+        kind, ok = body.get("kind"), body.get("ok")
+        channel, detail = body.get("channel"), body.get("detail")
+        if kind not in PLUGIN_EVENT_KINDS or not isinstance(ok, bool):
+            _json_response(self, 400, {"error": "kind must be message|card|route and ok a boolean"})
+            return
+        if any(v is not None and not (isinstance(v, str) and PLUGIN_EVENT_CODE.fullmatch(v)) for v in (channel, detail)):
+            _json_response(self, 400, {"error": "channel and detail must be short lowercase codes"})
+            return
+        try:
+            record_plugin_event(kind, ok, channel, detail)
+        except Exception as e:
+            _json_response(self, 500, {"error": str(e)})
+            return
+        _json_response(self, 200, {"ok": True})
+
     def _handle_probe(self, body: dict):
         try:
             providers = body.get("providers")
@@ -766,6 +818,7 @@ class RouterHandler(BaseHTTPRequestHandler):
                 source_user_id=body.get("source_user_id"),
                 metadata=body.get("metadata") if isinstance(body.get("metadata"), dict) else None,
             )
+            correction_memory.invalidate()
             _json_response(self, 200, {"ok": True, "feedback_id": feedback_id})
         except Exception as e:
             _json_response(self, 500, {"error": str(e)})
@@ -795,7 +848,7 @@ def run(port: int = DEFAULT_PORT, host: str = "127.0.0.1"):
     # Docker explicitly opts into 0.0.0.0; its published port stays loopback.
     server = ThreadingHTTPServer((host, port), RouterHandler)
     print(f"Nexus Router server listening on http://127.0.0.1:{port}")
-    print("Endpoints: /route /outcome /feedback /route-info /diagnostics /health /stats; "
+    print("Endpoints: /route /outcome /feedback /plugin-events /route-info /diagnostics /health /stats; "
           "CLI proxy: /v1/messages /v1/chat/completions /v1/responses /v1/models /v1/nexus/cli-status")
     try:
         server.serve_forever()

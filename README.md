@@ -164,6 +164,23 @@ does not establish that TCP binding or a live CLI attachment works.
 - **A/B experiments:** `experiment:` in `routing.yaml` (commented example) deep-merges
   the chosen variant over `scoring:` for that call and tags the decision `policy_id`.
   Compare with `python scripts/policy_experiment_report.py --experiment <id>`.
+- **Correction memory** (`src/correction_memory.py`): a message that closely matches
+  messages labelled through feedback takes that task at once, before the next
+  classifier retrain. It needs a task the user picked (not only confirmations), 60%
+  agreement among matches, at least 3 words, and is skipped for short replies that
+  start by agreeing ("yes go ahead"), caller-given tasks, forced route modes and
+  image attachments. Such decisions carry `classifier_source: memory`, a reason line
+  and `explain.classifier.correction_memory`, and they stay out of unreviewed
+  training data. Replayed over this deployment's 663 labelled answers (April to
+  November 2026, each predicted from earlier feedback only), it fixed 16 tasks,
+  broke 4 and swapped 2 wrong tasks for other wrong ones. `NEXUS_ROUTER_CORRECTION_MEMORY=off`
+  disables it; `/diagnostics` shows `correction_memory` (examples, applied in 7 days).
+- **OpenClaw plugin health:** the plugin posts one record per direct-message turn
+  (whether its text arrived), feedback card and route call to `POST /plugin-events`,
+  never message text. `/diagnostics` → `openclaw_plugin` adds an alert, and a warning,
+  after 2 direct messages in a row arrive without their text (OpenClaw stopped calling
+  the plugin's `before_dispatch` hook; restarting the gateway fixes it) or 3 card or
+  route-call failures in a row. Nexus forwards each alert to Telegram once.
 
 ## Access, previews, caller catalogs, pricing, metrics
 

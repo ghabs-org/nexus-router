@@ -95,6 +95,7 @@ class Router:
         experiment_key: Optional[str] = None,
         dry_run: bool = False,
         available_models: Optional[list] = None,
+        correction: Optional[dict] = None,
     ) -> RoutingDecision:
         """
         Route a request to the best available model.
@@ -110,6 +111,8 @@ class Router:
             available_models: Caller catalog — the exact models the caller can run
                            (ids or {id, context_window, vision}); unknown ids are
                            scored from family priors and benchmarks
+            correction:    Correction memory match that set the classifier's task
+                           (correction_memory.Match.explain), recorded in reason/explain
 
         Returns:
             RoutingDecision with selected_model, fallbacks, score, reason
@@ -217,6 +220,11 @@ class Router:
             mechanisms.append("confidence_gate")
 
         reason = _build_reason(primary, classifier, effective_classifier, pre_signals)
+        if correction:
+            reason.append(
+                f"correction memory: {correction['from_task']} -> {correction['task_type']} "
+                f"(similarity {correction['similarity']:.2f}, {correction['support']} earlier feedback)"
+            )
         if bandit_reason:
             reason.append(bandit_reason)
         if confidence_gate_triggered:
@@ -260,6 +268,9 @@ class Router:
             decision, ranked_for_fallbacks, excluded, classifier, classifier_source,
             normalized_route_mode, sorted(allowed),
         )
+        if correction:
+            decision.explain["rules_triggered"].append("correction_memory")
+            decision.explain["classifier"]["correction_memory"] = correction
         if available_models:
             decision.explain["rules_triggered"].append("caller_catalog")
         if dry_run:
