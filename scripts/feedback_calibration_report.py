@@ -76,6 +76,8 @@ def _ingest_row(r: sqlite3.Row, task_stats, model_task) -> None:
 
     if model_verdict == "good":
         score = 1.0
+    elif model_verdict == "ok":  # "Model OK" on a wrong task
+        score = 0.75
     elif model_verdict == "neutral":
         score = 0.4
     elif model_verdict in {"bad", "too_cheap", "too_powerful"}:

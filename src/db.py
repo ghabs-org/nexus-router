@@ -759,6 +759,8 @@ def _load_feedback_preferences(conn: sqlite3.Connection) -> dict[str, dict[str, 
               COUNT(*) AS sample_count,
               AVG(
                 CASE rf.model_verdict
+                  -- "Model OK" on a wrong task: the model suits the corrected task.
+                  WHEN 'ok' THEN 0.75
                   WHEN 'good' THEN 1.0
                   WHEN 'neutral' THEN 0.4
                   WHEN 'bad' THEN 0.0

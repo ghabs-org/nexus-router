@@ -59,8 +59,9 @@ def normalize_reason_tag(
         return "other"
 
     has_task_signal = bool(str(corrected_task or "").strip())
-    has_model_signal = bool(str(model_verdict or "").strip()) or bool(str(preferred_model or "").strip())
     mv = str(model_verdict or "").strip().lower()
+    # "Model OK" says the model was right, so only the task was wrong.
+    has_model_signal = bool(mv and mv != "ok") or bool(str(preferred_model or "").strip())
 
     if has_task_signal and has_model_signal:
         return "task_and_model_mismatch"

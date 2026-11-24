@@ -168,8 +168,11 @@ scoring:
     min_samples_per_task: 40
     artifact_path: ~/.local/state/nexus-router/artifacts/scorer/fitted_weights.active.json
 
+  # Off since 2026-11-24: at this volume (~40 routed turns a month) exploration
+  # learned almost nothing (2 explored picks since August) and each one replaced
+  # the top-scoring model on a real turn (e.g. nemotron-ultra over gpt-6-luna).
   exploration:
-    enabled: true
+    enabled: false
     strategy: thompson
     epsilon: 0.03
     top_k: 3
