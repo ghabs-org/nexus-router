@@ -3,6 +3,7 @@
 import threading
 import time
 from http.server import ThreadingHTTPServer
+from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -69,6 +70,73 @@ def test_dry_run_scores_without_writing(http):
     assert "dry_run" in data["explain"]["rules_triggered"]
     assert decision_count() == 0
     assert route(http, dry_run="yes").status_code == 400
+
+
+def test_slow_jev_still_persists_a_route_for_feedback(http, monkeypatch):
+    started = threading.Event()
+    release = threading.Event()
+    finished = threading.Event()
+    local = SimpleNamespace(
+        classifier=ClassifierOutput(task_type="general_chat", confidence=0.41),
+        confidence=0.41,
+        margin=0.05,
+        top2=[],
+        artifact_dir=None,
+    )
+    monkeypatch.setattr(server, "classify_with_local_model", lambda *args, **kwargs: local)
+
+    def slow_jev(*args, **kwargs):
+        started.set()
+        release.wait(timeout=5)
+        finished.set()
+
+    def unexpected_llm(**kwargs):
+        pytest.fail("The hosted classifiers must share the same deadline")
+
+    monkeypatch.setattr(server, "classify_with_jev", slow_jev)
+    monkeypatch.setattr(server, "classify_with_model", unexpected_llm)
+    try:
+        response = route(
+            http,
+            classifier=None,
+            message="Summarize the example from the previous message in three bullets.",
+            conversation_context="A fictional itinerary has three stops.",
+            use_llm_classifier=True,
+            classifier_budget_ms=500,
+        )
+        assert started.is_set()
+        assert response.status_code == 200, response.text
+        assert response.json()["classifier_source"] == "local"
+        assert response.json()["decision_id"]
+        assert decision_count() == 1
+        assert not finished.is_set()
+    finally:
+        release.set()
+
+
+def test_classifier_budget_rejects_non_integer_values(http):
+    assert route(http, classifier_budget_ms=True).status_code == 400
+
+
+def test_cold_local_classifier_does_not_block_a_route(http, monkeypatch):
+    started = threading.Event()
+    release = threading.Event()
+    finished = threading.Event()
+
+    def cold_classifier(*args, **kwargs):
+        started.set()
+        release.wait(timeout=5)
+        finished.set()
+
+    monkeypatch.setattr(server, "classify_with_local_model", cold_classifier)
+    try:
+        response = route(http, classifier=None, classifier_budget_ms=500)
+        assert started.is_set()
+        assert response.status_code == 200, response.text
+        assert response.json()["decision_id"]
+        assert not finished.is_set()
+    finally:
+        release.set()
 
 
 def test_dry_run_never_explores(router):

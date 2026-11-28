@@ -35,7 +35,7 @@ const route = {
   classifier_source: "local",
 };
 
-function fixture(t, routeMode?: string, opts: { bridgeStatus?: number } = {}) {
+function fixture(t, routeMode?: string, opts: { bridgeStatus?: number; pluginConfig?: { timeoutMs: number } } = {}) {
   __testHelpers.resetInMemoryRoutingState();
   const hooks = new Map();
   const calls: { path: string; body: any }[] = [];
@@ -60,6 +60,7 @@ function fixture(t, routeMode?: string, opts: { bridgeStatus?: number } = {}) {
   });
   plugin.register({
     config: { agents: { defaults: { model: "nvidia/default" } } },
+    pluginConfig: opts.pluginConfig,
     on: (name, cb) => hooks.set(name, cb),
     registerCommand: (registered) => { command = registered.handler; },
   });
@@ -138,6 +139,15 @@ test("ordinary auto routing still overrides and logs an actual outcome", async (
   await f.invoke("agent_end", successfulReply, unpinned);
   assert.deepEqual(f.calls.map(({ path }) => path), ["/route", "/api/v1/router/feedback-card", "/outcome"]);
   assert.equal(f.calls[0].body.mode, "route");
+});
+
+test("Telegram routing budgets hosted classification from the configured plugin timeout", async (t) => {
+  const f = fixture(t, "eco", { pluginConfig: { timeoutMs: 3000 } });
+  const unpinned = { ...pinned, modelProviderId: "nvidia", modelId: "default" };
+  await f.dispatch();
+  await f.invoke("before_model_resolve", { prompt: "compiled" }, unpinned);
+  assert.deepEqual(f.calls.map(({ path }) => path), ["/route", "/api/v1/router/feedback-card"]);
+  assert.equal(f.calls[0].body.classifier_budget_ms, 1500);
 });
 
 test("route off still records a shadow decision and does not override the model", async (t) => {

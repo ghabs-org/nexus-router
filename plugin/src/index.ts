@@ -261,6 +261,8 @@ async function routeRequest(
         source_tag: sourceTag,
         conversation_context: conversationContext,
         use_llm_classifier: useLlmClassifier ?? false,
+        // Leave half of the request window for scoring, persistence, and transport.
+        classifier_budget_ms: Math.min(60_000, Math.floor(timeoutMs / 2)),
         free_only: freeFilter ?? false,
         // Stable A/B assignment per conversation (router `experiment` config).
         experiment_key: experimentKey || undefined,
@@ -1797,7 +1799,7 @@ export default definePluginEntry({
   description: "Routes each chat turn to the best model via the Nexus Router service",
 
   register(api: any) {
-    const cfg = (api.config ?? {}) as NexusRouterConfig;
+    const cfg = (api.pluginConfig ?? api.config?.plugins?.entries?.["nexus-router"]?.config ?? {}) as NexusRouterConfig;
 
     const routerUrl      = cfg.routerUrl     ?? DEFAULT_URL;
     setRouterToken(cfg.routerToken);

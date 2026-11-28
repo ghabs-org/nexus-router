@@ -29,9 +29,11 @@ import json
 import os
 import re
 import threading
+import time
 import traceback
+from concurrent.futures import ThreadPoolExecutor
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import Any
+from typing import Any, Callable, TypeVar
 from urllib.parse import urlparse
 
 from .router import Router
@@ -59,6 +61,35 @@ from .health import load_provider_health
 from .health_updater import probe_all_providers, observe_turn_outcome
 from . import cooldowns, correction_memory
 from .db import ensure_schema, update_outcome, load_model_stats, record_feedback, record_plugin_event, set_route_mode_preference, get_route_mode_preference, load_decision_info
+
+
+_ClassifierResult = TypeVar("_ClassifierResult")
+_CLASSIFIER_WORKERS = 4
+_classifier_pool = ThreadPoolExecutor(max_workers=_CLASSIFIER_WORKERS)
+_classifier_slots = threading.BoundedSemaphore(_CLASSIFIER_WORKERS)
+
+
+def _classify_before(
+    deadline: float | None,
+    classify: Callable[[], _ClassifierResult | None],
+) -> _ClassifierResult | None:
+    if deadline is None:
+        return classify()
+    if deadline <= time.monotonic() or not _classifier_slots.acquire(blocking=False):
+        return None
+
+    try:
+        result = _classifier_pool.submit(classify)
+    except Exception:
+        _classifier_slots.release()
+        raise
+    # Keep the slot occupied until the classifier finishes, even when the caller leaves.
+    result.add_done_callback(lambda _: _classifier_slots.release())
+    try:
+        return result.result(timeout=max(0.0, deadline - time.monotonic()))
+    except TimeoutError:
+        result.cancel()
+        return None
 
 
 def _is_tiny_prompt(message: str) -> bool:
@@ -408,6 +439,15 @@ class RouterHandler(BaseHTTPRequestHandler):
 
     def _handle_route(self, body: dict):
         try:
+            classifier_budget_ms = body.get("classifier_budget_ms")
+            if classifier_budget_ms is not None and (
+                type(classifier_budget_ms) is not int or not 0 <= classifier_budget_ms <= 60_000
+            ):
+                _json_response(self, 400, {"error": "classifier_budget_ms must be an integer from 0 to 60000"})
+                return
+            classifier_deadline = (
+                None if classifier_budget_ms is None else time.monotonic() + classifier_budget_ms / 1000
+            )
             message = body.get("message", "")
             has_image = bool(body.get("has_image", body.get("has_image_attachment", False)))
             cost_profile = body.get("cost_profile", "balanced")
@@ -479,10 +519,9 @@ class RouterHandler(BaseHTTPRequestHandler):
                 classifier_source = "explicit"
 
             if classifier is None:
-                local_result = classify_with_local_model(
-                    message,
-                    pre_signals,
-                    conversation_context=classifier_context,
+                local_result = _classify_before(
+                    classifier_deadline,
+                    lambda: classify_with_local_model(message, pre_signals, conversation_context=classifier_context),
                 )
                 if local_result is not None:
                     classifier = local_result.classifier
@@ -506,10 +545,9 @@ class RouterHandler(BaseHTTPRequestHandler):
             # then heuristic/LLM next as before.
             _local_conf = getattr(local_result, "confidence", 1.0) if classifier_source == "local" else 1.0
             if classifier is None or _local_conf < float(os.getenv("JEV_LOCAL_FLOOR", "0.6")):
-                jev_result = classify_with_jev(
-                    message,
-                    pre_signals,
-                    conversation_context=classifier_context,
+                jev_result = _classify_before(
+                    classifier_deadline,
+                    lambda: classify_with_jev(message, pre_signals, conversation_context=classifier_context),
                 )
                 if jev_result is not None and (classifier is None or jev_result.confidence >= _local_conf):
                     classifier = jev_result.classifier
@@ -543,14 +581,17 @@ class RouterHandler(BaseHTTPRequestHandler):
                 classifier_source = "fallback"
 
             if classifier is None and use_llm:
-                classifier = classify_with_model(
-                    message=message,
-                    pre_signals=pre_signals,
-                    conversation_context=classifier_context,
-                    model=classifier_model,
-                    registry=registry,
-                    provider_health=provider_health,
-                    timeout_seconds=DEFAULT_CLASSIFIER_TIMEOUT_SECONDS,
+                classifier = _classify_before(
+                    classifier_deadline,
+                    lambda: classify_with_model(
+                        message=message,
+                        pre_signals=pre_signals,
+                        conversation_context=classifier_context,
+                        model=classifier_model,
+                        registry=registry,
+                        provider_health=provider_health,
+                        timeout_seconds=DEFAULT_CLASSIFIER_TIMEOUT_SECONDS,
+                    ),
                 )
                 if classifier is not None:
                     classifier_source = "llm"
@@ -843,8 +884,14 @@ class RouterHandler(BaseHTTPRequestHandler):
 
 
 def run(port: int = DEFAULT_PORT, host: str = "127.0.0.1"):
-    ensure_schema()
+    router = _get_router()
     _get_cli_proxy()  # Validate interception configuration before accepting traffic.
+    # Warm local inference and scoring before the health endpoint admits traffic.
+    try:
+        classify_with_local_model("Router startup warmup", PreSignals())
+    except Exception as exc:
+        print(f"Local classifier warmup failed: {type(exc).__name__}", flush=True)
+    router.route(ClassifierOutput(task_type="general_chat"), dry_run=True)
     # Docker explicitly opts into 0.0.0.0; its published port stays loopback.
     server = ThreadingHTTPServer((host, port), RouterHandler)
     print(f"Nexus Router server listening on http://127.0.0.1:{port}")
