@@ -35,11 +35,21 @@ const route = {
   classifier_source: "local",
 };
 
-function fixture(t, routeMode?: string, opts: { bridgeStatus?: number; pluginConfig?: { timeoutMs: number } } = {}) {
+type MockRouteResponse = typeof route & {
+  explain?: { classifier?: { task_type?: string; effective_task_type?: string } };
+};
+
+function fixture(t, routeMode?: string, opts: {
+  bridgeStatus?: number;
+  pluginConfig?: { timeoutMs: number };
+  routeResponse?: MockRouteResponse;
+  telegram?: boolean;
+} = {}) {
   __testHelpers.resetInMemoryRoutingState();
   const hooks = new Map();
   const calls: { path: string; body: any }[] = [];
   const events: any[] = [];
+  const telegramMessages: string[] = [];
   let command: any;
   t.mock.method(globalThis, "fetch", async (url, init) => {
     const path = new URL(String(url)).pathname;
@@ -56,17 +66,26 @@ function fixture(t, routeMode?: string, opts: { bridgeStatus?: number; pluginCon
     if (path === "/api/v1/router/feedback-card" && opts.bridgeStatus) {
       return Response.json({ ok: false }, { status: opts.bridgeStatus });
     }
-    return Response.json(path === "/route" ? route : { ok: true });
+    return Response.json(path === "/route" ? (opts.routeResponse ?? route) : { ok: true });
   });
   plugin.register({
     config: { agents: { defaults: { model: "nvidia/default" } } },
     pluginConfig: opts.pluginConfig,
+    runtime: opts.telegram ? {
+      telegram: {
+        sendMessageTelegram: async (_sender: string, text: string) => {
+          telegramMessages.push(text);
+          return { messageId: "test-message" };
+        },
+      },
+    } : undefined,
     on: (name, cb) => hooks.set(name, cb),
     registerCommand: (registered) => { command = registered.handler; },
   });
   return {
     calls,
     events,
+    telegramMessages,
     invoke: (name: string, event: any, ctx = pinned) => hooks.get(name)(event, ctx),
     command: (args: string, sessionKey = pinned.sessionKey) => command({ args, sessionKey, channelId: "telegram" }),
     dispatch: async (senderId = "telegram:123456", ctx = pinned) => {
@@ -149,6 +168,36 @@ test("Telegram routing budgets hosted classification from the configured plugin 
   assert.deepEqual(f.calls.map(({ path }) => path), ["/route", "/api/v1/router/feedback-card"]);
   assert.equal(f.calls[0].body.classifier_budget_ms, 1500);
 });
+
+const ecoDecision = {
+  ...route,
+  task_type: "eco",
+  explain: { classifier: { task_type: "coding", effective_task_type: "eco" } },
+};
+
+for (const telegram of [false, true]) {
+  const delivery = telegram ? "Telegram runtime" : "bridge";
+  test(`eco routing keeps its mode and uses the classifier task on ${delivery} feedback cards`, async (t) => {
+    const f = fixture(t, "eco", { routeResponse: ecoDecision, telegram });
+    const unpinned = { ...pinned, modelProviderId: "nvidia", modelId: "default" };
+    await f.dispatch();
+    assert.deepEqual(await f.invoke("before_model_resolve", { prompt: "compiled" }, unpinned), {
+      providerOverride: "nvidia", modelOverride: "suggested-model",
+    });
+    assert.equal(f.calls[0].path, "/route");
+    assert.equal(f.calls[0].body.route_mode, "eco");
+    if (telegram) {
+      assert.deepEqual(f.calls.map(({ path }) => path), ["/route"]);
+      assert.deepEqual(f.telegramMessages.map((text) => text.split("\n")[0]), [
+        "🧭 coding · nvidia/suggested-model · 0.91",
+      ]);
+    } else {
+      assert.deepEqual(f.calls.map(({ path }) => path), ["/route", "/api/v1/router/feedback-card"]);
+      assert.equal(f.calls[1].body.task_type, "coding");
+      assert.equal(f.calls[1].body.selected_model, "nvidia/suggested-model");
+    }
+  });
+}
 
 test("route off still records a shadow decision and does not override the model", async (t) => {
   const f = fixture(t, "off");

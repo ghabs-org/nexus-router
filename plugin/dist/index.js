@@ -555,7 +555,8 @@ async function sendTelegramFeedbackCard(api, targetSenderId, decision, sourceTag
     if (shouldSuppressFeedbackCardForText(opts?.messagePreview)) {
         return false;
     }
-    const task = String(decision.task_type || "unknown");
+    const rawTask = decision.explain?.classifier?.task_type;
+    const task = rawTask && rawTask !== "eco" ? rawTask : String(decision.task_type || "unknown");
     const model = String(decision.selected_model || "unknown");
     const classifierSource = String(decision.classifier_source || "").toLowerCase();
     const confidence = classifierSource === "memory"

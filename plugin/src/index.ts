@@ -41,6 +41,7 @@ interface RouteResponse {
   reason: string[];
   classifier_source?: "explicit" | "local" | "heuristic" | "llm" | "fallback";
   reply_context_used?: boolean;
+  explain?: any;
 }
 
 interface RouteExcludedModel {
@@ -732,7 +733,8 @@ async function sendTelegramFeedbackCard(
     return false;
   }
 
-  const task = String(decision.task_type || "unknown");
+  const rawTask = decision.explain?.classifier?.task_type;
+  const task = rawTask && rawTask !== "eco" ? rawTask : String(decision.task_type || "unknown");
   const model = String(decision.selected_model || "unknown");
   const classifierSource = String(decision.classifier_source || "").toLowerCase();
   const confidence = classifierSource === "memory"
